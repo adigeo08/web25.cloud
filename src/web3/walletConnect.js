@@ -5,5 +5,9 @@ export function getWalletConnectProjectId() {
     if (configured) {
         return configured;
     }
-    return 'demo-project-id';
+    return null;
+}
+
+export function hasWalletConnectProjectId() {
+    return Boolean(getWalletConnectProjectId());
 }

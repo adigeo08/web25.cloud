@@ -377,9 +377,7 @@ export function isValidTorrentBuffer(buffer) {
         // Check if it ends with 'e' (end of bencoded dictionary)
         if (uint8Array[uint8Array.length - 1] !== 0x65) {
             // 'e' in ASCII
-            this.log(
-                `Invalid end byte: 0x${uint8Array[uint8Array.length - 1].toString(16)} (expected 0x65 for 'e')`
-            );
+            this.log(`Invalid end byte: 0x${uint8Array[uint8Array.length - 1].toString(16)} (expected 0x65 for 'e')`);
             // Don't fail on this as some torrents might have padding
         }
 
@@ -491,17 +489,10 @@ export function readFileAsArrayBuffer(file) {
 }
 
 export async function handleFolderUpload(files) {
-    this.log(`Processing ${files.length} files for upload`);
-
-    if (!this.clientReady || !this.client) {
-        this.toast.info('Please wait for the WebTorrent client to initialize and try again.', 'Client Not Ready');
-        return;
-    }
+    this.log(`Processing ${files.length} files for deployment`);
 
     // Check for index.html
-    const hasIndex = files.some((file) =>
-        (file.webkitRelativePath || file.name).toLowerCase().includes('index.html')
-    );
+    const hasIndex = files.some((file) => (file.webkitRelativePath || file.name).toLowerCase().includes('index.html'));
 
     if (!hasIndex) {
         if (!confirm('No index.html found. Continue anyway? (Site may not load properly)')) {
@@ -509,34 +500,69 @@ export async function handleFolderUpload(files) {
         }
     }
 
+    this.pendingDeployFiles = files;
+    this.lastSignedPublish = null;
+
+    const output = document.getElementById('publish-output');
+    if (output) {
+        output.textContent = `Ready to deploy ${files.length} files. Signing is mandatory.`;
+    }
+
+    const signatureLink = /** @type {HTMLAnchorElement | null} */ (document.getElementById('download-signature-file'));
+    if (signatureLink) {
+        if (signatureLink.href && signatureLink.href.startsWith('blob:')) {
+            URL.revokeObjectURL(signatureLink.href);
+        }
+        signatureLink.removeAttribute('href');
+        signatureLink.style.display = 'none';
+    }
+
+    this.toast.success('Files staged. Click Deploy to sign + publish.', 'Deploy ready');
+}
+
+export async function deploySignedTorrent() {
+    if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
+        throw new Error('No files selected for deployment');
+    }
+
+    if (!this.clientReady || !this.client) {
+        throw new Error('WebTorrent client is not ready');
+    }
+
     this.showUploadProgress('Creating torrent...');
+    let timeoutId = null;
 
     try {
-        // Use the same improved torrent creation logic
-        this.client.seed(
-            files,
-            {
-                announce: this.trackers,
-                name: this.generateTorrentName(files),
-                comment: 'Created with PeerWeb - Decentralized Website Hosting',
-                createdBy: 'PeerWeb v1.0',
-                private: false,
-                pieceLength: this.calculateOptimalPieceLength(files)
-            },
-            (torrent) => {
-                this.log(`Torrent created: ${torrent.infoHash}`);
-                this.log(`Torrent name: ${torrent.name}`);
+        const createdTorrent = await new Promise((resolve, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Timed out while creating torrent')), 30000);
 
-                // Show result in quick upload area
-                this.showUploadResult(torrent.infoHash, torrent.torrentFile, torrent);
-                this.hideUploadProgress();
-            }
-        );
-    } catch (error) {
-        this.log(`Error creating torrent: ${error.message}`);
-        console.error('Seeding error:', error);
+            this.client.seed(
+                this.pendingDeployFiles,
+                {
+                    announce: this.trackers,
+                    name: this.generateTorrentName(this.pendingDeployFiles),
+                    comment: 'Web25 Deploy Artifact',
+                    createdBy: 'Web25.Cloud Deploy',
+                    private: false,
+                    pieceLength: this.calculateOptimalPieceLength(this.pendingDeployFiles)
+                },
+                (torrent) => {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                        timeoutId = null;
+                    }
+                    resolve(torrent);
+                }
+            );
+        });
+
+        this.showUploadResult(createdTorrent.infoHash, createdTorrent.torrentFile, createdTorrent);
+        return createdTorrent;
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
         this.hideUploadProgress();
-        alert('Error creating torrent: ' + error.message);
     }
 }
 

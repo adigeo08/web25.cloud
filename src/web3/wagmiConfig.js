@@ -4,16 +4,37 @@ import { getWalletConnectProjectId } from './walletConnect.js';
 
 let cached;
 
+async function importFromAny(urls) {
+    let lastError = null;
+    for (const url of urls) {
+        try {
+            return await import(url);
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    throw lastError || new Error('Failed to import module');
+}
+
 export async function getWagmiCore() {
     if (!cached) {
-        const core = await import('https://esm.sh/@wagmi/core@2.13.8');
-        const chains = await import('https://esm.sh/@wagmi/core/chains@2.13.8');
-        const connectors = await import('https://esm.sh/@wagmi/connectors@5.1.8');
+        const core = await importFromAny([
+            'https://esm.sh/@wagmi/core@2.13.8',
+            'https://cdn.jsdelivr.net/npm/@wagmi/core@2.13.8/+esm'
+        ]);
+        const chains = await importFromAny([
+            'https://esm.sh/@wagmi/core@2.13.8/chains',
+            'https://cdn.jsdelivr.net/npm/@wagmi/core@2.13.8/chains/+esm'
+        ]);
+        const connectors = await importFromAny([
+            'https://esm.sh/@wagmi/connectors@5.1.8',
+            'https://cdn.jsdelivr.net/npm/@wagmi/connectors@5.1.8/+esm'
+        ]);
 
         const projectId = getWalletConnectProjectId();
-        const config = core.createConfig({
-            chains: [chains.mainnet],
-            connectors: [
+        const wagmiConnectors = [];
+        if (projectId) {
+            wagmiConnectors.push(
                 connectors.walletConnect({
                     projectId,
                     showQrModal: true,
@@ -24,7 +45,16 @@ export async function getWagmiCore() {
                         icons: []
                     }
                 })
-            ],
+            );
+        } else {
+            console.warn(
+                'WalletConnect disabled: no project ID configured. Set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.'
+            );
+        }
+
+        const config = core.createConfig({
+            chains: [chains.mainnet],
+            connectors: wagmiConnectors,
             transports: {
                 [chains.mainnet.id]: core.http()
             }

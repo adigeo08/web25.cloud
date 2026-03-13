@@ -39,3 +39,15 @@ export async function mnemonicToSeedBytes(mnemonic) {
     const { mnemonicToSeed } = await loadBip39();
     return mnemonicToSeed(mnemonic);
 }
+
+/**
+ * Validates a BIP-39 mnemonic.
+ * @param {string} mnemonic
+ * @returns {Promise<boolean>}
+ */
+export async function validateBip39Mnemonic(mnemonic) {
+    const { validateMnemonic } = await loadBip39();
+    const wordlist = await loadEnglishWordlist();
+    const normalized = mnemonic.trim().toLowerCase().split(/\s+/).join(' ');
+    return validateMnemonic(normalized, wordlist);
+}

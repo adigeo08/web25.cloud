@@ -1,7 +1,7 @@
 // @ts-check
 
 import { loadViemAccounts } from '../web3/viemClients.js';
-import { generateBip39Mnemonic, mnemonicToSeedBytes } from './SeedPhraseService.js';
+import { generateBip39Mnemonic, mnemonicToSeedBytes, validateBip39Mnemonic } from './SeedPhraseService.js';
 import {
     decryptPrivateKey,
     deleteLocalWallet,
@@ -88,6 +88,35 @@ export async function registerLocalWallet() {
     return { address, seedPhrase: mnemonic };
 }
 
+export async function registerLocalWalletFromSeed(seedPhrase) {
+    const existing = await getLocalWalletRecord();
+    if (existing) {
+        throw new Error('A local wallet already exists. Delete it first before recovering from a seed phrase.');
+    }
+
+    const normalized = seedPhrase.trim().toLowerCase().split(/\s+/).join(' ');
+
+    const isValid = await validateBip39Mnemonic(normalized);
+    if (!isValid) {
+        throw new Error('Invalid seed phrase. Please verify all 12 words and order.');
+    }
+
+    const privateKey = await derivePrivateKeyFromMnemonic(normalized);
+    const viemAccounts = await loadViemAccounts();
+    const address = viemAccounts.privateKeyToAccount(privateKey).address;
+    const encrypted = await encryptPrivateKey(privateKey);
+
+    await saveLocalWallet({
+        address,
+        encryptedPrivateKey: encrypted.encryptedPrivateKey,
+        iv: encrypted.iv,
+        createdAt: new Date().toISOString()
+    });
+
+    unlockedPrivateKey = privateKey;
+    setupAutoLock();
+    return { address };
+}
 export async function unlockLocalWallet() {
     const record = await getLocalWalletRecord();
     if (!record) {

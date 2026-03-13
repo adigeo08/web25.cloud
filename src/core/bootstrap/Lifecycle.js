@@ -7,6 +7,7 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { signPublishPayload } from '../../auth/SigningService.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
+import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
 
 export async function init() {
     try {
@@ -28,6 +29,81 @@ export async function initAuth() {
     this.authController = new AuthController(this.toast);
     await this.authController.init();
     this.lastSignedPublish = null;
+    this.setupAuthAwareUi(this.authController.state);
+    this.setupWalletConnectButton();
+    this.authController.onChange((state) => this.setupAuthAwareUi(state));
+}
+
+export function setupWalletConnectButton() {
+    const button = /** @type {HTMLButtonElement | null} */ (document.getElementById('connect-wallet-btn'));
+    if (!button) return;
+
+    const enabled = hasWalletConnectProjectId();
+    button.disabled = !enabled;
+    if (!enabled) {
+        button.title =
+            'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
+    } else {
+        button.title = '';
+    }
+}
+
+export function attachSignatureArtifact(torrentHash, signature) {
+    const signatureLink = /** @type {HTMLAnchorElement | null} */ (document.getElementById('download-signature-file'));
+    if (!signatureLink) return;
+
+    if (signatureLink.href && signatureLink.href.startsWith('blob:')) {
+        URL.revokeObjectURL(signatureLink.href);
+    }
+
+    const blob = new Blob(
+        [
+            JSON.stringify(
+                {
+                    torrentHash,
+                    payload: signature.payload,
+                    message: signature.message,
+                    signature: signature.signature
+                },
+                null,
+                2
+            )
+        ],
+        { type: 'application/json' }
+    );
+
+    signatureLink.href = this.createTrackedObjectURL(blob);
+    signatureLink.download = `website-${torrentHash.slice(0, 8)}.sig.json`;
+    signatureLink.style.display = 'inline-flex';
+}
+
+export function setupAuthAwareUi(state) {
+    const identityTabBtn = document.querySelector('[data-tab="auth"]');
+    const identityTabPanel = document.getElementById('tab-auth');
+    const deployWall = document.getElementById('deploy-auth-wall');
+    const deployPanel = document.getElementById('deploy-panel');
+    const isAuthenticated = Boolean(state.address && state.identityType);
+
+    if (identityTabBtn) {
+        identityTabBtn.style.display = isAuthenticated ? 'inline-flex' : 'none';
+    }
+    if (identityTabPanel) {
+        identityTabPanel.style.display = isAuthenticated ? 'block' : 'none';
+    }
+    if (deployWall) {
+        deployWall.classList.toggle('hidden', isAuthenticated);
+    }
+    if (deployPanel) {
+        deployPanel.classList.toggle('hidden', !isAuthenticated);
+    }
+
+    if (!isAuthenticated) {
+        const activeTab = document.querySelector('.tab-btn.active');
+        if (activeTab && activeTab.getAttribute('data-tab') === 'auth') {
+            const browseTab = document.querySelector('[data-tab=\"browse\"]');
+            if (browseTab instanceof HTMLElement) browseTab.click();
+        }
+    }
 }
 
 export async function loadRequiredLibraries() {
@@ -266,44 +342,57 @@ export function setupEventListeners() {
 
     bindPublishActions({
         onSign: async () => {
-            if (!this.lastPublishCandidate) {
-                this.toast.warning('Create or load a torrent first.', 'Publish');
+            this.toast.info('Deploy signs automatically during publish.', 'Deploy flow');
+        },
+        onPublish: async () => {
+            if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
+                this.toast.warning('Select files first before deploying.', 'Deploy blocked');
                 return;
             }
 
             const identity = this.authController.getActiveIdentity();
             if (!identity.address || !identity.identityType) {
-                this.toast.warning('Connect or unlock a wallet before signing.', 'Identity required');
+                this.toast.warning('Authenticate first: connect wallet or create local wallet.', 'Auth required');
                 return;
             }
 
-            const signature = await signPublishPayload(
-                {
-                    torrentHash: this.lastPublishCandidate.hash,
-                    siteName: this.lastPublishCandidate.siteName,
+            try {
+                const torrent = await this.deploySignedTorrent();
+
+                const payloadInput = {
+                    torrentHash: torrent.infoHash,
+                    siteName: this.generateTorrentName(this.pendingDeployFiles),
                     createdAt: new Date().toISOString(),
                     publisherAddress: identity.address,
-                    contentRoot: this.lastPublishCandidate.hash,
+                    contentRoot: torrent.infoHash,
                     chainId: identity.chainId || 1
-                },
-                identity.identityType
-            );
+                };
 
-            this.lastSignedPublish = attachPublishMetadata(this.lastPublishCandidate.hash, signature);
-            renderPublishReview(this.lastSignedPublish.payload);
-            renderSignatureStatus(signature);
-        },
-        onPublish: async () => {
-            if (!this.lastSignedPublish) {
-                this.toast.warning('Please sign publish payload first.', 'Publish blocked');
-                return;
-            }
+                const signature = await signPublishPayload(payloadInput, identity.identityType);
+                this.lastSignedPublish = attachPublishMetadata(torrent.infoHash, signature);
+                renderPublishReview(this.lastSignedPublish.payload);
+                renderSignatureStatus(signature);
 
-            const output = document.getElementById('publish-output');
-            if (output) {
-                output.textContent = JSON.stringify(this.lastSignedPublish, null, 2);
+                this.attachSignatureArtifact(torrent.infoHash, signature);
+
+                const output = document.getElementById('publish-output');
+                if (output) {
+                    output.textContent = JSON.stringify(
+                        {
+                            torrentHash: torrent.infoHash,
+                            signedPayload: signature.payload,
+                            signature: signature.signature,
+                            signatureStorage: 'companion-signature-artifact'
+                        },
+                        null,
+                        2
+                    );
+                }
+
+                this.toast.success('Signed deployment published.', 'Deploy complete');
+            } catch (error) {
+                this.toast.error(error.message, 'Deploy failed');
             }
-            this.toast.success('Signed publish payload prepared in browser.', 'Publish ready');
         }
     });
 }
@@ -311,29 +400,29 @@ export function setupEventListeners() {
 export function calculateProcessingTimeout(torrent) {
     const sizeMB = torrent.length / (1024 * 1024);
     const fileCount = torrent.files.length;
-    
+
     // Base timeout + additional time based on size and file count
     let timeout = PEERWEB_CONFIG.PROCESSING_TIMEOUT_BASE;
     timeout += sizeMB * PEERWEB_CONFIG.PROCESSING_TIMEOUT_PER_MB;
     timeout += fileCount * PEERWEB_CONFIG.PROCESSING_TIMEOUT_PER_FILE;
-    
+
     // Clamp to min/max
     timeout = Math.max(PEERWEB_CONFIG.PROCESSING_TIMEOUT_MIN, timeout);
     timeout = Math.min(PEERWEB_CONFIG.PROCESSING_TIMEOUT_MAX, timeout);
-    
+
     return Math.floor(timeout);
 }
 
 export function calculateFileTimeout(file) {
     const sizeMB = file.length / (1024 * 1024);
-    
+
     let timeout = PEERWEB_CONFIG.FILE_TIMEOUT_BASE;
     timeout += sizeMB * PEERWEB_CONFIG.FILE_TIMEOUT_PER_MB;
-    
+
     // Clamp to min/max
     timeout = Math.max(PEERWEB_CONFIG.FILE_TIMEOUT_MIN, timeout);
     timeout = Math.min(PEERWEB_CONFIG.FILE_TIMEOUT_MAX, timeout);
-    
+
     return Math.floor(timeout);
 }
 
