@@ -7,18 +7,21 @@ import {
     lockLocalWallet,
     registerLocalWallet,
     removeLocalWallet,
-    unlockLocalWallet
+    unlockLocalWallet,
+    registerLocalWalletFromSeed
 } from './LocalWalletService.js';
 import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
 import { bindConnectWallet } from '../ui/auth/ConnectWalletModal.js';
 import { bindRegisterWallet } from '../ui/auth/RegisterWalletModal.js';
 import { bindUnlockWallet } from '../ui/auth/UnlockWalletModal.js';
+import { bindRecoverWallet } from '../ui/auth/RecoverWalletModal.js';
 import { hideSeedPhrase, showSeedPhrase } from '../ui/auth/SeedPhraseScreen.js';
 
 export default class AuthController {
     constructor(toast) {
         this.toast = toast;
         this.state = createAuthState();
+        this.listeners = new Set();
     }
 
     async init() {
@@ -27,6 +30,7 @@ export default class AuthController {
         bindConnectWallet(() => this.connectExternal());
         bindRegisterWallet(() => this.registerLocal());
         bindUnlockWallet(() => this.unlockLocal());
+        bindRecoverWallet(() => this.recoverLocal());
 
         const disconnectBtn = document.getElementById('disconnect-auth-btn');
         if (disconnectBtn) disconnectBtn.addEventListener('click', () => this.disconnect());
@@ -38,6 +42,16 @@ export default class AuthController {
         if (closeSeedBtn) closeSeedBtn.addEventListener('click', () => hideSeedPhrase());
 
         this.render();
+        this.notify();
+    }
+
+    onChange(listener) {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+
+    notify() {
+        this.listeners.forEach((listener) => listener(this.state));
     }
 
     render() {
@@ -53,8 +67,18 @@ export default class AuthController {
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             this.state.identityType = 'local';
             this.state.address = localWallet.address;
+            return;
         } else if (localWallet.exists) {
-            this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
+            try {
+                const result = await unlockLocalWallet();
+                this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+                this.state.identityType = 'local';
+                this.state.address = result.address;
+                this.state.localWalletUnlocked = true;
+                return;
+            } catch (_error) {
+                this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
+            }
         }
     }
 
@@ -66,6 +90,7 @@ export default class AuthController {
             this.state.chainId = result.chainId;
             this.state.status = AUTH_STATUS.EXTERNAL_CONNECTED;
             this.render();
+            this.notify();
             this.toast.success(`Connected ${result.address}`, 'External wallet connected');
         } catch (err) {
             this.toast.error(err.message, 'Connection failed');
@@ -82,11 +107,30 @@ export default class AuthController {
             this.state.localWalletUnlocked = true;
             showSeedPhrase(result.seedPhrase);
             this.render();
+            this.notify();
         } catch (err) {
             this.toast.error(err.message, 'Registration failed');
         }
     }
 
+    async recoverLocal() {
+        const seedPhrase = window.prompt('Enter your 12-word seed phrase to recover your local wallet:');
+        if (!seedPhrase) return;
+
+        try {
+            const result = await registerLocalWalletFromSeed(seedPhrase);
+            this.state.identityType = 'local';
+            this.state.address = result.address;
+            this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+            this.state.localWalletExists = true;
+            this.state.localWalletUnlocked = true;
+            this.render();
+            this.notify();
+            this.toast.success(`Recovered ${result.address}`, 'Local wallet recovered');
+        } catch (err) {
+            this.toast.error(err.message, 'Recovery failed');
+        }
+    }
     async unlockLocal() {
         try {
             const result = await unlockLocalWallet();
@@ -95,6 +139,7 @@ export default class AuthController {
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             this.state.localWalletUnlocked = true;
             this.render();
+            this.notify();
         } catch (err) {
             this.toast.error(err.message, 'Unlock failed');
         }
@@ -109,6 +154,7 @@ export default class AuthController {
             this.state = createAuthState();
             await this.refreshLocalWalletState();
             this.render();
+            this.notify();
         } catch (err) {
             this.toast.error(err.message, 'Disconnect failed');
         }
@@ -123,6 +169,7 @@ export default class AuthController {
             await removeLocalWallet();
             this.state = createAuthState();
             this.render();
+            this.notify();
         } catch (err) {
             this.toast.error(err.message, 'Delete failed');
         }

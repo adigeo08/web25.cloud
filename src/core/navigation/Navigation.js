@@ -127,7 +127,7 @@ export function showSiteViewer(url, hash, fromCache) {
     }
 
     if (iframe) {
-        iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+        iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
 
         // Add error handler for iframe
         iframe.onerror = (e) => {
@@ -136,7 +136,7 @@ export function showSiteViewer(url, hash, fromCache) {
 
         iframe.onload = () => {
             this.log('Iframe loaded successfully');
-            
+
             // Block service worker registration in the embedded site
             // to prevent conflicts with PeerWeb's service worker
             try {
@@ -144,10 +144,12 @@ export function showSiteViewer(url, hash, fromCache) {
                 if (iframeWindow && iframeWindow.navigator && iframeWindow.navigator.serviceWorker) {
                     // Override service worker registration
                     const originalRegister = iframeWindow.navigator.serviceWorker.register;
-                    iframeWindow.navigator.serviceWorker.register = function() {
+                    iframeWindow.navigator.serviceWorker.register = function () {
                         console.warn('[PeerWeb] Service worker registration blocked in embedded site');
                         // Return a rejected promise to maintain API compatibility
-                        return Promise.reject(new Error('Service worker registration is disabled in PeerWeb embedded sites'));
+                        return Promise.reject(
+                            new Error('Service worker registration is disabled in PeerWeb embedded sites')
+                        );
                     };
                     this.log('Service worker registration blocked for embedded site');
                 }

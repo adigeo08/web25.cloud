@@ -5,5 +5,8 @@ export function getWalletConnectProjectId() {
     if (configured) {
         return configured;
     }
-    return 'demo-project-id';
+
+    throw new Error(
+        'Missing WalletConnect project id. Set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.'
+    );
 }
