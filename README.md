@@ -1,279 +1,206 @@
-# ☁️ Web25.Cloud ☁️
+# ☁️ Web25.Cloud
 
-**🌐 Decentralized web platform built on top of PeerWeb 🌐**
+**Decentralized web platform for peer-to-peer static site hosting + wallet-based identity + signed publishing, fully in-browser.**
 
-Web25.Cloud started as a fork and extension of PeerWeb, focused on
-peer‑to‑peer static site hosting directly from the browser. The project
-is now being actively refactored into a more maintainable modular
-architecture, with the PeerWeb core already split into cleaner internal
-modules as a first major step.
+Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware publishing flow.
 
-The current development phase focuses on integrating **viem** and
-**wagmi** for wallet connectivity and identity‑related flows on top of
-the decentralized hosting engine.
+---
 
-------------------------------------------------------------------------
+## What is implemented now
 
-# Project Status
+### 1) Clear UI split (Identity / Publish / Browse)
 
-Web25.Cloud is currently in an **active refactor and build phase**.
+The application UI is now separated into:
 
-## Already Completed
+- **Identity / Auth**
+  - Connect Wallet (WalletConnect)
+  - Register Local Wallet
+  - Unlock Local Wallet
+  - Disconnect
+  - Delete Local Wallet
+- **Publish**
+  - Select/drop files
+  - Create torrent
+  - Preview signing payload
+  - Sign payload
+  - Publish output (signed metadata)
+- **Browse / Load**
+  - Existing torrent-hash loading flow remains available
 
--   The original PeerWeb-style monolithic core has been **modularized**
--   Internal logic split into smaller components:
-    -   core orchestration
-    -   renderer
-    -   cache layer
-    -   UI modules
-    -   configuration
-    -   utility modules
--   The project is no longer simply a PeerWeb fork
--   Architecture is being prepared for long‑term extensibility
+---
 
-## Currently in Development
+### 2) External wallet (wagmi + WalletConnect)
 
--   **viem integration**
--   **wagmi integration**
--   wallet connection flows
--   ownership-aware architecture
--   modular app structure expansion
+External identity supports:
 
-------------------------------------------------------------------------
+- WalletConnect-based connection via wagmi connectors
+- Display of connected address in UI
+- Message signing for torrent publish payloads
+- Disconnect flow
 
-# Current Features
+`WalletConnect projectId` can be provided via:
 
-## Peer-to-Peer Hosting
+- `window.WALLETCONNECT_PROJECT_ID`
+- or `localStorage['walletconnect_project_id']`
 
--   Drag & Drop website upload
--   Instant shareable URLs
--   No traditional hosting required
--   Browser-based seeding
--   Distributed peer-to-peer loading
+If none is set, a demo fallback value is used.
 
-## Performance
+---
 
--   IndexedDB caching
--   Service Worker resource handling
--   Progressive loading
--   Automatic cleanup mechanisms
+### 3) Local browser wallet (viem + WebCrypto + IndexedDB)
 
-## Security
+Local identity supports:
 
--   HTML sanitization
--   Input/hash sanitization
--   Sandboxed iframe rendering
--   Resource validation
+- Register local wallet
+- Generate and show seed phrase once
+- Persist wallet metadata in IndexedDB
+- Unlock and sign publish payloads
+- Delete local wallet
 
-## UX
+Stored wallet metadata includes:
 
--   Toast notifications
--   Debug logging
--   PWA support
--   Responsive interface
+- `walletId`
+- `address`
+- `encryptedPrivateKey`
+- `createdAt`
+- `lastUsedAt`
 
-------------------------------------------------------------------------
+#### Security model
 
-# Development Roadmap
+Private key is **not stored in plaintext**:
 
-## 1. PeerWeb Core Refactor
+1. A non-extractable WebCrypto `CryptoKey` (AES-GCM) is created/managed.
+2. Private key is encrypted before persistence.
+3. Encrypted key + IV are stored in IndexedDB.
+4. Private key is decrypted only temporarily in memory for signing.
 
-The first step was breaking the monolithic `peerweb.js` architecture
-into modular components.
+> Note: seed phrase is displayed at registration time and not persisted in clear text.
 
-Goals:
+---
 
--   remove monolithic code
--   isolate responsibilities
--   improve maintainability
--   prepare for future features
+### 4) Deterministic publish signing payload
 
-This step has already begun and forms the foundation of the project.
+Torrent publish signature payload is deterministic and serialized predictably.
 
-------------------------------------------------------------------------
+Fields used:
 
-## 2. Wallet & Identity Layer
+- `torrentHash`
+- `siteName`
+- `createdAt`
+- `version`
+- `publisherAddress`
+- `contentRoot`
+- `chainId`
 
-Current active development focuses on:
+Signing flow:
 
--   wallet connectivity via **wagmi**
--   blockchain interaction utilities via **viem**
--   ownership‑aware application flows
--   wallet‑based application state
+1. User creates/loads torrent
+2. App keeps publish candidate (hash + site metadata)
+3. User signs payload with active identity (external/local)
+4. Signed publish output is generated in-browser
 
-------------------------------------------------------------------------
+---
 
-## 3. Identity‑Aware Web Experiences
+## Architecture (modular, no new monolith)
 
-Future work may include:
+Implemented modules:
 
--   signed actions
--   ownership verification
--   gated content flows
--   identity-linked site behavior
+```text
+src/
+├── auth/
+│   ├── AuthController.js
+│   ├── AuthState.js
+│   ├── ExternalWalletService.js
+│   ├── LocalWalletService.js
+│   ├── SeedPhraseService.js
+│   ├── SecureKeyStore.js
+│   └── SigningService.js
+│
+├── ui/
+│   ├── auth/
+│   │   ├── AuthPanel.js
+│   │   ├── ConnectWalletModal.js
+│   │   ├── RegisterWalletModal.js
+│   │   ├── SeedPhraseScreen.js
+│   │   ├── UnlockWalletModal.js
+│   │   └── IdentityBadge.js
+│   │
+│   ├── publish/
+│   │   ├── PublishPanel.js
+│   │   ├── PublishReviewModal.js
+│   │   └── SignatureStatus.js
+│
+├── web3/
+│   ├── wagmiConfig.js
+│   ├── walletConnect.js
+│   └── viemClients.js
+│
+├── torrent/
+│   ├── TorrentPublishService.js
+│   └── TorrentSignaturePayload.js
+```
 
-------------------------------------------------------------------------
+---
 
-## 4. Messaging Layer
+## Current status
 
-A decentralized messaging layer is planned for a later stage.
+### Implemented
 
-The messaging architecture will be **inspired by the p2pt JavaScript
-library**, which uses WebTorrent trackers for peer discovery.
+- Modularized peer web core
+- Identity/Auth panel and flows
+- WalletConnect external wallet integration
+- Local encrypted wallet persistence (WebCrypto + IndexedDB)
+- Deterministic publish payload + signing flow
+- Publish-to-identity linkage in browser
 
-Expected research areas:
+### Non-goals (still not implemented)
 
--   peer discovery models
--   direct messaging channels
--   encrypted message exchange
--   browser-native peer communication patterns
+- Smart contracts
+- Backend auth
+- Token gating
+- Multi-wallet management
+- Hardware wallets
 
-This system will not rely on centralized messaging infrastructure.
+---
 
-------------------------------------------------------------------------
+## Quick start
 
-# Quick Start
+```bash
+npm install
+npm run start
+```
 
-## Host a Website
+Open:
 
-1.  Open Web25.Cloud
-2.  Drag your site folder into the upload area
-3.  The site is packaged for peer distribution
-4.  Share the generated link
+- `http://127.0.0.1:8000`
 
-## Load a Website
+Type check:
 
-Enter a site hash or open:
+```bash
+npm run check
+```
 
-https://web25.cloud?orc=HASH
+Build entrypoint:
 
-## Debug Mode
+```bash
+npm run build
+```
 
-Enable debug logs:
+---
 
+## Legacy P2P hosting behavior (still available)
+
+- Drag/drop static website folder
+- Generate torrent hash + shareable URL
+- Keep tab open to continue seeding
+- Load any site by hash using Browse/Load tab
+
+---
+
+## Debug mode
+
+Append `debug=true` to URL:
+
+```text
 https://web25.cloud?orc=HASH&debug=true
-
-------------------------------------------------------------------------
-
-# Website Requirements
-
-Sites should be:
-
--   static
--   contain an `index.html`
--   use relative internal paths
--   include assets like HTML, CSS, JS, images, and fonts
-
-------------------------------------------------------------------------
-
-# Project Structure
-
-Example structure:
-
-web25.cloud/ │ ├── index.html ├── styles.css ├── peerweb-sw.js ├──
-manifest.json ├── package.json ├── README.md │ ├── src/ │ ├── config/ │
-├── constants/ │ ├── core/ │ │ ├── torrent/ │ │ ├── renderer/ │ │ ├──
-serviceworker/ │ │ └── navigation/ │ ├── cache/ │ ├── ui/ │ └── utils/ │
-└── scripts/
-
-The architecture separates:
-
--   core orchestration
--   torrent logic
--   rendering
--   service worker integration
--   caching
--   UI components
--   utilities
--   wallet integrations
--   future messaging modules
-
-------------------------------------------------------------------------
-
-# How It Works
-
-## Upload
-
--   Files are packaged
--   A unique content identifier is generated
--   The browser becomes the first peer
-
-## Loading
-
--   Resource requests resolved through the peer network
--   Files downloaded from available peers
--   Cached locally for faster future loads
-
-## Rendering
-
--   HTML sanitized
--   resources processed
--   sites rendered in sandboxed iframe environments
-
-------------------------------------------------------------------------
-
-# Wallet Integration Work
-
-Current focus:
-
-## viem
-
-Used for chain interaction utilities.
-
-## wagmi
-
-Used for wallet connection flows and frontend wallet state management.
-
-The goal is to integrate wallet awareness cleanly into the modular
-architecture rather than bolting it onto the old monolithic core.
-
-------------------------------------------------------------------------
-
-# Advanced Usage
-
-## Debug Mode
-
-Append:
-
-?debug=true
-
-Example:
-
-https://web25.cloud?orc=HASH&debug=true
-
-------------------------------------------------------------------------
-
-# Vision
-
-Web25.Cloud is evolving from a PeerWeb experiment into a modular
-decentralized web platform.
-
-Future capabilities may include:
-
--   wallet‑aware websites
--   ownership‑verified content
--   protected client-side content
--   decentralized messaging
--   modular peer web applications
-
-The first step in this direction was replacing the original monolithic
-architecture with a modular foundation.
-
-------------------------------------------------------------------------
-
-# License
-
-MIT License.
-
-See LICENSE file for details.
-
-------------------------------------------------------------------------
-
-# Acknowledgments
-
--   PeerWeb
--   WebTorrent
--   DOMPurify
--   viem
--   wagmi
--   p2pt
+```
