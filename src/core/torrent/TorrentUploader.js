@@ -508,10 +508,19 @@ export async function handleFolderUpload(files) {
         output.textContent = `Ready to deploy ${files.length} files. Signing is mandatory.`;
     }
 
+    const signatureLink = /** @type {HTMLAnchorElement | null} */ (document.getElementById('download-signature-file'));
+    if (signatureLink) {
+        if (signatureLink.href && signatureLink.href.startsWith('blob:')) {
+            URL.revokeObjectURL(signatureLink.href);
+        }
+        signatureLink.removeAttribute('href');
+        signatureLink.style.display = 'none';
+    }
+
     this.toast.success('Files staged. Click Deploy to sign + publish.', 'Deploy ready');
 }
 
-export async function deploySignedTorrent(signatureResult) {
+export async function deploySignedTorrent() {
     if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
         throw new Error('No files selected for deployment');
     }
@@ -520,33 +529,41 @@ export async function deploySignedTorrent(signatureResult) {
         throw new Error('WebTorrent client is not ready');
     }
 
-    this.showUploadProgress('Creating signed torrent...');
-    const metadata = JSON.stringify({
-        signer: signatureResult.payload.publisherAddress,
-        signature: signatureResult.signature,
-        payload: signatureResult.payload
-    });
+    this.showUploadProgress('Creating torrent...');
+    let timeoutId = null;
 
-    const createdTorrent = await new Promise((resolve, reject) => {
-        this.client.seed(
-            this.pendingDeployFiles,
-            {
-                announce: this.trackers,
-                name: this.generateTorrentName(this.pendingDeployFiles),
-                comment: `Web25 Signed Deploy:${metadata}`,
-                createdBy: 'Web25.Cloud Deploy',
-                private: false,
-                pieceLength: this.calculateOptimalPieceLength(this.pendingDeployFiles)
-            },
-            (torrent) => resolve(torrent)
-        );
+    try {
+        const createdTorrent = await new Promise((resolve, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Timed out while creating torrent')), 30000);
 
-        setTimeout(() => reject(new Error('Timed out while creating signed torrent')), 30000);
-    });
+            this.client.seed(
+                this.pendingDeployFiles,
+                {
+                    announce: this.trackers,
+                    name: this.generateTorrentName(this.pendingDeployFiles),
+                    comment: 'Web25 Deploy Artifact',
+                    createdBy: 'Web25.Cloud Deploy',
+                    private: false,
+                    pieceLength: this.calculateOptimalPieceLength(this.pendingDeployFiles)
+                },
+                (torrent) => {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                        timeoutId = null;
+                    }
+                    resolve(torrent);
+                }
+            );
+        });
 
-    this.hideUploadProgress();
-    this.showUploadResult(createdTorrent.infoHash, createdTorrent.torrentFile, createdTorrent);
-    return createdTorrent;
+        this.showUploadResult(createdTorrent.infoHash, createdTorrent.torrentFile, createdTorrent);
+        return createdTorrent;
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+        this.hideUploadProgress();
+    }
 }
 
 export function showUploadProgress(message) {

@@ -23,8 +23,8 @@ export async function getWagmiCore() {
             'https://cdn.jsdelivr.net/npm/@wagmi/core@2.13.8/+esm'
         ]);
         const chains = await importFromAny([
-            'https://esm.sh/viem@2.22.21/chains',
-            'https://cdn.jsdelivr.net/npm/viem@2.22.21/chains/+esm'
+            'https://esm.sh/@wagmi/core@2.13.8/chains',
+            'https://cdn.jsdelivr.net/npm/@wagmi/core@2.13.8/chains/+esm'
         ]);
         const connectors = await importFromAny([
             'https://esm.sh/@wagmi/connectors@5.1.8',
@@ -32,9 +32,9 @@ export async function getWagmiCore() {
         ]);
 
         const projectId = getWalletConnectProjectId();
-        const config = core.createConfig({
-            chains: [chains.mainnet],
-            connectors: [
+        const wagmiConnectors = [];
+        if (projectId) {
+            wagmiConnectors.push(
                 connectors.walletConnect({
                     projectId,
                     showQrModal: true,
@@ -45,7 +45,16 @@ export async function getWagmiCore() {
                         icons: []
                     }
                 })
-            ],
+            );
+        } else {
+            console.warn(
+                'WalletConnect disabled: no project ID configured. Set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.'
+            );
+        }
+
+        const config = core.createConfig({
+            chains: [chains.mainnet],
+            connectors: wagmiConnectors,
             transports: {
                 [chains.mainnet.id]: core.http()
             }

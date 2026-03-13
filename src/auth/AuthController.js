@@ -30,7 +30,7 @@ export default class AuthController {
         bindConnectWallet(() => this.connectExternal());
         bindRegisterWallet(() => this.registerLocal());
         bindUnlockWallet(() => this.unlockLocal());
-        bindRecoverWallet(() => this.recoverLocal());
+        bindRecoverWallet((seedPhrase) => this.recoverLocal(seedPhrase));
 
         const disconnectBtn = document.getElementById('disconnect-auth-btn');
         if (disconnectBtn) disconnectBtn.addEventListener('click', () => this.disconnect());
@@ -69,16 +69,7 @@ export default class AuthController {
             this.state.address = localWallet.address;
             return;
         } else if (localWallet.exists) {
-            try {
-                const result = await unlockLocalWallet();
-                this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
-                this.state.identityType = 'local';
-                this.state.address = result.address;
-                this.state.localWalletUnlocked = true;
-                return;
-            } catch (_error) {
-                this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
-            }
+            this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
         }
     }
 
@@ -113,10 +104,7 @@ export default class AuthController {
         }
     }
 
-    async recoverLocal() {
-        const seedPhrase = window.prompt('Enter your 12-word seed phrase to recover your local wallet:');
-        if (!seedPhrase) return;
-
+    async recoverLocal(seedPhrase) {
         try {
             const result = await registerLocalWalletFromSeed(seedPhrase);
             this.state.identityType = 'local';
@@ -127,8 +115,10 @@ export default class AuthController {
             this.render();
             this.notify();
             this.toast.success(`Recovered ${result.address}`, 'Local wallet recovered');
+            return true;
         } catch (err) {
             this.toast.error(err.message, 'Recovery failed');
+            return false;
         }
     }
     async unlockLocal() {

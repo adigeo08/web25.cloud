@@ -89,6 +89,11 @@ export async function registerLocalWallet() {
 }
 
 export async function registerLocalWalletFromSeed(seedPhrase) {
+    const existing = await getLocalWalletRecord();
+    if (existing) {
+        throw new Error('A local wallet already exists. Delete it first before recovering from a seed phrase.');
+    }
+
     const normalized = seedPhrase.trim().toLowerCase().split(/\s+/).join(' ');
 
     const isValid = await validateBip39Mnemonic(normalized);

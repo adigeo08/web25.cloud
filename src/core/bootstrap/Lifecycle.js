@@ -7,6 +7,7 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { signPublishPayload } from '../../auth/SigningService.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
+import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
 
 export async function init() {
     try {
@@ -29,7 +30,51 @@ export async function initAuth() {
     await this.authController.init();
     this.lastSignedPublish = null;
     this.setupAuthAwareUi(this.authController.state);
+    this.setupWalletConnectButton();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
+}
+
+export function setupWalletConnectButton() {
+    const button = /** @type {HTMLButtonElement | null} */ (document.getElementById('connect-wallet-btn'));
+    if (!button) return;
+
+    const enabled = hasWalletConnectProjectId();
+    button.disabled = !enabled;
+    if (!enabled) {
+        button.title =
+            'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
+    } else {
+        button.title = '';
+    }
+}
+
+export function attachSignatureArtifact(torrentHash, signature) {
+    const signatureLink = /** @type {HTMLAnchorElement | null} */ (document.getElementById('download-signature-file'));
+    if (!signatureLink) return;
+
+    if (signatureLink.href && signatureLink.href.startsWith('blob:')) {
+        URL.revokeObjectURL(signatureLink.href);
+    }
+
+    const blob = new Blob(
+        [
+            JSON.stringify(
+                {
+                    torrentHash,
+                    payload: signature.payload,
+                    message: signature.message,
+                    signature: signature.signature
+                },
+                null,
+                2
+            )
+        ],
+        { type: 'application/json' }
+    );
+
+    signatureLink.href = this.createTrackedObjectURL(blob);
+    signatureLink.download = `website-${torrentHash.slice(0, 8)}.sig.json`;
+    signatureLink.style.display = 'inline-flex';
 }
 
 export function setupAuthAwareUi(state) {
@@ -312,30 +357,32 @@ export function setupEventListeners() {
             }
 
             try {
+                const torrent = await this.deploySignedTorrent();
+
                 const payloadInput = {
-                    torrentHash: 'pending-signed-torrent',
+                    torrentHash: torrent.infoHash,
                     siteName: this.generateTorrentName(this.pendingDeployFiles),
                     createdAt: new Date().toISOString(),
                     publisherAddress: identity.address,
-                    contentRoot: `files:${this.pendingDeployFiles.length}`,
+                    contentRoot: torrent.infoHash,
                     chainId: identity.chainId || 1
                 };
 
                 const signature = await signPublishPayload(payloadInput, identity.identityType);
-                this.lastSignedPublish = attachPublishMetadata('signed-torrent', signature);
+                this.lastSignedPublish = attachPublishMetadata(torrent.infoHash, signature);
                 renderPublishReview(this.lastSignedPublish.payload);
                 renderSignatureStatus(signature);
 
-                const torrent = await this.deploySignedTorrent(signature);
-                this.lastSignedPublish.torrentHash = torrent.infoHash;
+                this.attachSignatureArtifact(torrent.infoHash, signature);
 
                 const output = document.getElementById('publish-output');
                 if (output) {
                     output.textContent = JSON.stringify(
                         {
                             torrentHash: torrent.infoHash,
+                            signedPayload: signature.payload,
                             signature: signature.signature,
-                            metadataEmbedded: true
+                            signatureStorage: 'companion-signature-artifact'
                         },
                         null,
                         2

@@ -259,6 +259,13 @@
                                         <a id="download-torrent-file" class="btn btn-secondary" download
                                             >💾 Download .torrent</a
                                         >
+                                        <a
+                                            id="download-signature-file"
+                                            class="btn btn-secondary"
+                                            download
+                                            style="display: none"
+                                            >🖋️ Download Signature (.sig.json)</a
+                                        >
                                     </div>
                                     <div class="hosting-notice">
                                         <div class="notice-box">
@@ -444,7 +451,11 @@
 
         <!-- Site Viewer -->
         <div id="site-viewer" class="site-viewer hidden">
-            <iframe id="site-frame" class="site-frame" sandbox="allow-scripts allow-forms"></iframe>
+            <iframe
+                id="site-frame"
+                class="site-frame"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+            ></iframe>
         </div>
 
         <!-- Torrent Creator Modal -->
@@ -468,6 +479,36 @@
                             >Download .torrent</a
                         >
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recover Wallet Modal -->
+        <div id="recover-wallet-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>🔐 Recover Local Wallet</h3>
+                    <button id="recover-wallet-cancel" type="button" class="close-btn">×</button>
+                </div>
+                <div class="modal-body">
+                    <form id="recover-wallet-form">
+                        <p>Enter your 12-word seed phrase to recover your local wallet.</p>
+                        <input
+                            id="recover-seed-input"
+                            type="password"
+                            class="hash-input"
+                            autocomplete="off"
+                            spellcheck="false"
+                            placeholder="word1 word2 ... word12"
+                            required
+                        />
+                        <div class="button-group" style="margin-top: 1rem">
+                            <button type="submit" class="btn btn-primary">Recover Wallet</button>
+                            <button id="recover-wallet-cancel-secondary" type="button" class="btn btn-secondary">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
