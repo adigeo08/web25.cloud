@@ -7,7 +7,7 @@ let cached;
 export async function getWagmiCore() {
     if (!cached) {
         const core = await import('https://esm.sh/@wagmi/core@2.13.8');
-        const chains = await import('https://esm.sh/@wagmi/core/chains@2.13.8');
+        const chains = await import('https://esm.sh/viem@2.22.21/chains');
         const connectors = await import('https://esm.sh/@wagmi/connectors@5.1.8');
 
         const projectId = getWalletConnectProjectId();
