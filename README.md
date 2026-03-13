@@ -1,382 +1,280 @@
 # ☁️ Web25.Cloud ☁️
 
-**🌐 Decentralized web platform powered by PeerWeb — with EVM identity, ownership & encrypted messaging 🌐**
+**🌐 Decentralized web platform built on top of PeerWeb --- evolving
+into a modular, wallet-aware peer-to-peer web stack 🌐**
 
-Web25.Cloud builds on top of [PeerWeb](https://peerweb.lol) to bring a complete decentralized web experience: host static sites peer-to-peer, own your content via EVM wallets (inspired by ZeroNet), protect private content with token-gated encryption, and communicate securely with e2e encrypted DMs — all without centralized servers.
+Web25.Cloud started as a fork and extension of PeerWeb, focused on
+peer‑to‑peer static site hosting directly from the browser. The project
+is now being actively refactored into a more maintainable modular
+architecture, with the PeerWeb core already split into cleaner internal
+modules as a first major step.
 
-## 🗺️ Roadmap
+The current development phase focuses on integrating **viem** and
+**wagmi** for wallet connectivity and identity‑related flows on top of
+the decentralized hosting engine.
 
-### 1. 🔐 IAM — EVM Identity & Access Management (via wagmi)
+------------------------------------------------------------------------
 
-- **Wallet-based website ownership** — inspired by ZeroNet: sign your site with an EVM wallet; ownership is verifiable on-chain.
-- **Private content with token-gated encryption** — encrypt content so that only holders of a specific EVM token can decrypt and access it.
+# Project Status
 
-### 2. 💬 Messaging Channel (DMs)
+Web25.Cloud is currently in an **active refactor and build phase**.
 
-- **Peer Discovery via WebTorrent** — uses the [p2pt](https://github.com/subins2000/p2pt) library built on WebTorrent trackers.
-- **Invitation screens & chat UI** — clean invite flow with end-to-end encrypted messaging.
-- **E2E Encryption** — all DMs encrypted client-side; no server ever sees message content.
+## Already Completed
 
----
+-   The original PeerWeb-style monolithic core has been **modularized**
+-   Internal logic split into smaller components:
+    -   core orchestration
+    -   renderer
+    -   cache layer
+    -   UI modules
+    -   configuration
+    -   utility modules
+-   The project is no longer simply a PeerWeb fork
+-   Architecture is being prepared for long‑term extensibility
 
-## ✨ Current Features (PeerWeb Core)
+## Currently in Development
 
-### 🚀 Core Features
+-   **viem integration**
+-   **wagmi integration**
+-   wallet connection flows
+-   ownership-aware architecture
+-   modular app structure expansion
 
-- **Drag & Drop Upload** — Simply drag your website folder to host it
-- **Instant Sharing** — Get a shareable Web25.Cloud link immediately
-- **Zero Hosting Costs** — No servers, no monthly fees, completely free
-- **Censorship Resistant** — Distributed across peer-to-peer networks
-- **Always Available** — Works as long as there are online peers
+------------------------------------------------------------------------
 
-### 💾 Smart Technology
+# Current Features
 
-- **Intelligent Caching** — Lightning-fast loading with IndexedDB storage
-- **Service Worker Magic** — Seamless resource loading and offline support
-- **Progress Tracking** — Real-time download progress and peer statistics
-- **Auto Cleanup** — Expired cache automatically cleaned after 7 days
+## Peer-to-Peer Hosting
 
-### 🛡️ Security & Safety
+-   Drag & Drop website upload
+-   Instant shareable URLs
+-   No traditional hosting required
+-   Browser-based seeding
+-   Distributed peer-to-peer loading
 
-- **XSS Protection** — All HTML sanitized with DOMPurify
-- **Hash Sanitization** — Torrent hashes sanitized to prevent XSS attacks
-- **Sandboxed Execution** — Sites run in isolated iframe environments
-- **Content Validation** — All resources validated before display
-- **External Link Preservation** — Social media and external links work normally
-- **Memory Leak Prevention** — Automatic cleanup of timeouts and object URLs
+## Performance
 
-### 🎯 User Experience
+-   IndexedDB caching
+-   Service Worker resource handling
+-   Progressive loading
+-   Automatic cleanup mechanisms
 
-- **Toast Notifications** — Non-blocking, user-friendly notifications
-- **Tab Navigation** — Clean tabbed UI for Host, Browse, IAM and Messaging
-- **Advanced Torrent Creator** — Full-featured torrent creation tools
-- **Debug Mode** — Detailed logging for developers and troubleshooting
-- **PWA Support** — Install as a Progressive Web App on any device
-- **Mobile Friendly** — Responsive design works on all devices
+## Security
 
----
+-   HTML sanitization
+-   Input/hash sanitization
+-   Sandboxed iframe rendering
+-   Resource validation
 
-## 🚀 Quick Start
+## UX
 
-### 1. Host a Website
+-   Toast notifications
+-   Debug logging
+-   PWA support
+-   Responsive interface
 
-1. Open [Web25.Cloud](https://web25.cloud) in your browser
-2. Drag your website folder to the upload area
-3. Get your unique Web25.Cloud URL, and keep the tab open
-4. Share the link with anyone, anywhere!
+------------------------------------------------------------------------
 
-### 2. Load a Website
+# Development Roadmap
 
-1. Enter a torrent hash in the load field
-2. Or use a URL: `https://web25.cloud?orc=HASH`
-3. Website loads directly from the peer network
+## 1. PeerWeb Core Refactor
 
-### 3. Debug & Develop
+The first step was breaking the monolithic `peerweb.js` architecture
+into modular components.
 
-Add `&debug=true` to any URL for detailed logging:
+Goals:
 
-```
-https://web25.cloud?orc=ABC123...&debug=true
-```
+-   remove monolithic code
+-   isolate responsibilities
+-   improve maintainability
+-   prepare for future features
 
----
+This step has already begun and forms the foundation of the project.
 
-## 📋 Website Requirements
+------------------------------------------------------------------------
 
-Your websites should be:
+## 2. Wallet & Identity Layer
 
-- ✅ **Static content only** (HTML, CSS, JS, images, fonts, etc.)
-- ✅ **Include index.html** (in root)
-- ✅ **Use relative paths** for all internal resources
-- ✅ **Responsive design** recommended for best experience
+Current active development focuses on:
 
-## 🏗️ Project Structure
+-   wallet connectivity via **wagmi**
+-   blockchain interaction utilities via **viem**
+-   ownership‑aware application flows
+-   wallet‑based application state
 
-```
-web25.cloud/
-├── index.html          # Main application interface (tabbed UI)
-├── src/                # Modular source code
-│   ├── core/           # Core orchestration and features
-│   ├── ui/             # UI modules
-│   ├── cache/          # Cache layer
-│   └── config/         # Runtime configuration
-├── peerweb.min.js      # Minified PeerWeb core
-├── peerweb-sw.js       # Service Worker for resource handling
-├── manifest.json       # PWA manifest for installable web app
-└── README.md           # This file
-```
+------------------------------------------------------------------------
 
-## 🌐 How It Works
+## 3. Identity‑Aware Web Experiences
 
-### Hosting & Loading (PeerWeb Core)
+Future work may include:
 
-1. **Upload Process**
-    - Your website files are packaged into a BitTorrent torrent
-    - A unique hash identifies your site across the network
-    - Files are seeded from your browser to the peer network
+-   signed actions
+-   ownership verification
+-   gated content flows
+-   identity-linked site behavior
 
-2. **Loading Process**
-    - Service Worker intercepts resource requests
-    - Files are downloaded via WebTorrent from multiple peers
-    - Content is cached locally for instant future access
+------------------------------------------------------------------------
 
-3. **Security Layer**
-    - All HTML content sanitized with DOMPurify
-    - Torrent hashes sanitized to prevent XSS
-    - Sites run in sandboxed iframe
-    - External links preserved and functional
-    - Automatic memory cleanup on page unload
+## 4. Messaging Layer
 
-### EVM Identity (Coming Soon)
+A decentralized messaging layer is planned for a later stage.
 
-- Connect your EVM wallet via **wagmi**
-- Sign your hosted site to prove ownership (ZeroNet-inspired)
-- Gate content with ERC-20 / ERC-721 token checks
-- Decrypt private content client-side once token ownership is verified
+The messaging architecture will be **inspired by the p2pt JavaScript
+library**, which uses WebTorrent trackers for peer discovery.
 
-### Messaging (Coming Soon)
+Expected research areas:
 
-- Peer discovery via **WebTorrent** trackers (p2pt library)
-- Invite links generate a shared topic hash for rendezvous
-- Messages encrypted with **libsodium** / **ECIES** before sending
-- No relay server — pure peer-to-peer delivery
+-   peer discovery models
+-   direct messaging channels
+-   encrypted message exchange
+-   browser-native peer communication patterns
 
----
+This system will not rely on centralized messaging infrastructure.
 
-## 🚀 Advanced Usage
+------------------------------------------------------------------------
 
-### Debug Mode
+# Quick Start
 
-Enable detailed logging by adding `&debug=true` to any URL:
+## Host a Website
 
-```javascript
-// Example debug output
-[Web25.Cloud:DEBUG] Loading site with hash: abc123...
-[Web25.Cloud:INFO] Found 15 files in torrent
-[Web25.Cloud:DEBUG] Processing site early (95% complete)
-[PeerWeb SW] Serving file: styles.css (2.4KB)
-```
+1.  Open Web25.Cloud
+2.  Drag your site folder into the upload area
+3.  The site is packaged for peer distribution
+4.  Share the generated link
 
-### Progressive Web App
+## Load a Website
 
-Install Web25.Cloud on any device:
+Enter a site hash or open:
 
-1. Visit [web25.cloud](https://web25.cloud)
-2. Look for "Install" or "Add to Home Screen" in your browser
-3. Use it like a native application
+https://web25.cloud?orc=HASH
 
-Features when installed:
+## Debug Mode
 
-- Standalone app window
-- App icon on home screen/desktop
-- Faster loading with caching
-- Offline access to cached sites
+Enable debug logs:
 
----
+https://web25.cloud?orc=HASH&debug=true
 
-## 🤝 Contributing
+------------------------------------------------------------------------
 
-We welcome contributions! Here's how you can help:
+# Website Requirements
 
-### 🐛 Report Bugs
+Sites should be:
 
-- Use the [Issues](https://github.com/adigeo08/web25.cloud/issues) tab
-- Include browser version, steps to reproduce, and error messages
-- Enable debug mode for detailed logs
+-   static
+-   contain an `index.html`
+-   use relative internal paths
+-   include assets like HTML, CSS, JS, images, and fonts
 
-### 💡 Suggest Features
+------------------------------------------------------------------------
 
-- Open a [Feature Request](https://github.com/adigeo08/web25.cloud/issues/new)
-- Describe the use case and expected behavior
-- Check existing issues to avoid duplicates
+# Project Structure
 
-### 🔧 Submit Code
+Example structure:
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and test thoroughly
-4. Submit a Pull Request with detailed description
+web25.cloud/ │ ├── index.html ├── styles.css ├── peerweb-sw.js ├──
+manifest.json ├── package.json ├── README.md │ ├── src/ │ ├── config/ │
+├── constants/ │ ├── core/ │ │ ├── torrent/ │ │ ├── renderer/ │ │ ├──
+serviceworker/ │ │ └── navigation/ │ ├── cache/ │ ├── ui/ │ └── utils/ │
+└── scripts/
 
-### 📝 Improve Documentation
+The architecture separates:
 
-- Fix typos or unclear instructions
-- Add examples and use cases
-- Translate to other languages
+-   core orchestration
+-   torrent logic
+-   rendering
+-   service worker integration
+-   caching
+-   UI components
+-   utilities
+-   wallet integrations
+-   future messaging modules
 
----
+------------------------------------------------------------------------
 
-## 📖 Documentation
+# How It Works
 
-### Browser Support
+## Upload
 
-- ✅ **Chrome/Chromium** 60+ (Recommended)
-- ✅ **Firefox** 55+
-- ✅ **Safari** 11+
-- ✅ **Edge** 79+
-- ❌ Internet Explorer (Not supported)
+-   Files are packaged
+-   A unique content identifier is generated
+-   The browser becomes the first peer
 
-### WebTorrent Compatibility
+## Loading
 
-- Uses WebTorrent for browser-based torrenting
-- Compatible with standard BitTorrent protocol
-- Supports DHT, PEX, and WebRTC connections
+-   Resource requests resolved through the peer network
+-   Files downloaded from available peers
+-   Cached locally for faster future loads
 
-### Limitations
+## Rendering
 
-- **Static sites only** — No server-side processing
-- **Browser hosting** — Sites available while browser tab is open
-- **Peer dependency** — Requires active peers for availability
-- **Large files** — May be slow for sites with many large assets
+-   HTML sanitized
+-   resources processed
+-   sites rendered in sandboxed iframe environments
 
----
+------------------------------------------------------------------------
 
-## 🔒 Security
+# Wallet Integration Work
 
-### Content Sanitization
+Current focus:
 
-Multi-layer XSS protection:
+## viem
 
-- **HTML Sanitization** — All HTML content sanitized with DOMPurify
-- **Hash Sanitization** — Torrent hashes stripped of non-hex characters
-- **Script Injection Prevention** — Malicious scripts blocked
-- **Dangerous Elements** — Unsafe HTML elements and attributes removed
+Used for chain interaction utilities.
 
-### Sandboxed Execution
+## wagmi
 
-Websites run in sandboxed iframes with restrictions:
+Used for wallet connection flows and frontend wallet state management.
 
-```html
-<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"></iframe>
-```
+The goal is to integrate wallet awareness cleanly into the modular
+architecture rather than bolting it onto the old monolithic core.
 
-### External Resource Handling
+------------------------------------------------------------------------
 
-- External links (social media, email, etc.) work normally
-- CDN resources and external stylesheets load properly
-- Only internal site resources are processed through the core engine
+# Advanced Usage
 
----
+## Debug Mode
 
-## 🌟 Use Cases
+Append:
 
-### 📝 Personal Websites
+?debug=true
 
-- Portfolio sites
-- Blogs and documentation
-- Landing pages
-- Resume/CV sites
+Example:
 
-### 🔐 Ownership & Privacy
+https://web25.cloud?orc=HASH&debug=true
 
-- Token-gated content (EVM)
-- Wallet-signed articles and publications
-- Subscriber-only resources
+------------------------------------------------------------------------
 
-### 💬 Private Communication
+# Vision
 
-- End-to-end encrypted direct messages
-- Censorship-resistant chat channels
-- Decentralized group coordination
+Web25.Cloud is evolving from a PeerWeb experiment into a modular
+decentralized web platform.
 
-### 🌍 Censorship Resistance
+Future capabilities may include:
 
-- News and journalism
-- Political content
-- Whistleblowing platforms
-- Freedom of speech tools
+-   wallet‑aware websites
+-   ownership‑verified content
+-   protected client-side content
+-   decentralized messaging
+-   modular peer web applications
 
----
+The first step in this direction was replacing the original monolithic
+architecture with a modular foundation.
 
-## 🏆 Desktop Clients
+------------------------------------------------------------------------
 
-For permanent hosting without keeping browser tabs open:
+# License
 
-- 🪟 **Windows** — Web25.Cloud Desktop (Coming Soon)
-- 🍎 **macOS** — Web25.Cloud Desktop (Coming Soon)
-- 🐧 **Linux** — Web25.Cloud Desktop (Coming Soon)
+MIT License.
 
----
+See LICENSE file for details.
 
-## 📊 Technical Specifications
+------------------------------------------------------------------------
 
-### Supported File Types
+# Acknowledgments
 
-- **Documents**: HTML, CSS, JavaScript, JSON, XML
-- **Images**: PNG, JPEG, GIF, SVG, WebP, ICO
-- **Fonts**: WOFF, WOFF2, TTF, OTF, EOT
-- **Media**: MP4, WebM, MP3, WAV
-- **Other**: PDF and various binary formats
-
-### Performance
-
-- **Caching**: IndexedDB with 7-day expiration
-- **Loading**: Progressive loading with 95% threshold
-- **Piece Size**: Optimized based on total site size
-- **Timeout**: 5-second request timeout with fallbacks
-- **Memory Management**: Automatic cleanup of timeouts and object URLs
-- **Resource Tracking**: All setTimeout calls tracked and cleaned up
-
-### Network
-
-- **Trackers**: 7+ built-in BitTorrent trackers
-- **Protocols**: WebRTC, WebSocket, HTTP fallback
-- **DHT**: Distributed Hash Table support
-- **PEX**: Peer Exchange for discovery
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **[PeerWeb](https://peerweb.lol)** — The decentralized hosting engine this project builds upon
-- **[WebTorrent](https://webtorrent.io/)** — Browser-based BitTorrent implementation
-- **[p2pt](https://github.com/subins2000/p2pt)** — Peer-to-peer messaging over WebTorrent trackers
-- **[wagmi](https://wagmi.sh/)** — React hooks for EVM wallet integration
-- **[DOMPurify](https://github.com/cure53/DOMPurify)** — XSS sanitizer for HTML
-- **[ZeroNet](https://zeronet.io/)** — Inspiration for wallet-based site ownership
-- **BitTorrent Protocol** — Peer-to-peer file sharing foundation
-- **Service Workers** — Enabling offline-first web applications
-
----
-
-## 📞 Support
-
-### Getting Help
-
-- 📖 **Documentation**: Check this README and inline code comments
-- 🐛 **Bug Reports**: Use GitHub Issues with debug logs
-- 💬 **Community**: Join discussions in GitHub Discussions
-- 📧 **Contact**: Create an issue for direct support
-
-### Frequently Asked Questions
-
-**Q: How long do sites stay available?**
-A: Sites remain available as long as at least one peer is seeding them.
-
-**Q: Can I update my website?**
-A: Create a new torrent for updates. The hash will change with new content.
-
-**Q: Is there a file size limit?**
-A: No hard limits, but larger sites may load slower due to peer availability.
-
-**Q: Can I use custom domains?**
-A: Yes! Deploy Web25.Cloud to your domain and use `?orc=HASH` parameters.
-
-**Q: Does it work offline?**
-A: Cached sites work offline. New sites require internet for initial download.
-
-**Q: When will IAM / Messaging be available?**
-A: Both features are actively in development. Follow the repo for updates!
-
----
-
-<div align="center">
-
-**🌟 Star this project if you find it useful! 🌟**
-
-Made with ❤️ for the decentralized web
-
-</div>
+-   PeerWeb
+-   WebTorrent
+-   DOMPurify
+-   viem
+-   wagmi
+-   p2pt
