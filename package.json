@@ -1,7 +1,7 @@
 {
-    "name": "peerweb",
+    "name": "web25.cloud",
     "version": "1.0.0",
-    "description": "Decentralized website hosting powered by WebTorrent - Host static websites through peer-to-peer networks without centralized servers",
+    "description": "Decentralized web platform — peer-to-peer hosting, EVM identity & access management, and end-to-end encrypted messaging. Built on PeerWeb.",
     "main": "src/main.js",
     "scripts": {
         "dev": "npm run start",
@@ -13,7 +13,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/Omodaka9375/peerweb.git"
+        "url": "https://github.com/adigeo08/web25.cloud.git"
     },
     "keywords": [
         "webtorrent",
@@ -29,7 +29,7 @@
         "web3",
         "dapp"
     ],
-    "author": "Branislav Djalic",
+    "author": "adigeo08",
     "license": "Apache-2.0",
     "engines": {
         "node": ">=14.0.0"

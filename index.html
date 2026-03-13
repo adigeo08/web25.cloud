@@ -1,58 +1,168 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <!-- HTML Meta Tags -->
-        <title>PeerWeb - Decentralized Website Hosting</title>
+        <title>Web25.Cloud - Decentralized Web Platform</title>
         <meta
             name="description"
-            content="PeerWeb is a revolutionary way to host and share websites using WebTorrent technology. Instead of relying on centralized servers, websites are distributed across a peer-to-peer network, making them censorship-resistant and always available. 🌍✨"
+            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, EVM wallet-based ownership, token-gated content, and end-to-end encrypted messaging. 🌐☁️"
         />
 
         <!-- Facebook Meta Tags -->
-        <meta property="og:url" content="https://peerweb.lol/" />
+        <meta property="og:url" content="https://web25.cloud/" />
         <meta property="og:type" content="website" />
-        <meta property="og:title" content=" PeerWeb - Decentralized Website Hosting" />
+        <meta property="og:title" content="Web25.Cloud - Decentralized Web Platform" />
         <meta
             property="og:description"
-            content="PeerWeb is a revolutionary way to host and share websites using WebTorrent technology. Instead of relying on centralized servers, websites are distributed across a peer-to-peer network, making them censorship-resistant and always available. 🌍✨"
-        />
-        <meta
-            property="og:image"
-            content="https://omodaka9375.github.io/portfolio/static/media/peerweb.7559ae56a756e1217679.png"
+            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, EVM wallet-based ownership, token-gated content, and end-to-end encrypted messaging. 🌐☁️"
         />
 
         <!-- Twitter Meta Tags -->
         <meta name="twitter:card" content="summary_large_image" />
-        <meta property="twitter:domain" content="peerweb.lol" />
-        <meta property="twitter:url" content="https://peerweb.lol/" />
-        <meta name="twitter:title" content=" PeerWeb - Decentralized Website Hosting" />
+        <meta property="twitter:domain" content="web25.cloud" />
+        <meta property="twitter:url" content="https://web25.cloud/" />
+        <meta name="twitter:title" content="Web25.Cloud - Decentralized Web Platform" />
         <meta
             name="twitter:description"
-            content="PeerWeb is a revolutionary way to host and share websites using WebTorrent technology. Instead of relying on centralized servers, websites are distributed across a peer-to-peer network, making them censorship-resistant and always available. 🌍✨"
+            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, EVM wallet-based ownership, token-gated content, and end-to-end encrypted messaging. 🌐☁️"
         />
-        <meta
-            name="twitter:image"
-            content="https://omodaka9375.github.io/portfolio/static/media/peerweb.7559ae56a756e1217679.png"
-        />
-
-        <!-- Meta Tags Generated via https://www.opengraph.xyz -->
 
         <!-- PWA Meta Tags -->
         <meta name="theme-color" content="#66d4ea" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <meta name="apple-mobile-web-app-title" content="PeerWeb" />
+        <meta name="apple-mobile-web-app-title" content="Web25.Cloud" />
         <link rel="manifest" href="./manifest.json" />
 
         <link
             rel="icon"
-            href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%2210 0 100 100%22><text y=%22.90em%22 font-size=%2290%22>🪐</text></svg>"
+            href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.90em%22 font-size=%2290%22>☁️</text></svg>"
         />
 
-        <title>PeerWeb - Decentralized Website Hosting</title>
         <link rel="stylesheet" href="./styles.css" />
+        <style>
+            /* ── Tab Navigation ── */
+            .tab-nav {
+                display: flex;
+                gap: 0.25rem;
+                padding: 1rem 2rem 0;
+                background: rgba(0, 0, 0, 0.15);
+                flex-wrap: wrap;
+            }
+            .tab-btn {
+                padding: 0.6rem 1.2rem;
+                border: none;
+                border-radius: 10px 10px 0 0;
+                cursor: pointer;
+                font-size: 0.95rem;
+                font-weight: 600;
+                background: rgba(255, 255, 255, 0.15);
+                color: rgba(255, 255, 255, 0.8);
+                transition: all 0.25s ease;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4rem;
+            }
+            .tab-btn:hover {
+                background: rgba(255, 255, 255, 0.25);
+                color: #fff;
+            }
+            .tab-btn.active {
+                background: #fff;
+                color: #504ba2;
+                box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+            }
+            .tab-panel {
+                display: none;
+            }
+            .tab-panel.active {
+                display: block;
+            }
+            /* ── Coming-soon badge ── */
+            .badge-soon {
+                display: inline-block;
+                font-size: 0.65rem;
+                font-weight: 700;
+                padding: 0.15rem 0.45rem;
+                border-radius: 999px;
+                background: #f6ad55;
+                color: #1a202c;
+                vertical-align: middle;
+                margin-left: 0.3rem;
+                letter-spacing: 0.03em;
+                text-transform: uppercase;
+            }
+            /* ── Roadmap cards ── */
+            .roadmap-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                gap: 1.5rem;
+                margin-top: 1.5rem;
+            }
+            .roadmap-card {
+                border-radius: 14px;
+                padding: 1.5rem;
+                border: 2px solid #e2e8f0;
+                background: #f7fafc;
+            }
+            .roadmap-card h4 {
+                font-size: 1.15rem;
+                margin-bottom: 0.75rem;
+                color: #4a5568;
+            }
+            .roadmap-card ul {
+                list-style: none;
+                padding: 0;
+            }
+            .roadmap-card ul li {
+                padding: 0.4rem 0;
+                color: #555;
+                font-size: 0.95rem;
+            }
+            .roadmap-card ul li::before {
+                content: '→ ';
+                color: #667eea;
+                font-weight: bold;
+            }
+            /* ── coming-soon panel ── */
+            .coming-soon-panel {
+                text-align: center;
+                padding: 3rem 2rem;
+            }
+            .coming-soon-panel .cs-icon {
+                font-size: 4rem;
+                margin-bottom: 1rem;
+            }
+            .coming-soon-panel h3 {
+                color: #4a5568;
+                margin-bottom: 0.75rem;
+            }
+            .coming-soon-panel p {
+                color: #718096;
+                max-width: 500px;
+                margin: 0 auto 1.5rem;
+            }
+            .feature-list {
+                list-style: none;
+                padding: 0;
+                max-width: 420px;
+                margin: 0 auto;
+                text-align: left;
+            }
+            .feature-list li {
+                padding: 0.5rem 0;
+                color: #4a5568;
+                display: flex;
+                gap: 0.5rem;
+                align-items: flex-start;
+            }
+            .feature-list li span.icon {
+                font-size: 1.1rem;
+                flex-shrink: 0;
+            }
+        </style>
     </head>
     <body>
         <!-- Toast Notification Container -->
@@ -61,208 +171,364 @@
         <div id="main-content">
             <header class="hero">
                 <h1>
-                    <a class="maintitle" href="https://github.com/Omodaka9375/peerweb" target="_blank">🪐 PeerWeb</a>
+                    <a class="maintitle" href="https://github.com/adigeo08/web25.cloud" target="_blank"
+                        >☁️ Web25.Cloud</a
+                    >
                 </h1>
-                <h2>Decentralized Website Hosting via WebTorrent</h2>
+                <h2>Decentralized Web Platform — Hosting · Identity · Messaging</h2>
             </header>
 
+            <!-- Tab Navigation -->
+            <nav class="tab-nav" role="tablist">
+                <button class="tab-btn active" data-tab="host" role="tab" aria-selected="true">🚀 Host</button>
+                <button class="tab-btn" data-tab="browse" role="tab" aria-selected="false">🔍 Browse</button>
+                <button class="tab-btn" data-tab="iam" role="tab" aria-selected="false">
+                    🔐 IAM <span class="badge-soon">Soon</span>
+                </button>
+                <button class="tab-btn" data-tab="messages" role="tab" aria-selected="false">
+                    💬 Messages <span class="badge-soon">Soon</span>
+                </button>
+                <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
+            </nav>
+
             <main class="container">
-                <section class="intro">
-                    <h3>🤔 What is PeerWeb?</h3>
-                    <p>
-                        PeerWeb is a revolutionary way to host and share websites using WebTorrent technology. Instead
-                        of relying on centralized servers, websites are distributed across a peer-to-peer network,
-                        making them censorship-resistant and always available. 🌍✨
-                    </p>
-                </section>
-
-                <!-- Quick Upload Section -->
-                <section class="quick-upload">
-                    <h3>📤 Quick Upload</h3>
-                    <div id="drop-zone" class="drop-zone">
-                        <div class="drop-content">
-                            <div class="drop-icon">📁</div>
-                            <h4>Drag & Drop Your Website</h4>
-                            <p>Drop a folder with your website files</p>
-                            <div class="drop-buttons">
-                                <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
-                                <!-- <button id="select-torrent" class="btn btn-secondary">🧲 Select Torrent</button> -->
+                <!-- ── HOST TAB ── -->
+                <div id="tab-host" class="tab-panel active" role="tabpanel">
+                    <!-- Quick Upload Section -->
+                    <section class="quick-upload">
+                        <h3>📤 Host a Website</h3>
+                        <div id="drop-zone" class="drop-zone">
+                            <div class="drop-content">
+                                <div class="drop-icon">📁</div>
+                                <h4>Drag &amp; Drop Your Website</h4>
+                                <p>Drop a folder with your website files</p>
+                                <div class="drop-buttons">
+                                    <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
+                                </div>
+                            </div>
+                            <div id="upload-progress" class="upload-progress hidden">
+                                <div class="progress-container">
+                                    <div id="upload-progress-bar" class="progress-bar"></div>
+                                    <div id="upload-progress-text" class="progress-text">Processing files...</div>
+                                </div>
                             </div>
                         </div>
-                        <div id="upload-progress" class="upload-progress hidden">
-                            <div class="progress-container">
-                                <div id="upload-progress-bar" class="progress-bar"></div>
-                                <div id="upload-progress-text" class="progress-text">Processing files...</div>
-                            </div>
-                        </div>
-                    </div>
 
-                    <div id="upload-result" class="upload-result hidden">
-                        <div class="result-success">
-                            <h4>✅ Website Ready!</h4>
-                            <div class="result-info">
-                                <p><strong>Hash:</strong> <code id="result-hash"></code></p>
-                                <p><strong>PeerWeb URL:</strong> <code id="result-url"></code></p>
-                            </div>
-                            <div class="result-actions">
-                                <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
-                                <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
-                                <a id="download-torrent-file" class="btn btn-secondary" download
-                                    >💾 Download .torrent</a
-                                >
-                            </div>
-                            <div class="hosting-notice">
-                                <div class="notice-box">
-                                    <h5>🌍 Hosting Notice</h5>
-                                    <p>
-                                        <strong>Keep this PeerWeb tab open to host your site!</strong> As long as this
-                                        tab remains open, your website will be available to others through the
-                                        peer-to-peer network.
-                                    </p>
-                                    <p>
-                                        💡 <strong>Alternative:</strong> Download our desktop client for permanent
-                                        hosting without keeping browser tabs open:
-                                    </p>
-                                    <div class="desktop-clients">
-                                        <a href="#" class="desktop-link" data-os="windows">🪟 Windows</a>
-                                        <a href="#" class="desktop-link" data-os="mac">🍎 macOS</a>
-                                        <a href="#" class="desktop-link" data-os="linux">🐧 Linux</a>
+                        <div id="upload-result" class="upload-result hidden">
+                            <div class="result-success">
+                                <h4>✅ Website Ready!</h4>
+                                <div class="result-info">
+                                    <p><strong>Hash:</strong> <code id="result-hash"></code></p>
+                                    <p><strong>Web25.Cloud URL:</strong> <code id="result-url"></code></p>
+                                </div>
+                                <div class="result-actions">
+                                    <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
+                                    <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
+                                    <a id="download-torrent-file" class="btn btn-secondary" download
+                                        >💾 Download .torrent</a
+                                    >
+                                </div>
+                                <div class="hosting-notice">
+                                    <div class="notice-box">
+                                        <h5>☁️ Hosting Notice</h5>
+                                        <p>
+                                            <strong>Keep this tab open to host your site!</strong> As long as this tab
+                                            remains open, your website will be available to others through the
+                                            peer-to-peer network.
+                                        </p>
+                                        <p>
+                                            💡 <strong>Alternative:</strong> Download our desktop client for permanent
+                                            hosting without keeping browser tabs open:
+                                        </p>
+                                        <div class="desktop-clients">
+                                            <a href="#" class="desktop-link" data-os="windows">🪟 Windows</a>
+                                            <a href="#" class="desktop-link" data-os="mac">🍎 macOS</a>
+                                            <a href="#" class="desktop-link" data-os="linux">🐧 Linux</a>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
 
-                <section class="usage">
-                    <h3>📚 How to Use PeerWeb</h3>
-                    <div class="steps">
-                        <div class="step">
-                            🎨 Create your website - Build a static website with HTML, CSS, JavaScript, and assets
+                    <section class="usage">
+                        <h3>📚 How to Host</h3>
+                        <div class="steps">
+                            <div class="step">🎨 Build a static website — HTML, CSS, JavaScript, and assets</div>
+                            <div class="step">
+                                📤 Drag &amp; drop your folder — or use the Select Folder button above
+                            </div>
+                            <div class="step">🔗 Copy your unique link — share it with anyone, anywhere</div>
+                            <div class="step">☁️ Keep hosting — leave the tab open or use the desktop client</div>
                         </div>
-                        <div class="step">
-                            📤 Upload via drag & drop - Simply drag your website folder to the upload area above
+                    </section>
+
+                    <section class="controls">
+                        <h3>🛠️ Advanced Tools</h3>
+                        <div class="button-group">
+                            <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
+                            <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
                         </div>
-                        <div class="step">
-                            🔗 Share the link - Your site gets a unique PeerWeb link that works anywhere
+                    </section>
+                </div>
+
+                <!-- ── BROWSE TAB ── -->
+                <div id="tab-browse" class="tab-panel" role="tabpanel">
+                    <section class="example">
+                        <h3>🔍 Load a Site by Hash</h3>
+                        <p>Enter a torrent hash to load any peer-hosted website:</p>
+                        <div class="hash-input-group">
+                            <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
+                            <button id="load-site" class="btn btn-primary">Load Site</button>
                         </div>
-                        <div class="step">
-                            🌍 Keep hosting - Leave this tab open or use our desktop client for permanent hosting
+                        <p>🎯 Just the hash — Web25.Cloud automatically adds the magnet link prefix and trackers.</p>
+                    </section>
+
+                    <section class="example">
+                        <h3>🧪 Live Demos</h3>
+                        <p class="demo-link">
+                            Functionality test page:<br /><a
+                                href="https://peerweb.lol/?orc=90c020bd252639622a14895a0fad713b91e0130c"
+                                target="_blank"
+                                >https://peerweb.lol/?orc=90c020bd252639622a14895a0fad713b91e0130c</a
+                            >
+                        </p>
+                        <br />
+                        <p class="demo-link">
+                            SomaFM on PeerWeb:<br /><a
+                                href="https://peerweb.lol/?orc=908d19242ae1461f333a516d1f8b89c13ef2d259"
+                                target="_blank"
+                                >https://peerweb.lol/?orc=908d19242ae1461f333a516d1f8b89c13ef2d259</a
+                            >
+                        </p>
+                        <br />
+                        <p class="demo-link">
+                            Chess on PeerWeb:<br /><a
+                                href="https://peerweb.lol/?orc=1e14b1ba7fcd03e5f165d53ed8223a333349db04"
+                                target="_blank"
+                                >https://peerweb.lol/?orc=1e14b1ba7fcd03e5f165d53ed8223a333349db04</a
+                            >
+                        </p>
+                        <br />
+                        <p class="demo-link">
+                            Text Editor app on PeerWeb:<br /><a
+                                href="https://peerweb.lol/?orc=4e5f1204dcec68195bfcc89f9410a0b70a0ddfac"
+                                target="_blank"
+                                >https://peerweb.lol/?orc=4e5f1204dcec68195bfcc89f9410a0b70a0ddfac</a
+                            >
+                        </p>
+                    </section>
+
+                    <section class="debug">
+                        <h3>🐛 Debug Mode</h3>
+                        <p>Add <code>&amp;debug=true</code> to any URL for detailed progress logs:</p>
+                        <div class="code-block">
+                            <code>https://web25.cloud?orc=ABC123DEF456...&amp;debug=true</code>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- ── IAM TAB ── -->
+                <div id="tab-iam" class="tab-panel" role="tabpanel">
+                    <div class="coming-soon-panel">
+                        <div class="cs-icon">🔐</div>
+                        <h3>EVM Identity &amp; Access Management</h3>
+                        <p>
+                            Connect your EVM wallet to prove ownership of your hosted site and gate private content
+                            behind token checks — inspired by ZeroNet, powered by wagmi.
+                        </p>
+                        <ul class="feature-list">
+                            <li>
+                                <span class="icon">🦊</span>
+                                <span
+                                    ><strong>Wallet-based ownership</strong> — sign your site with MetaMask / any EVM
+                                    wallet to establish verifiable authorship</span
+                                >
+                            </li>
+                            <li>
+                                <span class="icon">🪙</span>
+                                <span
+                                    ><strong>Token-gated content</strong> — encrypt pages so only ERC-20 / ERC-721 token
+                                    holders can decrypt and view them</span
+                                >
+                            </li>
+                            <li>
+                                <span class="icon">🔗</span>
+                                <span
+                                    ><strong>wagmi integration</strong> — connect via WalletConnect, Coinbase Wallet,
+                                    MetaMask, and more</span
+                                >
+                            </li>
+                            <li>
+                                <span class="icon">🛡️</span>
+                                <span
+                                    ><strong>Client-side encryption</strong> — keys never leave your browser; decryption
+                                    happens locally</span
+                                >
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-card">
+                            <h4>🗺️ IAM Roadmap</h4>
+                            <ul>
+                                <li>wagmi / viem wallet connector</li>
+                                <li>ECDSA site-signing on upload</li>
+                                <li>On-chain ownership registry (optional)</li>
+                                <li>ERC-20 / ERC-721 token gate</li>
+                                <li>ECIES content encryption</li>
+                                <li>Decryption on token verification</li>
+                            </ul>
+                        </div>
+                        <div class="roadmap-card">
+                            <h4>🧱 Tech Stack</h4>
+                            <ul>
+                                <li>wagmi v2 + viem</li>
+                                <li>WalletConnect v2</li>
+                                <li>EIP-712 typed-data signing</li>
+                                <li>libsodium / ECIES encryption</li>
+                                <li>EVM RPC (Ethereum / L2s)</li>
+                            </ul>
                         </div>
                     </div>
-                </section>
+                </div>
 
-                <section class="example">
-                    <h3>💡 Load Existing Site</h3>
-                    <p>To load a website from a torrent hash, enter it below:</p>
-                    <div class="hash-input-group">
-                        <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
-                        <button id="load-site" class="btn btn-primary">Load Site</button>
+                <!-- ── MESSAGES TAB ── -->
+                <div id="tab-messages" class="tab-panel" role="tabpanel">
+                    <div class="coming-soon-panel">
+                        <div class="cs-icon">💬</div>
+                        <h3>Decentralized Direct Messaging</h3>
+                        <p>
+                            Peer-to-peer, end-to-end encrypted DMs with no relay servers. Peer discovery via WebTorrent
+                            trackers using the p2pt library.
+                        </p>
+                        <ul class="feature-list">
+                            <li>
+                                <span class="icon">🌐</span>
+                                <span
+                                    ><strong>Peer Discovery</strong> — rendezvous via WebTorrent trackers (p2pt); no
+                                    central server needed</span
+                                >
+                            </li>
+                            <li>
+                                <span class="icon">🔒</span>
+                                <span
+                                    ><strong>E2E Encryption</strong> — messages encrypted with libsodium before leaving
+                                    your device</span
+                                >
+                            </li>
+                            <li>
+                                <span class="icon">📩</span>
+                                <span
+                                    ><strong>Invite Links</strong> — share a link to open a private encrypted
+                                    channel</span
+                                >
+                            </li>
+                            <li>
+                                <span class="icon">🪪</span>
+                                <span
+                                    ><strong>EVM Identity</strong> — optionally link messages to your wallet address for
+                                    verified DMs</span
+                                >
+                            </li>
+                        </ul>
                     </div>
-                    <p>🎯 Just the hash! PeerWeb automatically adds the magnet link prefix and trackers.</p>
-                </section>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-card">
+                            <h4>🗺️ Messaging Roadmap</h4>
+                            <ul>
+                                <li>p2pt peer discovery integration</li>
+                                <li>X25519 key-exchange (libsodium)</li>
+                                <li>Invite link generation &amp; QR codes</li>
+                                <li>Chat UI with message history</li>
+                                <li>EVM wallet-linked identities</li>
+                                <li>Group channels (multi-peer)</li>
+                            </ul>
+                        </div>
+                        <div class="roadmap-card">
+                            <h4>🧱 Tech Stack</h4>
+                            <ul>
+                                <li>p2pt (WebTorrent-based P2P)</li>
+                                <li>libsodium.js (encryption)</li>
+                                <li>WebRTC data channels</li>
+                                <li>EIP-712 message signing</li>
+                                <li>IndexedDB for local history</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
 
-                <section class="example">
-                    <h3>🧪 Demos</h3>
-                    <p class="demo-link">
-                        Functionality test page: <br /><a
-                            href="https://peerweb.lol/?orc=90c020bd252639622a14895a0fad713b91e0130c"
-                            target="_blank"
-                            >https://peerweb.lol/?orc=90c020bd252639622a14895a0fad713b91e0130c</a
-                        >
-                    </p>
-                    <br />
-                    <p class="demo-link">
-                        SomaFM on PeerWeb:<br /><a
-                            href="https://peerweb.lol/?orc=908d19242ae1461f333a516d1f8b89c13ef2d259"
-                            target="_blank"
-                            >https://peerweb.lol/?orc=908d19242ae1461f333a516d1f8b89c13ef2d259</a
-                        >
-                    </p>
-                    <br />
-                    <p class="demo-link">
-                        Chess on PeerWeb:<br /><a
-                            href="https://peerweb.lol/?orc=1e14b1ba7fcd03e5f165d53ed8223a333349db04"
-                            target="_blank"
-                            >https://peerweb.lol/?orc=1e14b1ba7fcd03e5f165d53ed8223a333349db04</a
-                        >
-                    </p>
-                    <br />
-                    <p class="demo-link">
-                        Text Editor app on PeerWeb:<br /><a
-                            href="https://peerweb.lol/?orc=4e5f1204dcec68195bfcc89f9410a0b70a0ddfac"
-                            target="_blank"
-                            >https://peerweb.lol/?orc=4e5f1204dcec68195bfcc89f9410a0b70a0ddfac</a
-                        >
-                    </p>
-                </section>
+                <!-- ── ABOUT TAB ── -->
+                <div id="tab-about" class="tab-panel" role="tabpanel">
+                    <section class="intro">
+                        <h3>☁️ What is Web25.Cloud?</h3>
+                        <p>
+                            Web25.Cloud is a decentralized web platform built on top of
+                            <a href="https://peerweb.lol" target="_blank">PeerWeb</a>. It extends peer-to-peer website
+                            hosting with <strong>EVM-based identity &amp; ownership</strong> (IAM via wagmi, inspired by
+                            ZeroNet) and <strong>end-to-end encrypted direct messaging</strong>
+                            (powered by p2pt / WebTorrent trackers) — all without a central server.
+                        </p>
+                    </section>
 
-                <section class="debug">
-                    <h3>🐛 Debug Mode</h3>
-                    <p>For developers and troubleshooting, add &debug=true to see detailed progress:</p>
-                    <div class="code-block">
-                        <code>https://peerweb.lol?orc=ABC123DEF456...&debug=true</code>
-                    </div>
-                </section>
+                    <section class="features">
+                        <h3>💾 Smart Caching</h3>
+                        <p>Visited sites are cached for lightning-fast repeat loads! 🚀</p>
+                        <div class="feature-grid">
+                            <div class="feature">🏃‍♂️ Instant Loading — Cached sites load immediately</div>
+                            <div class="feature">💽 IndexedDB Storage — Persistent across browser sessions</div>
+                            <div class="feature">🧹 Auto Cleanup — Old cache expires after 7 days</div>
+                            <div class="feature">🔒 Secure Storage — Only cached after DOMPurify sanitization</div>
+                        </div>
+                        <br /><br />
+                        <h3>🛡️ Security Features</h3>
+                        <p>Multi-layer security with DOMPurify integration! 🔒</p>
+                        <div class="feature-grid">
+                            <div class="feature">🧼 XSS Protection — All HTML sanitized with DOMPurify</div>
+                            <div class="feature">
+                                🚫 Malicious Code Removal — Dangerous tags and attributes filtered
+                            </div>
+                            <div class="feature">📦 Sandboxed Execution — Sites run in isolated iframe environment</div>
+                            <div class="feature">🔍 Content Validation — All resources validated before display</div>
+                        </div>
+                    </section>
 
-                <section class="controls">
-                    <h3>🚀 Advanced Options</h3>
-                    <div class="button-group">
-                        <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
-                        <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
-                    </div>
-                </section>
+                    <section class="requirements">
+                        <h3>📋 Requirements for Hosted Sites</h3>
+                        <div class="req-list">
+                            <div class="req">📄 Must contain an index.html file (in root or subfolder)</div>
+                            <div class="req">🔗 All resources should use relative paths</div>
+                            <div class="req">⚡ Only static content (HTML, CSS, JS, images, fonts, etc.)</div>
+                            <div class="req">🔒 Files are served in a sandboxed environment for security</div>
+                            <div class="req">📱 Responsive design recommended for best experience</div>
+                            <div class="req">🧹 Content is automatically sanitized for security</div>
+                        </div>
+                    </section>
 
-                <section class="features">
-                    <h3>💾 Smart Caching</h3>
-                    <p>PeerWeb caches visited sites for lightning-fast loading! 🚀</p>
-                    <div class="feature-grid">
-                        <div class="feature">🏃‍♂️ Instant Loading - Cached sites load immediately</div>
-                        <div class="feature">💽 IndexedDB Storage - Persistent across browser sessions</div>
-                        <div class="feature">🧹 Auto Cleanup - Old cache expires after 7 days</div>
-                        <div class="feature">🔒 Secure Storage - Only cached after DOMPurify sanitization</div>
-                    </div>
-                    <br /><br />
-                    <h3>🛡️ Security Features</h3>
-                    <p>Enhanced security with DOMPurify integration! 🔒</p>
-                    <div class="feature-grid">
-                        <div class="feature">🧼 XSS Protection - All HTML sanitized with DOMPurify</div>
-                        <div class="feature">🚫 Malicious Code Removal - Dangerous tags and attributes filtered</div>
-                        <div class="feature">📦 Sandboxed Execution - Sites run in isolated iframe environment</div>
-                        <div class="feature">🔍 Content Validation - All resources validated before display</div>
-                    </div>
-                </section>
-
-                <section class="requirements">
-                    <h3>📋 Requirements for PeerWeb Sites</h3>
-                    <div class="req-list">
-                        <div class="req">📄 Must contain an index.html file (in root or subfolder)</div>
-                        <div class="req">🔗 All resources should use relative paths</div>
-                        <div class="req">⚡ Only static content (HTML, CSS, JS, images, fonts, etc.)</div>
-                        <div class="req">🔒 Files are served in a sandboxed environment for security</div>
-                        <div class="req">📱 Responsive design recommended for best experience</div>
-                        <div class="req">🧹 Content is automatically sanitized for security</div>
-                    </div>
-                </section>
-
-                <section class="benefits">
-                    <h3>✨ Benefits</h3>
-                    <div class="benefit-grid">
-                        <div class="benefit">🚫 Censorship Resistant - No central point of failure</div>
-                        <div class="benefit">💰 Cost Effective - No hosting fees ever</div>
-                        <div class="benefit">🌍 Global Distribution - Automatically distributed worldwide</div>
-                        <div class="benefit">📱 Always Available - Works as long as peers are online</div>
-                        <div class="benefit">🔒 Secure - Sandboxed execution with XSS protection</div>
-                        <div class="benefit">📈 Real-time Progress - See download progress and peer statistics</div>
-                        <div class="benefit">⚡ Fast Loading - Smart caching for instant repeat visits</div>
-                        <div class="benefit">🎯 Simple URLs - Just add the torrent hash to any PeerWeb site</div>
-                        <div class="benefit">💾 Offline Ready - Cached sites work without internet</div>
-                    </div>
-                </section>
+                    <section class="benefits">
+                        <h3>✨ Why Web25.Cloud?</h3>
+                        <div class="benefit-grid">
+                            <div class="benefit">🚫 Censorship Resistant — No central point of failure</div>
+                            <div class="benefit">💰 Cost Effective — No hosting fees ever</div>
+                            <div class="benefit">�� Global Distribution — Automatically distributed worldwide</div>
+                            <div class="benefit">📱 Always Available — Works as long as peers are online</div>
+                            <div class="benefit">🔐 Self-Sovereign Identity — Own your content via EVM wallet</div>
+                            <div class="benefit">🔒 Private Comms — E2E encrypted DMs, no relay server</div>
+                            <div class="benefit">⚡ Fast Loading — Smart caching for instant repeat visits</div>
+                            <div class="benefit">💾 Offline Ready — Cached sites work without internet</div>
+                        </div>
+                    </section>
+                </div>
             </main>
 
             <footer>
-                <p>🌍 Made with ❤️ for the decentralized web 🌍</p>
+                <p>
+                    ☁️ Made with ❤️ for the decentralized web —
+                    <a href="https://github.com/adigeo08/web25.cloud" target="_blank" style="color: #cce4ff"
+                        >Web25.Cloud</a
+                    >
+                    ☁️
+                </p>
             </footer>
         </div>
 
@@ -287,7 +553,7 @@
         <div id="loading-overlay" class="loading-overlay hidden">
             <div class="loading-content">
                 <div class="spinner"></div>
-                <h3>Loading PeerWeb Site...</h3>
+                <h3>Loading Site...</h3>
                 <div id="loading-progress" class="progress-container">
                     <div id="loading-progress-bar" class="progress-bar"></div>
                     <div id="loading-progress-text" class="progress-text">Connecting to peers...</div>
@@ -298,13 +564,6 @@
 
         <!-- Site Viewer -->
         <div id="site-viewer" class="site-viewer hidden">
-            <!-- <div class="viewer-header">
-            <button id="back-to-peerweb" class="btn btn-back">← Back to PeerWeb</button>
-            <div class="viewer-info">
-                <span id="current-hash"></span>
-                <span id="cache-status"></span>
-            </div>
-        </div> -->
             <iframe id="site-frame" class="site-frame" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
         </div>
 
@@ -313,7 +572,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h3>📦 Advanced Torrent Creator</h3>
-                <button id="close-modal" class="close-btn">×</button>
+                    <button id="close-modal" class="close-btn">×</button>
                 </div>
                 <div class="modal-body">
                     <p>Select your website files to create a torrent:</p>
@@ -333,7 +592,31 @@
             </div>
         </div>
 
-        <!-- PeerWeb Application Script -->
+        <!-- Tab switching logic -->
+        <script>
+            (function () {
+                var btns = document.querySelectorAll('.tab-btn');
+                var panels = document.querySelectorAll('.tab-panel');
+                btns.forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var target = btn.getAttribute('data-tab');
+                        btns.forEach(function (b) {
+                            b.classList.remove('active');
+                            b.setAttribute('aria-selected', 'false');
+                        });
+                        panels.forEach(function (p) {
+                            p.classList.remove('active');
+                        });
+                        btn.classList.add('active');
+                        btn.setAttribute('aria-selected', 'true');
+                        var panel = document.getElementById('tab-' + target);
+                        if (panel) panel.classList.add('active');
+                    });
+                });
+            })();
+        </script>
+
+        <!-- Web25.Cloud Application Script -->
         <script type="module" src="./peerweb.min.js"></script>
     </body>
 </html>
