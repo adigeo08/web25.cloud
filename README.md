@@ -91,7 +91,11 @@ Your websites should be:
 ```
 peerweb/
 ├── index.html          # Main application interface
-├── peerweb.js          # Core PeerWeb functionality
+├── src/                # Modular source code
+│   ├── core/           # Core orchestration and features
+│   ├── ui/             # UI modules
+│   ├── cache/          # Cache layer
+│   └── config/         # Runtime configuration
 ├── peerweb.min.js      # Minified version
 ├── peerweb-sw.js       # Service Worker for resource handling
 ├── manifest.json       # PWA manifest for installable web app

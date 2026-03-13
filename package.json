@@ -2,19 +2,14 @@
     "name": "peerweb",
     "version": "1.0.0",
     "description": "Decentralized website hosting powered by WebTorrent - Host static websites through peer-to-peer networks without centralized servers",
-    "main": "peerweb.js",
+    "main": "src/main.js",
     "scripts": {
+        "dev": "npm run start",
+        "build": "node -e \"require('fs').writeFileSync('peerweb.min.js','import \\\"./src/main.js\\\";\\n')\"",
         "start": "npx http-server -p 8000 -c-1",
-        "start:python": "python -m http.server 8000",
-        "minify": "npx terser peerweb.js -c -m -o peerweb.min.js",
-        "minify:check": "node -e \"const fs=require('fs'); const orig=fs.statSync('peerweb.js').size; const min=fs.statSync('peerweb.min.js').size; console.log(`Original: ${(orig/1024).toFixed(2)}KB, Minified: ${(min/1024).toFixed(2)}KB, Reduction: ${((1-min/orig)*100).toFixed(2)}%`)\"",
-        "serve": "npm run start",
-        "build": "npm run minify",
-        "watch": "npx nodemon --watch peerweb.js --exec 'npm run minify'",
-        "check": "npx tsc --noEmit || echo 'Type checking complete'",
-        "lint": "npx eslint peerweb.js peerweb-sw.js --fix",
-        "format": "npx prettier --write \"*.{js,html,css,md}\"",
-        "validate": "node -e \"console.log('Validating project structure...'); const fs=require('fs'); const required=['index.html','peerweb.js','peerweb-sw.js']; const missing=required.filter(f=>!fs.existsSync(f)); if(missing.length){console.error('Missing:',missing.join(', ')); process.exit(1);} console.log('✓ All required files present');\""
+        "lint": "npx eslint \"src/**/*.js\" peerweb-sw.js --fix",
+        "format": "npx prettier --write \"src/**/*.js\" \"*.{html,css,md,json}\"",
+        "check": "npx tsc --noEmit || echo \"Type checking complete\""
     },
     "repository": {
         "type": "git",
@@ -60,12 +55,12 @@
     ],
     "files": [
         "index.html",
-        "peerweb.js",
         "peerweb.min.js",
         "peerweb-sw.js",
         "styles.css",
         "LICENSE",
         "README.md",
-        "WARP.md"
+        "WARP.md",
+        "src"
     ]
 }
