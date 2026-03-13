@@ -180,24 +180,25 @@
 
             <!-- Tab Navigation -->
             <nav class="tab-nav" role="tablist">
-                <button class="tab-btn active" data-tab="auth" role="tab" aria-selected="true">🪪 Identity</button>
-                <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">📤 Publish</button>
-                <button class="tab-btn" data-tab="browse" role="tab" aria-selected="false">🔍 Browse / Load</button>
+                <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
+                    🔍 Browse / Load
+                </button>
+                <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">🚀 Deploy</button>
+                <button class="tab-btn" data-tab="auth" role="tab" aria-selected="false" style="display: none">
+                    🪪 Identity
+                </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
 
             <main class="container">
                 <!-- ── AUTH TAB ── -->
-                <div id="tab-auth" class="tab-panel active" role="tabpanel">
+                <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload">
                         <h3>🪪 Identity / Auth</h3>
                         <p id="identity-badge">Identity: anonymous</p>
                         <p id="auth-status">Status: anonymous</p>
                         <p id="local-wallet-meta">Local wallet: not registered</p>
                         <div class="button-group">
-                            <button id="connect-wallet-btn" class="btn btn-primary">Connect Wallet (WalletConnect)</button>
-                            <button id="register-wallet-btn" class="btn btn-secondary">Register Local Wallet</button>
-                            <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Local Wallet</button>
                             <button id="disconnect-auth-btn" class="btn btn-clear">Disconnect</button>
                             <button id="delete-local-wallet-btn" class="btn btn-clear">Delete Local Wallet</button>
                         </div>
@@ -211,99 +212,111 @@
 
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
-                    <!-- Quick Upload Section -->
-                    <section class="quick-upload">
-                        <h3>📤 Host a Website</h3>
-                        <div id="drop-zone" class="drop-zone">
-                            <div class="drop-content">
-                                <div class="drop-icon">📁</div>
-                                <h4>Drag &amp; Drop Your Website</h4>
-                                <p>Drop a folder with your website files</p>
-                                <div class="drop-buttons">
-                                    <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
-                                </div>
-                            </div>
-                            <div id="upload-progress" class="upload-progress hidden">
-                                <div class="progress-container">
-                                    <div id="upload-progress-bar" class="progress-bar"></div>
-                                    <div id="upload-progress-text" class="progress-text">Processing files...</div>
-                                </div>
-                            </div>
+                    <section id="deploy-auth-wall" class="quick-upload">
+                        <h3>Authentication required</h3>
+                        <p>Choose an authentication method to deploy signed torrents.</p>
+                        <div class="button-group">
+                            <button id="connect-wallet-btn" class="btn btn-primary">
+                                Connect Wallet (WalletConnect)
+                            </button>
+                            <button id="register-wallet-btn" class="btn btn-secondary">Create Local Wallet</button>
+                            <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Local Wallet</button>
                         </div>
+                    </section>
+                    <div id="deploy-panel" class="hidden">
+                        <!-- Quick Upload Section -->
+                        <section class="quick-upload">
+                            <h3>🚀 Deploy Website</h3>
+                            <div id="drop-zone" class="drop-zone">
+                                <div class="drop-content">
+                                    <div class="drop-icon">📁</div>
+                                    <h4>Drag &amp; Drop Your Website</h4>
+                                    <p>Drop a folder with your website files</p>
+                                    <div class="drop-buttons">
+                                        <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
+                                    </div>
+                                </div>
+                                <div id="upload-progress" class="upload-progress hidden">
+                                    <div class="progress-container">
+                                        <div id="upload-progress-bar" class="progress-bar"></div>
+                                        <div id="upload-progress-text" class="progress-text">Processing files...</div>
+                                    </div>
+                                </div>
+                            </div>
 
-                        <div id="upload-result" class="upload-result hidden">
-                            <div class="result-success">
-                                <h4>✅ Website Ready!</h4>
-                                <div class="result-info">
-                                    <p><strong>Hash:</strong> <code id="result-hash"></code></p>
-                                    <p><strong>Web25.Cloud URL:</strong> <code id="result-url"></code></p>
-                                </div>
-                                <div class="result-actions">
-                                    <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
-                                    <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
-                                    <a id="download-torrent-file" class="btn btn-secondary" download
-                                        >💾 Download .torrent</a
-                                    >
-                                </div>
-                                <div class="hosting-notice">
-                                    <div class="notice-box">
-                                        <h5>☁️ Hosting Notice</h5>
-                                        <p>
-                                            <strong>Keep this tab open to host your site!</strong> As long as this tab
-                                            remains open, your website will be available to others through the
-                                            peer-to-peer network.
-                                        </p>
-                                        <p>
-                                            💡 <strong>Alternative:</strong> Download our desktop client for permanent
-                                            hosting without keeping browser tabs open:
-                                        </p>
-                                        <div class="desktop-clients">
-                                            <a href="#" class="desktop-link" data-os="windows">🪟 Windows</a>
-                                            <a href="#" class="desktop-link" data-os="mac">🍎 macOS</a>
-                                            <a href="#" class="desktop-link" data-os="linux">🐧 Linux</a>
+                            <div id="upload-result" class="upload-result hidden">
+                                <div class="result-success">
+                                    <h4>✅ Website Ready!</h4>
+                                    <div class="result-info">
+                                        <p><strong>Hash:</strong> <code id="result-hash"></code></p>
+                                        <p><strong>Web25.Cloud URL:</strong> <code id="result-url"></code></p>
+                                    </div>
+                                    <div class="result-actions">
+                                        <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
+                                        <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
+                                        <a id="download-torrent-file" class="btn btn-secondary" download
+                                            >💾 Download .torrent</a
+                                        >
+                                    </div>
+                                    <div class="hosting-notice">
+                                        <div class="notice-box">
+                                            <h5>☁️ Hosting Notice</h5>
+                                            <p>
+                                                <strong>Keep this tab open to host your site!</strong> As long as this
+                                                tab remains open, your website will be available to others through the
+                                                peer-to-peer network.
+                                            </p>
+                                            <p>
+                                                💡 <strong>Alternative:</strong> Download our desktop client for
+                                                permanent hosting without keeping browser tabs open:
+                                            </p>
+                                            <div class="desktop-clients">
+                                                <a href="#" class="desktop-link" data-os="windows">🪟 Windows</a>
+                                                <a href="#" class="desktop-link" data-os="mac">🍎 macOS</a>
+                                                <a href="#" class="desktop-link" data-os="linux">🐧 Linux</a>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    </section>
+                        </section>
 
-
-                    <section class="controls">
-                        <h3>✍️ Publish Signing</h3>
-                        <p id="signature-status">Signature: pending</p>
-                        <div class="button-group">
-                            <button id="sign-publish-btn" class="btn btn-primary">Sign Publish Payload</button>
-                            <button id="publish-btn" class="btn btn-create">Publish</button>
-                        </div>
-                        <h4>Payload Preview</h4>
-                        <pre id="publish-payload-preview" class="code-block"></pre>
-                        <h4>Publish Output</h4>
-                        <pre id="publish-output" class="code-block"></pre>
-                    </section>
-                    <section class="usage">
-                        <h3>📚 How to Host</h3>
-                        <div class="steps">
-                            <div class="step">🎨 Build a static website — HTML, CSS, JavaScript, and assets</div>
-                            <div class="step">
-                                📤 Drag &amp; drop your folder — or use the Select Folder button above
+                        <section class="controls">
+                            <h3>✍️ Deployment Signing</h3>
+                            <p id="signature-status">Signature: pending</p>
+                            <div class="button-group">
+                                <button id="sign-publish-btn" class="btn btn-primary">Sign Deploy Payload</button>
+                                <button id="publish-btn" class="btn btn-create">Deploy</button>
                             </div>
-                            <div class="step">🔗 Copy your unique link — share it with anyone, anywhere</div>
-                            <div class="step">☁️ Keep hosting — leave the tab open or use the desktop client</div>
-                        </div>
-                    </section>
+                            <h4>Payload Preview</h4>
+                            <pre id="publish-payload-preview" class="code-block"></pre>
+                            <h4>Deploy Output</h4>
+                            <pre id="publish-output" class="code-block"></pre>
+                        </section>
+                        <section class="usage">
+                            <h3>📚 How to Host</h3>
+                            <div class="steps">
+                                <div class="step">🎨 Build a static website — HTML, CSS, JavaScript, and assets</div>
+                                <div class="step">
+                                    📤 Drag &amp; drop your folder — or use the Select Folder button above
+                                </div>
+                                <div class="step">🔗 Copy your unique link — share it with anyone, anywhere</div>
+                                <div class="step">☁️ Keep hosting — leave the tab open or use the desktop client</div>
+                            </div>
+                        </section>
 
-                    <section class="controls">
-                        <h3>🛠️ Advanced Tools</h3>
-                        <div class="button-group">
-                            <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
-                            <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
-                        </div>
-                    </section>
+                        <section class="controls">
+                            <h3>🛠️ Advanced Tools</h3>
+                            <div class="button-group">
+                                <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
+                                <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
+                            </div>
+                        </section>
+                    </div>
                 </div>
 
                 <!-- ── BROWSE TAB ── -->
-                <div id="tab-browse" class="tab-panel" role="tabpanel">
+                <div id="tab-browse" class="tab-panel active" role="tabpanel">
                     <section class="example">
                         <h3>🔍 Load a Site by Hash</h3>
                         <p>Enter a torrent hash to load any peer-hosted website:</p>
@@ -312,41 +325,6 @@
                             <button id="load-site" class="btn btn-primary">Load Site</button>
                         </div>
                         <p>🎯 Just the hash — Web25.Cloud automatically adds the magnet link prefix and trackers.</p>
-                    </section>
-
-                    <section class="example">
-                        <h3>🧪 Live Demos</h3>
-                        <p class="demo-link">
-                            Functionality test page:<br /><a
-                                href="https://peerweb.lol/?orc=90c020bd252639622a14895a0fad713b91e0130c"
-                                target="_blank"
-                                >https://peerweb.lol/?orc=90c020bd252639622a14895a0fad713b91e0130c</a
-                            >
-                        </p>
-                        <br />
-                        <p class="demo-link">
-                            SomaFM on PeerWeb:<br /><a
-                                href="https://peerweb.lol/?orc=908d19242ae1461f333a516d1f8b89c13ef2d259"
-                                target="_blank"
-                                >https://peerweb.lol/?orc=908d19242ae1461f333a516d1f8b89c13ef2d259</a
-                            >
-                        </p>
-                        <br />
-                        <p class="demo-link">
-                            Chess on PeerWeb:<br /><a
-                                href="https://peerweb.lol/?orc=1e14b1ba7fcd03e5f165d53ed8223a333349db04"
-                                target="_blank"
-                                >https://peerweb.lol/?orc=1e14b1ba7fcd03e5f165d53ed8223a333349db04</a
-                            >
-                        </p>
-                        <br />
-                        <p class="demo-link">
-                            Text Editor app on PeerWeb:<br /><a
-                                href="https://peerweb.lol/?orc=4e5f1204dcec68195bfcc89f9410a0b70a0ddfac"
-                                target="_blank"
-                                >https://peerweb.lol/?orc=4e5f1204dcec68195bfcc89f9410a0b70a0ddfac</a
-                            >
-                        </p>
                     </section>
 
                     <section class="debug">
