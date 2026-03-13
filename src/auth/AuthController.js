@@ -59,49 +59,73 @@ export default class AuthController {
     }
 
     async connectExternal() {
-        const result = await connectExternalWallet();
-        this.state.identityType = 'external';
-        this.state.address = result.address;
-        this.state.chainId = result.chainId;
-        this.state.status = AUTH_STATUS.EXTERNAL_CONNECTED;
-        this.render();
-        this.toast.success(`Connected ${result.address}`, 'External wallet connected');
+        try {
+            const result = await connectExternalWallet();
+            this.state.identityType = 'external';
+            this.state.address = result.address;
+            this.state.chainId = result.chainId;
+            this.state.status = AUTH_STATUS.EXTERNAL_CONNECTED;
+            this.render();
+            this.toast.success(`Connected ${result.address}`, 'External wallet connected');
+        } catch (err) {
+            this.toast.error(err.message, 'Connection failed');
+        }
     }
 
     async registerLocal() {
-        const result = await registerLocalWallet();
-        this.state.identityType = 'local';
-        this.state.address = result.address;
-        this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
-        this.state.localWalletExists = true;
-        this.state.localWalletUnlocked = true;
-        showSeedPhrase(result.seedPhrase);
-        this.render();
+        try {
+            const result = await registerLocalWallet();
+            this.state.identityType = 'local';
+            this.state.address = result.address;
+            this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+            this.state.localWalletExists = true;
+            this.state.localWalletUnlocked = true;
+            showSeedPhrase(result.seedPhrase);
+            this.render();
+        } catch (err) {
+            this.toast.error(err.message, 'Registration failed');
+        }
     }
 
     async unlockLocal() {
-        const result = await unlockLocalWallet();
-        this.state.identityType = 'local';
-        this.state.address = result.address;
-        this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
-        this.state.localWalletUnlocked = true;
-        this.render();
+        try {
+            const result = await unlockLocalWallet();
+            this.state.identityType = 'local';
+            this.state.address = result.address;
+            this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+            this.state.localWalletUnlocked = true;
+            this.render();
+        } catch (err) {
+            this.toast.error(err.message, 'Unlock failed');
+        }
     }
 
     async disconnect() {
-        if (this.state.identityType === 'external') {
-            await disconnectExternalWallet();
+        try {
+            if (this.state.identityType === 'external') {
+                await disconnectExternalWallet();
+            }
+            lockLocalWallet();
+            this.state = createAuthState();
+            await this.refreshLocalWalletState();
+            this.render();
+        } catch (err) {
+            this.toast.error(err.message, 'Disconnect failed');
         }
-        lockLocalWallet();
-        this.state = createAuthState();
-        await this.refreshLocalWalletState();
-        this.render();
     }
 
     async deleteLocalWallet() {
-        await removeLocalWallet();
-        this.state = createAuthState();
-        this.render();
+        const confirmed = window.confirm(
+            'Are you sure you want to delete your local wallet? This action is irreversible — the wallet cannot be recovered without the seed phrase.'
+        );
+        if (!confirmed) return;
+        try {
+            await removeLocalWallet();
+            this.state = createAuthState();
+            this.render();
+        } catch (err) {
+            this.toast.error(err.message, 'Delete failed');
+        }
     }
 
     getActiveIdentity() {

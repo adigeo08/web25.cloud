@@ -1,17 +1,41 @@
 // @ts-check
 
-const WORD_LIST = [
-    'apple', 'river', 'cloud', 'stone', 'forest', 'future', 'planet', 'sunset', 'globe', 'silver', 'light',
-    'echo', 'ember', 'ocean', 'rocket', 'bridge', 'pixel', 'orbit', 'matrix', 'violet', 'north', 'delta',
-    'alpha', 'lunar', 'sprint', 'cipher', 'sage', 'velvet', 'signal', 'comet', 'harbor', 'zenith'
-];
+/** @type {Promise<any> | null} */
+let bip39Promise = null;
+/** @type {Promise<string[]> | null} */
+let englishWordlistPromise = null;
 
-export function generateSeedPhrase(wordCount = 12) {
-    const words = [];
-    const randomValues = new Uint32Array(wordCount);
-    crypto.getRandomValues(randomValues);
-    for (let i = 0; i < wordCount; i += 1) {
-        words.push(WORD_LIST[randomValues[i] % WORD_LIST.length]);
+function loadBip39() {
+    if (!bip39Promise) {
+        bip39Promise = import('https://esm.sh/@scure/bip39@1.3.0');
     }
-    return words.join(' ');
+    return bip39Promise;
+}
+
+function loadEnglishWordlist() {
+    if (!englishWordlistPromise) {
+        englishWordlistPromise = import('https://esm.sh/@scure/bip39@1.3.0/wordlists/english.js').then(
+            (m) => m.wordlist
+        );
+    }
+    return englishWordlistPromise;
+}
+
+/**
+ * Generates a standard BIP-39 12-word mnemonic phrase with 128 bits of entropy.
+ * @returns {Promise<string>}
+ */
+export async function generateBip39Mnemonic() {
+    const [{ generateMnemonic }, wordlist] = await Promise.all([loadBip39(), loadEnglishWordlist()]);
+    return generateMnemonic(wordlist);
+}
+
+/**
+ * Converts a BIP-39 mnemonic to a seed buffer (Uint8Array).
+ * @param {string} mnemonic
+ * @returns {Promise<Uint8Array>}
+ */
+export async function mnemonicToSeedBytes(mnemonic) {
+    const { mnemonicToSeed } = await loadBip39();
+    return mnemonicToSeed(mnemonic);
 }
