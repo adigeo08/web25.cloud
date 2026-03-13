@@ -1,7 +1,7 @@
 # ☁️ Web25.Cloud ☁️
 
-**🌐 Decentralized web platform built on top of PeerWeb --- evolving
-into a modular, wallet-aware peer-to-peer web stack 🌐**
+**🌐 Decentralized web platform built on top of PeerWeb 🌐**
+ --- evolving into a modular, wallet-aware peer-to-peer web stack ---
 
 Web25.Cloud started as a fork and extension of PeerWeb, focused on
 peer‑to‑peer static site hosting directly from the browser. The project
