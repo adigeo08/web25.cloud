@@ -1,6 +1,12 @@
 // @ts-check
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
+import AuthController from '../../auth/AuthController.js';
+import { bindPublishActions } from '../../ui/publish/PublishPanel.js';
+import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
+import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
+import { signPublishPayload } from '../../auth/SigningService.js';
+import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 
 export async function init() {
     try {
@@ -11,10 +17,17 @@ export async function init() {
         this.setupCleanupHandlers();
         this.checkURL();
         this.updateDebugToggle();
+        await this.initAuth();
     } catch (error) {
         console.error('PeerWeb initialization failed:', error);
         this.showError('Failed to initialize PeerWeb: ' + error.message);
     }
+}
+
+export async function initAuth() {
+    this.authController = new AuthController(this.toast);
+    await this.authController.init();
+    this.lastSignedPublish = null;
 }
 
 export async function loadRequiredLibraries() {
@@ -250,6 +263,49 @@ export function setupEventListeners() {
     // Setup drag and drop and quick upload
     this.setupDragAndDrop();
     this.setupQuickUpload();
+
+    bindPublishActions({
+        onSign: async () => {
+            if (!this.lastPublishCandidate) {
+                this.toast.warning('Create or load a torrent first.', 'Publish');
+                return;
+            }
+
+            const identity = this.authController.getActiveIdentity();
+            if (!identity.address || !identity.identityType) {
+                this.toast.warning('Connect or unlock a wallet before signing.', 'Identity required');
+                return;
+            }
+
+            const signature = await signPublishPayload(
+                {
+                    torrentHash: this.lastPublishCandidate.hash,
+                    siteName: this.lastPublishCandidate.siteName,
+                    createdAt: new Date().toISOString(),
+                    publisherAddress: identity.address,
+                    contentRoot: this.lastPublishCandidate.hash,
+                    chainId: identity.chainId || 1
+                },
+                identity.identityType
+            );
+
+            this.lastSignedPublish = attachPublishMetadata(this.lastPublishCandidate.hash, signature);
+            renderPublishReview(this.lastSignedPublish.payload);
+            renderSignatureStatus(signature);
+        },
+        onPublish: async () => {
+            if (!this.lastSignedPublish) {
+                this.toast.warning('Please sign publish payload first.', 'Publish blocked');
+                return;
+            }
+
+            const output = document.getElementById('publish-output');
+            if (output) {
+                output.textContent = JSON.stringify(this.lastSignedPublish, null, 2);
+            }
+            this.toast.success('Signed publish payload prepared in browser.', 'Publish ready');
+        }
+    });
 }
 
 export function calculateProcessingTimeout(torrent) {

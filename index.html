@@ -180,20 +180,37 @@
 
             <!-- Tab Navigation -->
             <nav class="tab-nav" role="tablist">
-                <button class="tab-btn active" data-tab="host" role="tab" aria-selected="true">🚀 Host</button>
-                <button class="tab-btn" data-tab="browse" role="tab" aria-selected="false">🔍 Browse</button>
-                <button class="tab-btn" data-tab="iam" role="tab" aria-selected="false">
-                    🔐 IAM <span class="badge-soon">Soon</span>
-                </button>
-                <button class="tab-btn" data-tab="messages" role="tab" aria-selected="false">
-                    💬 Messages <span class="badge-soon">Soon</span>
-                </button>
+                <button class="tab-btn active" data-tab="auth" role="tab" aria-selected="true">🪪 Identity</button>
+                <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">📤 Publish</button>
+                <button class="tab-btn" data-tab="browse" role="tab" aria-selected="false">🔍 Browse / Load</button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
 
             <main class="container">
-                <!-- ── HOST TAB ── -->
-                <div id="tab-host" class="tab-panel active" role="tabpanel">
+                <!-- ── AUTH TAB ── -->
+                <div id="tab-auth" class="tab-panel active" role="tabpanel">
+                    <section class="quick-upload">
+                        <h3>🪪 Identity / Auth</h3>
+                        <p id="identity-badge">Identity: anonymous</p>
+                        <p id="auth-status">Status: anonymous</p>
+                        <p id="local-wallet-meta">Local wallet: not registered</p>
+                        <div class="button-group">
+                            <button id="connect-wallet-btn" class="btn btn-primary">Connect Wallet (WalletConnect)</button>
+                            <button id="register-wallet-btn" class="btn btn-secondary">Register Local Wallet</button>
+                            <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Local Wallet</button>
+                            <button id="disconnect-auth-btn" class="btn btn-clear">Disconnect</button>
+                            <button id="delete-local-wallet-btn" class="btn btn-clear">Delete Local Wallet</button>
+                        </div>
+                        <div id="seed-phrase-screen" class="upload-result hidden" style="margin-top: 1rem">
+                            <h4>⚠️ Save your seed phrase now (shown once)</h4>
+                            <pre id="seed-phrase-box" class="code-block"></pre>
+                            <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- ── PUBLISH TAB ── -->
+                <div id="tab-publish" class="tab-panel" role="tabpanel">
                     <!-- Quick Upload Section -->
                     <section class="quick-upload">
                         <h3>📤 Host a Website</h3>
@@ -251,6 +268,19 @@
                         </div>
                     </section>
 
+
+                    <section class="controls">
+                        <h3>✍️ Publish Signing</h3>
+                        <p id="signature-status">Signature: pending</p>
+                        <div class="button-group">
+                            <button id="sign-publish-btn" class="btn btn-primary">Sign Publish Payload</button>
+                            <button id="publish-btn" class="btn btn-create">Publish</button>
+                        </div>
+                        <h4>Payload Preview</h4>
+                        <pre id="publish-payload-preview" class="code-block"></pre>
+                        <h4>Publish Output</h4>
+                        <pre id="publish-output" class="code-block"></pre>
+                    </section>
                     <section class="usage">
                         <h3>📚 How to Host</h3>
                         <div class="steps">
@@ -326,136 +356,6 @@
                             <code>https://web25.cloud?orc=ABC123DEF456...&amp;debug=true</code>
                         </div>
                     </section>
-                </div>
-
-                <!-- ── IAM TAB ── -->
-                <div id="tab-iam" class="tab-panel" role="tabpanel">
-                    <div class="coming-soon-panel">
-                        <div class="cs-icon">🔐</div>
-                        <h3>EVM Identity &amp; Access Management</h3>
-                        <p>
-                            Connect your EVM wallet to prove ownership of your hosted site and gate private content
-                            behind token checks — inspired by ZeroNet, powered by wagmi.
-                        </p>
-                        <ul class="feature-list">
-                            <li>
-                                <span class="icon">🦊</span>
-                                <span
-                                    ><strong>Wallet-based ownership</strong> — sign your site with MetaMask / any EVM
-                                    wallet to establish verifiable authorship</span
-                                >
-                            </li>
-                            <li>
-                                <span class="icon">🪙</span>
-                                <span
-                                    ><strong>Token-gated content</strong> — encrypt pages so only ERC-20 / ERC-721 token
-                                    holders can decrypt and view them</span
-                                >
-                            </li>
-                            <li>
-                                <span class="icon">🔗</span>
-                                <span
-                                    ><strong>wagmi integration</strong> — connect via WalletConnect, Coinbase Wallet,
-                                    MetaMask, and more</span
-                                >
-                            </li>
-                            <li>
-                                <span class="icon">🛡️</span>
-                                <span
-                                    ><strong>Client-side encryption</strong> — keys never leave your browser; decryption
-                                    happens locally</span
-                                >
-                            </li>
-                        </ul>
-                    </div>
-                    <div class="roadmap-grid">
-                        <div class="roadmap-card">
-                            <h4>🗺️ IAM Roadmap</h4>
-                            <ul>
-                                <li>wagmi / viem wallet connector</li>
-                                <li>ECDSA site-signing on upload</li>
-                                <li>On-chain ownership registry (optional)</li>
-                                <li>ERC-20 / ERC-721 token gate</li>
-                                <li>ECIES content encryption</li>
-                                <li>Decryption on token verification</li>
-                            </ul>
-                        </div>
-                        <div class="roadmap-card">
-                            <h4>🧱 Tech Stack</h4>
-                            <ul>
-                                <li>wagmi v2 + viem</li>
-                                <li>WalletConnect v2</li>
-                                <li>EIP-712 typed-data signing</li>
-                                <li>libsodium / ECIES encryption</li>
-                                <li>EVM RPC (Ethereum / L2s)</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ── MESSAGES TAB ── -->
-                <div id="tab-messages" class="tab-panel" role="tabpanel">
-                    <div class="coming-soon-panel">
-                        <div class="cs-icon">💬</div>
-                        <h3>Decentralized Direct Messaging</h3>
-                        <p>
-                            Peer-to-peer, end-to-end encrypted DMs with no relay servers. Peer discovery via WebTorrent
-                            trackers using the p2pt library.
-                        </p>
-                        <ul class="feature-list">
-                            <li>
-                                <span class="icon">🌐</span>
-                                <span
-                                    ><strong>Peer Discovery</strong> — rendezvous via WebTorrent trackers (p2pt); no
-                                    central server needed</span
-                                >
-                            </li>
-                            <li>
-                                <span class="icon">🔒</span>
-                                <span
-                                    ><strong>E2E Encryption</strong> — messages encrypted with libsodium before leaving
-                                    your device</span
-                                >
-                            </li>
-                            <li>
-                                <span class="icon">📩</span>
-                                <span
-                                    ><strong>Invite Links</strong> — share a link to open a private encrypted
-                                    channel</span
-                                >
-                            </li>
-                            <li>
-                                <span class="icon">🪪</span>
-                                <span
-                                    ><strong>EVM Identity</strong> — optionally link messages to your wallet address for
-                                    verified DMs</span
-                                >
-                            </li>
-                        </ul>
-                    </div>
-                    <div class="roadmap-grid">
-                        <div class="roadmap-card">
-                            <h4>🗺️ Messaging Roadmap</h4>
-                            <ul>
-                                <li>p2pt peer discovery integration</li>
-                                <li>X25519 key-exchange (libsodium)</li>
-                                <li>Invite link generation &amp; QR codes</li>
-                                <li>Chat UI with message history</li>
-                                <li>EVM wallet-linked identities</li>
-                                <li>Group channels (multi-peer)</li>
-                            </ul>
-                        </div>
-                        <div class="roadmap-card">
-                            <h4>🧱 Tech Stack</h4>
-                            <ul>
-                                <li>p2pt (WebTorrent-based P2P)</li>
-                                <li>libsodium.js (encryption)</li>
-                                <li>WebRTC data channels</li>
-                                <li>EIP-712 message signing</li>
-                                <li>IndexedDB for local history</li>
-                            </ul>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- ── ABOUT TAB ── -->

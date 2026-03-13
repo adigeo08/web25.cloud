@@ -567,6 +567,10 @@ export function showUploadResult(hash, torrentFile, torrent) {
     // Sanitize hash before displaying
     const sanitizedHash = this.sanitizeHash(hash);
     const url = `${window.location.origin}${window.location.pathname}?orc=${sanitizedHash}`;
+    this.lastPublishCandidate = {
+        hash: sanitizedHash,
+        siteName: torrent?.name || 'website'
+    };
 
     const hashEl = document.getElementById('result-hash');
     const urlEl = document.getElementById('result-url');
