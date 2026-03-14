@@ -1,14 +1,12 @@
 // @ts-check
 
-import { signWithExternalWallet } from './ExternalWalletService.js';
 import { signWithLocalWallet } from './LocalWalletService.js';
 import { serializePayload } from '../torrent/TorrentSignaturePayload.js';
 
 export async function signPublishPayload(payload, identityType, messageOverride) {
     const message = messageOverride || serializePayload(payload);
 
-    const signature =
-        identityType === 'external' ? await signWithExternalWallet(message) : await signWithLocalWallet(message);
+    const signature = await signWithLocalWallet(message);
 
     return { payload, message, signature };
 }
