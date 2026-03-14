@@ -84,6 +84,7 @@ export default class AuthController {
             this.notify();
             this.toast.success(`Connected ${result.address}`, 'External wallet connected');
         } catch (err) {
+            console.error('WalletConnect connection failed:', err);
             this.toast.error(err.message, 'Connection failed');
         }
     }

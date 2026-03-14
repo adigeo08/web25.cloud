@@ -20,7 +20,8 @@ function parseValue(bytes, indexRef) {
     if (token === 0x69) {
         indexRef.index += 1;
         const start = indexRef.index;
-        while (bytes[indexRef.index] !== 0x65) indexRef.index += 1;
+        while (indexRef.index < bytes.length && bytes[indexRef.index] !== 0x65) indexRef.index += 1;
+        if (indexRef.index >= bytes.length) throw new Error('Malformed bencode: unterminated integer');
         const num = Number(decoder.decode(bytes.slice(start, indexRef.index)));
         indexRef.index += 1;
         return num;
@@ -29,9 +30,10 @@ function parseValue(bytes, indexRef) {
     if (token === 0x6c) {
         indexRef.index += 1;
         const list = [];
-        while (bytes[indexRef.index] !== 0x65) {
+        while (indexRef.index < bytes.length && bytes[indexRef.index] !== 0x65) {
             list.push(parseValue(bytes, indexRef));
         }
+        if (indexRef.index >= bytes.length) throw new Error('Malformed bencode: unterminated list');
         indexRef.index += 1;
         return list;
     }
@@ -39,18 +41,20 @@ function parseValue(bytes, indexRef) {
     if (token === 0x64) {
         indexRef.index += 1;
         const dict = {};
-        while (bytes[indexRef.index] !== 0x65) {
+        while (indexRef.index < bytes.length && bytes[indexRef.index] !== 0x65) {
             const keyBytes = /** @type {Uint8Array} */ (parseValue(bytes, indexRef));
             const key = decoder.decode(keyBytes);
             dict[key] = parseValue(bytes, indexRef);
         }
+        if (indexRef.index >= bytes.length) throw new Error('Malformed bencode: unterminated dictionary');
         indexRef.index += 1;
         return dict;
     }
 
     if (token >= 0x30 && token <= 0x39) {
         const lenStart = indexRef.index;
-        while (bytes[indexRef.index] !== 0x3a) indexRef.index += 1;
+        while (indexRef.index < bytes.length && bytes[indexRef.index] !== 0x3a) indexRef.index += 1;
+        if (indexRef.index >= bytes.length) throw new Error('Malformed bencode: unterminated string length');
         const len = Number(decoder.decode(bytes.slice(lenStart, indexRef.index)));
         indexRef.index += 1;
         const value = bytes.slice(indexRef.index, indexRef.index + len);

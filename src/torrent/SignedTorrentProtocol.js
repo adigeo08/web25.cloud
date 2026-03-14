@@ -31,6 +31,7 @@ export async function createSignedTorrentArtifact({ torrentFile, torrentHash, pu
     decoded.signature = signResult.signature;
     decoded.signature_algorithm = 'EVM_SECP256K1';
     decoded.signed_at = new Date().toISOString();
+    decoded.chain_id = chainId;
 
     const signedTorrent = bencode(decoded);
 
@@ -56,11 +57,15 @@ export async function readSignedTorrentMetadata(torrentBuffer, chainId = 1) {
         return null;
     }
 
+    // Use chain_id embedded in torrent metadata if available; fall back to the
+    // caller-supplied default for backward compatibility with pre-chain-id torrents.
+    const embeddedChainId = decoded.chain_id ? Number(decodeUtf8(decoded.chain_id)) : chainId;
+
     const infoEncoded = bencode(info);
     const infoHashBuffer = await crypto.subtle.digest('SHA-1', infoEncoded);
     const torrentHash = toHex(new Uint8Array(infoHashBuffer));
 
-    const { digestHex } = await buildSignedTorrentPayload({ torrentHash, publisher, chainId });
+    const { digestHex } = await buildSignedTorrentPayload({ torrentHash, publisher, chainId: embeddedChainId });
     const verified = await verifyPublishSignature(digestHex, signature, publisher);
 
     return { publisher, signature, signatureAlgorithm, signedAt, torrentHash, verified, digestHex };

@@ -167,9 +167,6 @@ export function showMainContent() {
         mainContent.classList.remove('hidden');
     }
 
-    // Clear the iframe
-    this.updateSiteSignatureBadge(this.currentSiteSignatureStatus || { label: "Publisher: unverified", verified: false });
-
     if (iframe) {
         iframe.src = '';
     }
