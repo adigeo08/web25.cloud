@@ -1,6 +1,7 @@
 // @ts-check
 
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { transformFilesWithEncryptedBlocks } from '../../publish/EncryptedBlockTransformer.js';
 
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
@@ -547,12 +548,16 @@ export async function prepareDeployArtifact(files, onProgress) {
     let timeoutId = null;
 
     try {
+        onProgress?.({ label: 'Scanning encrypted blocks', percent: 35 });
+        const transformed = await transformFilesWithEncryptedBlocks(files);
+        this.latestEncryptedBlockKeys = transformed.blockKeys;
+
         onProgress?.({ label: 'Creating torrent', percent: 45 });
         const createdTorrent = await new Promise((resolve, reject) => {
             timeoutId = setTimeout(() => reject(new Error('Timed out while creating torrent')), 30000);
 
             this.client.seed(
-                files,
+                transformed.files,
                 {
                     announce: this.trackers,
                     name: this.generateTorrentName(files),

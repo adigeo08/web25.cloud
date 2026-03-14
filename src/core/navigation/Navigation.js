@@ -1,6 +1,7 @@
 // @ts-check
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
+import { unlockEncryptedBlocksInDocument } from '../../access/AccessRuntimeService.js';
 
 export function updateSiteSignatureBadge(status) {
     const badge = document.getElementById('site-signature-status');
@@ -145,8 +146,28 @@ export function showSiteViewer(url, hash, fromCache) {
             this.log('Iframe error: ' + e.message);
         };
 
-        iframe.onload = () => {
+        iframe.onload = async () => {
             this.log('Iframe loaded successfully');
+            try {
+                const doc = iframe.contentDocument;
+                const walletAddress = this.authController?.state?.address;
+                if (doc && walletAddress) {
+                    const result = await unlockEncryptedBlocksInDocument({ doc, siteId: hash, walletAddress });
+                    if (result.unlocked || result.locked) {
+                        this.log(`Access control processed: unlocked=${result.unlocked}, locked=${result.locked}`);
+                    }
+                }
+
+                doc?.addEventListener('click', (event) => {
+                    const target = /** @type {HTMLElement | null} */ (event.target instanceof HTMLElement ? event.target : null);
+                    if (target?.matches('[data-web25-import-token]')) {
+                        event.preventDefault();
+                        document.getElementById('grant-import-input')?.click();
+                    }
+                });
+            } catch (error) {
+                this.log(`Encrypted block processing failed: ${error.message}`);
+            }
         };
 
         iframe.src = url;

@@ -7,7 +7,7 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
-import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
+import AccessController from '../../access/AccessController.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 
 export async function init() {
@@ -35,39 +35,21 @@ export async function initAuth() {
     this.lastDeployResult = null;
     this.setupAuthAwareUi(this.authController.state);
     this.refreshDeployUiState();
-    this.setupWalletConnectButton();
     renderSignatureStatus(null);
     renderPublishReview(null);
     renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
     hideDeployProgress();
-    this.authController.onChange((state) => this.setupAuthAwareUi(state));
+    this.accessController = new AccessController({
+        toast: this.toast,
+        getWalletAddress: () => this.authController?.state?.address || null
+    });
+    await this.accessController.init();
+
+    this.authController.onChange((state) => {
+        this.setupAuthAwareUi(state);
+        this.accessController?.render();
+    });
 }
-
-export function setupWalletConnectButton() {
-    const button = /** @type {HTMLButtonElement | null} */ (document.getElementById('connect-wallet-btn'));
-    if (!button) return;
-
-    const enabled = hasWalletConnectProjectId();
-    button.disabled = !enabled;
-    if (!enabled) {
-        button.title =
-            'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
-        const existingHint = button.parentElement?.querySelector('.wc-hint');
-        if (!existingHint) {
-            const hint = document.createElement('small');
-            hint.className = 'wc-hint';
-            hint.textContent =
-                '⚠️ WalletConnect: set project ID in console → localStorage.setItem("walletconnect_project_id", "YOUR_ID")';
-            hint.style.cssText = 'color: #e53e3e; display: block; margin-top: 0.25rem; font-size: 0.75rem;';
-            button.parentElement?.appendChild(hint);
-        }
-    } else {
-        button.title = '';
-        const existingHint = button.parentElement?.querySelector('.wc-hint');
-        if (existingHint) existingHint.remove();
-    }
-}
-
 
 export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
@@ -177,7 +159,8 @@ export async function signStagedPayload() {
                 signatureAlgorithm: signature.signatureAlgorithm,
                 payload: signature.payload,
                 signature: signature.signature,
-                torrentEmbedding: 'embedded-torrent-metadata'
+                torrentEmbedding: 'embedded-torrent-metadata',
+                encryptedBlocks: this.latestEncryptedBlockKeys ? this.latestEncryptedBlockKeys.size : 0
             },
             null,
             2

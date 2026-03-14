@@ -163,6 +163,29 @@
                 font-size: 1.1rem;
                 flex-shrink: 0;
             }
+
+            .web25-locked-block {
+                border: 1px dashed #cbd5e0;
+                border-radius: 10px;
+                padding: 1rem;
+                background: #f8fafc;
+                color: #2d3748;
+                margin: 0.6rem 0;
+            }
+            .web25-import-token-btn {
+                border: 1px solid #667eea;
+                color: #4c51bf;
+                background: #fff;
+                padding: 0.4rem 0.8rem;
+                border-radius: 8px;
+                cursor: pointer;
+            }
+            .access-list {
+                margin-top: 0.75rem;
+                padding-left: 1.1rem;
+                color: #4a5568;
+            }
+
         </style>
     </head>
     <body>
@@ -209,6 +232,21 @@
                             <pre id="seed-phrase-box" class="code-block"></pre>
                             <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
                         </div>
+                    </section>
+
+                    <section class="quick-upload" style="margin-top: 1rem">
+                        <h3>🔐 Content Access</h3>
+                        <p>Generate local content access key, import token JSON, and review grants.</p>
+                        <div class="button-group">
+                            <button id="generate-access-key-btn" class="btn btn-secondary">Generate Access Key</button>
+                            <button id="import-grant-btn" class="btn btn-primary">Import Access Token</button>
+                            <button id="export-access-key-btn" class="btn btn-secondary">Export Public Key</button>
+                        </div>
+                        <input id="grant-import-input" type="file" accept="application/json,.json" style="display: none" />
+                        <p><strong>Public key</strong></p>
+                        <pre id="access-public-key" class="code-block">No access key generated yet</pre>
+                        <p><strong>Imported tokens</strong></p>
+                        <ul id="access-grants-list" class="access-list"><li>No tokens imported</li></ul>
                     </section>
                 </div>
 
