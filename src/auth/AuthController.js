@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createAuthState, AUTH_STATUS } from './AuthState.js';
+import { connectExternalWallet, disconnectExternalWallet } from './ExternalWalletService.js';
 import {
     getLocalWalletStatus,
     lockLocalWallet,
@@ -10,11 +11,11 @@ import {
     registerLocalWalletFromSeed
 } from './LocalWalletService.js';
 import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
+import { bindConnectWallet } from '../ui/auth/ConnectWalletModal.js';
 import { bindRegisterWallet } from '../ui/auth/RegisterWalletModal.js';
 import { bindUnlockWallet } from '../ui/auth/UnlockWalletModal.js';
 import { bindRecoverWallet } from '../ui/auth/RecoverWalletModal.js';
 import { hideSeedPhrase, showSeedPhrase } from '../ui/auth/SeedPhraseScreen.js';
-import { bindCaptchaGate } from '../ui/auth/CaptchaGate.js';
 
 export default class AuthController {
     constructor(toast) {
@@ -26,7 +27,7 @@ export default class AuthController {
     async init() {
         await this.refreshLocalWalletState();
 
-        bindCaptchaGate(() => this.enableLocalAuthActions());
+        bindConnectWallet(() => this.connectExternal());
         bindRegisterWallet(() => this.registerLocal());
         bindUnlockWallet(() => this.unlockLocal());
         bindRecoverWallet((seedPhrase) => this.recoverLocal(seedPhrase));
@@ -38,33 +39,10 @@ export default class AuthController {
         if (deleteBtn) deleteBtn.addEventListener('click', () => this.deleteLocalWallet());
 
         const closeSeedBtn = document.getElementById('close-seed-screen-btn');
-        if (closeSeedBtn) {
-            closeSeedBtn.addEventListener('click', async () => {
-                const seed = document.getElementById('seed-phrase-box')?.textContent?.trim();
-                if (seed) {
-                    try {
-                        await navigator.clipboard.writeText(seed);
-                        this.toast.success('Seed phrase copied to clipboard.', 'Copied');
-                    } catch (_error) {
-                        this.toast.error('Could not copy seed phrase automatically.', 'Clipboard blocked');
-                    }
-                }
-                hideSeedPhrase();
-            });
-        }
+        if (closeSeedBtn) closeSeedBtn.addEventListener('click', () => hideSeedPhrase());
 
-        this.disableLocalAuthActions();
         this.render();
         this.notify();
-    }
-
-
-    disableLocalAuthActions() {
-        const actionButtons = ['register-wallet-btn', 'unlock-wallet-btn', 'recover-wallet-btn'];
-        actionButtons.forEach((id) => {
-            const button = document.getElementById(id);
-            if (button instanceof HTMLButtonElement) button.disabled = true;
-        });
     }
 
     onChange(listener) {
@@ -95,14 +73,20 @@ export default class AuthController {
         }
     }
 
-
-    enableLocalAuthActions() {
-        const actionButtons = ['register-wallet-btn', 'unlock-wallet-btn', 'recover-wallet-btn'];
-        actionButtons.forEach((id) => {
-            const button = document.getElementById(id);
-            if (button instanceof HTMLButtonElement) button.disabled = false;
-        });
-        this.toast.success('Security check passed. Wallet actions are now available.', 'Captcha verified');
+    async connectExternal() {
+        try {
+            const result = await connectExternalWallet();
+            this.state.identityType = 'external';
+            this.state.address = result.address;
+            this.state.chainId = result.chainId;
+            this.state.status = AUTH_STATUS.EXTERNAL_CONNECTED;
+            this.render();
+            this.notify();
+            this.toast.success(`Connected ${result.address}`, 'External wallet connected');
+        } catch (err) {
+            console.error('WalletConnect connection failed:', err);
+            this.toast.error(err.message, 'Connection failed');
+        }
     }
 
     async registerLocal() {
@@ -154,6 +138,9 @@ export default class AuthController {
 
     async disconnect() {
         try {
+            if (this.state.identityType === 'external') {
+                await disconnectExternalWallet();
+            }
             lockLocalWallet();
             this.state = createAuthState();
             await this.refreshLocalWalletState();

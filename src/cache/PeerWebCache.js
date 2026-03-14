@@ -5,9 +5,8 @@ import { PEERWEB_CONFIG } from '../config/peerweb.config.js';
 class PeerWebCache {
     constructor() {
         this.dbName = 'PeerWebCache';
-        this.version = 2;
+        this.version = 1;
         this.storeName = 'sites';
-        this.sessionStoreName = 'sessions';
         this.maxAge = PEERWEB_CONFIG.CACHE_MAX_AGE;
     }
 
@@ -24,9 +23,6 @@ class PeerWebCache {
                 if (!db.objectStoreNames.contains(this.storeName)) {
                     const store = db.createObjectStore(this.storeName, { keyPath: 'hash' });
                     store.createIndex('timestamp', 'timestamp');
-                }
-                if (!db.objectStoreNames.contains(this.sessionStoreName)) {
-                    db.createObjectStore(this.sessionStoreName, { keyPath: 'key' });
                 }
             };
         });
@@ -66,6 +62,7 @@ class PeerWebCache {
                         resolve(result.data);
                     } else {
                         if (result) {
+                            // Clean up expired entry
                             this.delete(hash);
                         }
                         resolve(null);
@@ -76,44 +73,6 @@ class PeerWebCache {
         } catch (error) {
             console.error('[PeerWebCache] Error retrieving from cache:', error);
             return null;
-        }
-    }
-
-    async setSession(key, value) {
-        try {
-            const db = await this.openDB();
-            const transaction = db.transaction([this.sessionStoreName], 'readwrite');
-            const store = transaction.objectStore(this.sessionStoreName);
-            await store.put({ key, value, timestamp: Date.now() });
-        } catch (error) {
-            console.error('[PeerWebCache] Error storing session cache:', error);
-        }
-    }
-
-    async getSession(key) {
-        try {
-            const db = await this.openDB();
-            const transaction = db.transaction([this.sessionStoreName], 'readonly');
-            const store = transaction.objectStore(this.sessionStoreName);
-            return await new Promise((resolve, reject) => {
-                const request = store.get(key);
-                request.onsuccess = () => resolve(request.result?.value ?? null);
-                request.onerror = () => reject(request.error);
-            });
-        } catch (error) {
-            console.error('[PeerWebCache] Error reading session cache:', error);
-            return null;
-        }
-    }
-
-    async deleteSession(key) {
-        try {
-            const db = await this.openDB();
-            const transaction = db.transaction([this.sessionStoreName], 'readwrite');
-            const store = transaction.objectStore(this.sessionStoreName);
-            await store.delete(key);
-        } catch (error) {
-            console.error('[PeerWebCache] Error deleting session cache:', error);
         }
     }
 
@@ -131,9 +90,9 @@ class PeerWebCache {
     async clear() {
         try {
             const db = await this.openDB();
-            const transaction = db.transaction([this.storeName, this.sessionStoreName], 'readwrite');
-            await transaction.objectStore(this.storeName).clear();
-            await transaction.objectStore(this.sessionStoreName).clear();
+            const transaction = db.transaction([this.storeName], 'readwrite');
+            const store = transaction.objectStore(this.storeName);
+            await store.clear();
             console.log('[PeerWebCache] Cache cleared');
         } catch (error) {
             console.error('[PeerWebCache] Error clearing cache:', error);

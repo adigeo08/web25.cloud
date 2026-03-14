@@ -7,6 +7,7 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
+import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 
 export async function init() {
@@ -34,83 +35,39 @@ export async function initAuth() {
     this.lastDeployResult = null;
     this.setupAuthAwareUi(this.authController.state);
     this.refreshDeployUiState();
-    await this.restoreDeploymentSessions();
+    this.setupWalletConnectButton();
     renderSignatureStatus(null);
     renderPublishReview(null);
     renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
     hideDeployProgress();
-    this.authController.onChange(async (state) => {
-        this.setupAuthAwareUi(state);
-        if (!state.address || !state.identityType) {
-            await this.stopAllSeeding();
-            await this.cache.deleteSession('active-seeding');
+    this.authController.onChange((state) => this.setupAuthAwareUi(state));
+}
+
+export function setupWalletConnectButton() {
+    const button = /** @type {HTMLButtonElement | null} */ (document.getElementById('connect-wallet-btn'));
+    if (!button) return;
+
+    const enabled = hasWalletConnectProjectId();
+    button.disabled = !enabled;
+    if (!enabled) {
+        button.title =
+            'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
+        const existingHint = button.parentElement?.querySelector('.wc-hint');
+        if (!existingHint) {
+            const hint = document.createElement('small');
+            hint.className = 'wc-hint';
+            hint.textContent =
+                '⚠️ WalletConnect: set project ID in console → localStorage.setItem("walletconnect_project_id", "YOUR_ID")';
+            hint.style.cssText = 'color: #e53e3e; display: block; margin-top: 0.25rem; font-size: 0.75rem;';
+            button.parentElement?.appendChild(hint);
         }
-    });
-}
-
-
-
-
-
-export async function restoreDeploymentSessions() {
-    const deployments = (await this.cache.getSession('deployment-history')) || [];
-    this.deploymentHistory = Array.isArray(deployments) ? deployments : [];
-    this.renderDeploymentHistory();
-
-    const activeSeeding = await this.cache.getSession('active-seeding');
-    if (activeSeeding && this.authController?.state?.identityType) {
-        this.toast.info('An active deploy session was detected from cache.', 'Session restored');
+    } else {
+        button.title = '';
+        const existingHint = button.parentElement?.querySelector('.wc-hint');
+        if (existingHint) existingHint.remove();
     }
 }
 
-export function renderDeploymentHistory() {
-    const container = document.getElementById('deployment-history-list');
-    if (!container) return;
-
-    const history = this.deploymentHistory || [];
-    if (!history.length) {
-        container.innerHTML = '<p class="history-empty">No deployments yet.</p>';
-        return;
-    }
-
-    container.innerHTML = history
-        .map(
-            (item) =>
-                `<article class="history-item"><p><strong>${item.siteName || 'Website'}</strong></p><p><code>${item.hash}</code></p><a href="${item.url}" target="_blank" rel="noreferrer">Open deployment</a></article>`
-        )
-        .join('');
-}
-
-export async function cacheDeploymentSession(entry) {
-    const existing = this.deploymentHistory || [];
-    const next = [entry, ...existing.filter((item) => item.hash !== entry.hash)].slice(0, 8);
-    this.deploymentHistory = next;
-    await this.cache.setSession('deployment-history', next);
-    await this.cache.setSession('active-seeding', {
-        hash: entry.hash,
-        cachedAt: Date.now()
-    });
-    this.renderDeploymentHistory();
-}
-
-export async function stopAllSeeding() {
-    if (!this.client || !Array.isArray(this.client.torrents)) return;
-
-    const torrents = [...this.client.torrents];
-    await Promise.all(
-        torrents.map(
-            (torrent) =>
-                new Promise((resolve) => {
-                    try {
-                        torrent.destroy({ destroyStore: false }, () => resolve(true));
-                    } catch (_error) {
-                        resolve(false);
-                    }
-                })
-        )
-    );
-    this.log('Stopped all active torrents after logout.');
-}
 
 export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
@@ -297,13 +254,6 @@ export async function deploySignedArtifact() {
     });
 
     this.lastDeployResult = { hash, url, signedBy: identity.address };
-    await this.cacheDeploymentSession({
-        hash,
-        url,
-        siteName: this.lastPublishCandidate.siteName,
-        signedBy: identity.address,
-        deployedAt: new Date().toISOString()
-    });
     updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live and seeding');
 }
