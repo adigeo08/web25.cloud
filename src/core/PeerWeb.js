@@ -31,6 +31,8 @@ class PeerWeb {
         this.timeouts = [];
         this.processingInProgress = false;
         this.processingTimeout = null;
+        this.signedTorrentMetadata = new Map();
+        this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
         this.trackers = [
             'wss://tracker.btorrent.xyz',
             'wss://tracker.openwebtorrent.com',

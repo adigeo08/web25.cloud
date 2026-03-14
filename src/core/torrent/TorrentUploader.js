@@ -1,5 +1,7 @@
 // @ts-check
 
+import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
     const folderInput = document.getElementById('folder-input');
@@ -211,6 +213,19 @@ export async function handleTorrentFile(torrentFile) {
         const buffer = await this.readFileAsArrayBuffer(torrentFile);
         const bufferSize = buffer instanceof ArrayBuffer ? buffer.byteLength : buffer.length;
         this.log(`Torrent file read: ${bufferSize} bytes`);
+
+
+        try {
+            const signedMeta = await readSignedTorrentMetadata(buffer);
+            if (signedMeta) {
+                this.signedTorrentMetadata.set(signedMeta.torrentHash, signedMeta);
+                this.log(
+                    `Signed torrent metadata detected: ${signedMeta.publisher} (${signedMeta.verified ? 'VERIFIED' : 'UNVERIFIED'})`
+                );
+            }
+        } catch (metadataError) {
+            this.log(`Signed metadata parse skipped: ${metadataError.message}`);
+        }
 
         // Validate that this looks like a torrent file
         if (!this.isValidTorrentBuffer(buffer)) {
@@ -501,27 +516,27 @@ export async function handleFolderUpload(files) {
     }
 
     this.pendingDeployFiles = files;
+    this.lastPublishCandidate = null;
     this.lastSignedPublish = null;
+    this.lastSignature = null;
+    this.lastDeployResult = null;
+    this.invalidateSignedState?.('Artifact updated. Previous signature invalidated.');
 
     const output = document.getElementById('publish-output');
     if (output) {
-        output.textContent = `Ready to deploy ${files.length} files. Signing is mandatory.`;
+        output.textContent = `Artifact staged with ${files.length} files. Sign the payload to continue.`;
     }
 
-    const signatureLink = /** @type {HTMLAnchorElement | null} */ (document.getElementById('download-signature-file'));
-    if (signatureLink) {
-        if (signatureLink.href && signatureLink.href.startsWith('blob:')) {
-            URL.revokeObjectURL(signatureLink.href);
-        }
-        signatureLink.removeAttribute('href');
-        signatureLink.style.display = 'none';
+    const resultEl = document.getElementById('upload-result');
+    if (resultEl) {
+        resultEl.classList.add('hidden');
     }
 
-    this.toast.success('Files staged. Click Deploy to sign + publish.', 'Deploy ready');
+    this.toast.success('Artifact staged. Sign payload to continue deployment.', 'Stage 1 complete');
 }
 
-export async function deploySignedTorrent() {
-    if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
+export async function prepareDeployArtifact(files, onProgress) {
+    if (!files || files.length === 0) {
         throw new Error('No files selected for deployment');
     }
 
@@ -529,22 +544,22 @@ export async function deploySignedTorrent() {
         throw new Error('WebTorrent client is not ready');
     }
 
-    this.showUploadProgress('Creating torrent...');
     let timeoutId = null;
 
     try {
+        onProgress?.({ label: 'Creating torrent', percent: 45 });
         const createdTorrent = await new Promise((resolve, reject) => {
             timeoutId = setTimeout(() => reject(new Error('Timed out while creating torrent')), 30000);
 
             this.client.seed(
-                this.pendingDeployFiles,
+                files,
                 {
                     announce: this.trackers,
-                    name: this.generateTorrentName(this.pendingDeployFiles),
+                    name: this.generateTorrentName(files),
                     comment: 'Web25 Deploy Artifact',
                     createdBy: 'Web25.Cloud Deploy',
                     private: false,
-                    pieceLength: this.calculateOptimalPieceLength(this.pendingDeployFiles)
+                    pieceLength: this.calculateOptimalPieceLength(files)
                 },
                 (torrent) => {
                     if (timeoutId) {
@@ -555,14 +570,11 @@ export async function deploySignedTorrent() {
                 }
             );
         });
-
-        this.showUploadResult(createdTorrent.infoHash, createdTorrent.torrentFile, createdTorrent);
         return createdTorrent;
     } finally {
         if (timeoutId) {
             clearTimeout(timeoutId);
         }
-        this.hideUploadProgress();
     }
 }
 

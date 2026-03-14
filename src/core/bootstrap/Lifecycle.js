@@ -2,12 +2,13 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import AuthController from '../../auth/AuthController.js';
-import { bindPublishActions } from '../../ui/publish/PublishPanel.js';
+import { bindPublishActions, renderDeployStage, setPublishButtonsState } from '../../ui/publish/PublishPanel.js';
 import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
-import { signPublishPayload } from '../../auth/SigningService.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
+import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
 import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
+import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 
 export async function init() {
     try {
@@ -29,8 +30,16 @@ export async function initAuth() {
     this.authController = new AuthController(this.toast);
     await this.authController.init();
     this.lastSignedPublish = null;
+    this.lastSignature = null;
+    this.lastPublishCandidate = null;
+    this.lastDeployResult = null;
     this.setupAuthAwareUi(this.authController.state);
+    this.refreshDeployUiState();
     this.setupWalletConnectButton();
+    renderSignatureStatus(null);
+    renderPublishReview(null);
+    renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
+    hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
 }
 
@@ -48,33 +57,193 @@ export function setupWalletConnectButton() {
     }
 }
 
-export function attachSignatureArtifact(torrentHash, signature) {
-    const signatureLink = /** @type {HTMLAnchorElement | null} */ (document.getElementById('download-signature-file'));
-    if (!signatureLink) return;
 
-    if (signatureLink.href && signatureLink.href.startsWith('blob:')) {
-        URL.revokeObjectURL(signatureLink.href);
+export function refreshDeployUiState() {
+    const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
+    const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
+    setPublishButtonsState({ canSign: hasFiles, canDeploy: hasFiles && hasSignature });
+}
+
+export function invalidateSignedState(message = 'Signature invalidated') {
+    this.lastSignature = null;
+    this.lastSignedPublish = null;
+
+    renderSignatureStatus(null);
+    renderPublishReview(null);
+
+    const output = document.getElementById('publish-output');
+    if (output) {
+        output.textContent = `${message}. Re-sign the current artifact before deployment.`;
     }
 
-    const blob = new Blob(
-        [
-            JSON.stringify(
-                {
-                    torrentHash,
-                    payload: signature.payload,
-                    message: signature.message,
-                    signature: signature.signature
-                },
-                null,
-                2
-            )
-        ],
-        { type: 'application/json' }
+    const signedBy = document.getElementById('result-signed-by');
+    const signatureStatus = document.getElementById('result-signature-status');
+    if (signedBy) signedBy.textContent = 'Not signed';
+    if (signatureStatus) signatureStatus.textContent = 'UNVERIFIED';
+
+    this.refreshDeployUiState();
+    renderDeployStage('Artifact staged', message);
+}
+
+export function getSignedPayloadInput(hash, createdAt) {
+    const identity = this.authController.getActiveIdentity();
+    return {
+        torrentHash: hash,
+        siteName: this.generateTorrentName(this.pendingDeployFiles || []),
+        createdAt,
+        publisherAddress: identity.address,
+        contentRoot: hash,
+        chainId: identity.chainId || 1
+    };
+}
+
+export async function signStagedPayload() {
+    if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
+        throw new Error('Select files before signing.');
+    }
+
+    const identity = this.authController.getActiveIdentity();
+    if (!identity.address || !identity.identityType) {
+        throw new Error('Authenticate before signing.');
+    }
+
+    renderDeployStage('Signing', 'Preparing deploy artifact for signature');
+    updateDeployProgress({ label: 'Reading files', percent: 10, state: 'running' });
+
+    const createdAt = new Date().toISOString();
+    updateDeployProgress({ label: 'Preparing artifact', percent: 25, state: 'running' });
+
+    const prepared = await this.prepareDeployArtifact(this.pendingDeployFiles, ({ label, percent }) =>
+        updateDeployProgress({ label, percent, state: 'running' })
     );
 
-    signatureLink.href = this.createTrackedObjectURL(blob);
-    signatureLink.download = `website-${torrentHash.slice(0, 8)}.sig.json`;
-    signatureLink.style.display = 'inline-flex';
+    this.lastPublishCandidate = {
+        hash: prepared.infoHash,
+        siteName: prepared.name,
+        torrentFile: prepared.torrentFile,
+        torrent: prepared,
+        createdAt
+    };
+
+    const payloadInput = this.getSignedPayloadInput(prepared.infoHash, createdAt);
+    renderPublishReview(payloadInput);
+
+    updateDeployProgress({ label: 'Waiting for wallet signature', indeterminate: true, state: 'running' });
+
+    const signedArtifact = await createSignedTorrentArtifact({
+        torrentFile: prepared.torrentFile,
+        torrentHash: prepared.infoHash,
+        publisher: identity.address,
+        chainId: identity.chainId || 1,
+        identityType: identity.identityType
+    });
+
+    const signature = {
+        payload: signedArtifact.signingPayload,
+        message: signedArtifact.signingDigest,
+        signature: signedArtifact.signature,
+        signatureAlgorithm: signedArtifact.signatureAlgorithm,
+        signedAt: signedArtifact.signedAt
+    };
+
+    this.lastSignature = signature;
+    this.lastSignedPublish = attachPublishMetadata(prepared.infoHash, signature);
+    this.lastPublishCandidate.signedTorrentFile = signedArtifact.signedTorrent;
+
+    renderSignatureStatus(signature);
+    renderPublishReview(signature.payload);
+
+    const output = document.getElementById('publish-output');
+    if (output) {
+        output.textContent = JSON.stringify(
+            {
+                state: 'signature-confirmed',
+                signedBy: identity.address,
+                signatureAlgorithm: signature.signatureAlgorithm,
+                payload: signature.payload,
+                signature: signature.signature,
+                torrentEmbedding: 'embedded-torrent-metadata'
+            },
+            null,
+            2
+        );
+    }
+
+    updateDeployProgress({ label: 'Signature confirmed', percent: 100, state: 'success' });
+    renderDeployStage('Signature ready', 'Signed payload ready for deployment');
+    this.refreshDeployUiState();
+}
+
+
+
+
+export function renderDeploymentSummary({ hash, url, signedBy, signature, signatureStatus }) {
+    const resultEl = document.getElementById('upload-result');
+    const hashEl = document.getElementById('result-hash');
+    const urlEl = document.getElementById('result-url');
+    const signedByEl = document.getElementById('result-signed-by');
+    const signatureEl = document.getElementById('result-signature-preview');
+    const signatureStatusEl = document.getElementById('result-signature-status');
+
+    if (hashEl) hashEl.textContent = hash;
+    if (urlEl) urlEl.textContent = url;
+    if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
+    if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
+    if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
+
+    if (resultEl) resultEl.classList.remove('hidden');
+}
+
+export async function deploySignedArtifact() {
+    if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
+        throw new Error('A valid signature is required before deployment.');
+    }
+
+    const hash = this.lastPublishCandidate.hash;
+    const identity = this.authController.getActiveIdentity();
+
+    renderDeployStage('Deploying', 'Finalizing signed torrent deployment');
+    updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
+
+    this.showUploadResult(
+        hash,
+        this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
+        this.lastPublishCandidate.torrent
+    );
+
+    const output = document.getElementById('publish-output');
+    if (output) {
+        output.textContent = JSON.stringify(
+            {
+                deploymentStatus: 'completed',
+                torrentHash: hash,
+                signedBy: identity.address,
+                signature: this.lastSignature.signature,
+                signatureAlgorithm: this.lastSignature.signatureAlgorithm || 'EVM_SECP256K1',
+                signedAt: this.lastSignature.signedAt,
+                authenticity: {
+                    integrity: 'Torrent hash guarantees content integrity',
+                    authorship: 'Wallet signature embedded in torrent root metadata and bound to torrentHash'
+                },
+                signatureStorage: ['embedded-torrent-metadata']
+            },
+            null,
+            2
+        );
+    }
+
+    const url = `${window.location.origin}${window.location.pathname}?orc=${hash}`;
+    this.renderDeploymentSummary({
+        hash,
+        url,
+        signedBy: identity.address,
+        signature: this.lastSignature.signature,
+        signatureStatus: 'VERIFIED'
+    });
+
+    this.lastDeployResult = { hash, url, signedBy: identity.address };
+    updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
+    renderDeployStage('Deployment complete', 'Live and seeding');
 }
 
 export function setupAuthAwareUi(state) {
@@ -342,55 +511,23 @@ export function setupEventListeners() {
 
     bindPublishActions({
         onSign: async () => {
-            this.toast.info('Deploy signs automatically during publish.', 'Deploy flow');
+            try {
+                await this.signStagedPayload();
+                this.toast.success('Payload signed and ready to deploy.', 'Signature ready');
+            } catch (error) {
+                updateDeployProgress({ label: error.message, percent: 100, state: 'error' });
+                renderDeployStage('Signing failed', error.message);
+                this.refreshDeployUiState();
+                this.toast.error(error.message, 'Sign failed');
+            }
         },
         onPublish: async () => {
-            if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
-                this.toast.warning('Select files first before deploying.', 'Deploy blocked');
-                return;
-            }
-
-            const identity = this.authController.getActiveIdentity();
-            if (!identity.address || !identity.identityType) {
-                this.toast.warning('Authenticate first: connect wallet or create local wallet.', 'Auth required');
-                return;
-            }
-
             try {
-                const torrent = await this.deploySignedTorrent();
-
-                const payloadInput = {
-                    torrentHash: torrent.infoHash,
-                    siteName: this.generateTorrentName(this.pendingDeployFiles),
-                    createdAt: new Date().toISOString(),
-                    publisherAddress: identity.address,
-                    contentRoot: torrent.infoHash,
-                    chainId: identity.chainId || 1
-                };
-
-                const signature = await signPublishPayload(payloadInput, identity.identityType);
-                this.lastSignedPublish = attachPublishMetadata(torrent.infoHash, signature);
-                renderPublishReview(this.lastSignedPublish.payload);
-                renderSignatureStatus(signature);
-
-                this.attachSignatureArtifact(torrent.infoHash, signature);
-
-                const output = document.getElementById('publish-output');
-                if (output) {
-                    output.textContent = JSON.stringify(
-                        {
-                            torrentHash: torrent.infoHash,
-                            signedPayload: signature.payload,
-                            signature: signature.signature,
-                            signatureStorage: 'companion-signature-artifact'
-                        },
-                        null,
-                        2
-                    );
-                }
-
-                this.toast.success('Signed deployment published.', 'Deploy complete');
+                await this.deploySignedArtifact();
+                this.toast.success('Deployment completed. Site is live and seeding.', 'Deploy complete');
             } catch (error) {
+                updateDeployProgress({ label: error.message, percent: 100, state: 'error' });
+                renderDeployStage('Deploy blocked', error.message);
                 this.toast.error(error.message, 'Deploy failed');
             }
         }

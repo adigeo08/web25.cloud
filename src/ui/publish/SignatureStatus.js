@@ -5,9 +5,11 @@ export function renderSignatureStatus(signatureResult) {
     if (!container) return;
 
     if (!signatureResult) {
-        container.textContent = 'Signature: pending';
+        container.textContent = 'Signature pending';
+        container.className = 'status-chip status-pending';
         return;
     }
 
-    container.textContent = `Signature: ${signatureResult.signature.slice(0, 18)}...`;
+    container.textContent = `Signature ready · ${signatureResult.signature.slice(0, 18)}...`;
+    container.className = 'status-chip status-success';
 }

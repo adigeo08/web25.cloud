@@ -226,81 +226,83 @@
                         </div>
                     </section>
                     <div id="deploy-panel" class="hidden">
-                        <!-- Quick Upload Section -->
-                        <section class="quick-upload">
-                            <h3>🚀 Deploy Website</h3>
+                        <section class="deploy-workflow">
+                            <h3>Sign and Deploy</h3>
+                            <div class="deploy-stepper">
+                                <span class="step-chip">1. Select files</span>
+                                <span class="step-chip">2. Prepare artifact</span>
+                                <span class="step-chip">3. Review payload</span>
+                                <span class="step-chip">4. Sign payload</span>
+                                <span class="step-chip">5. Deploy signed torrent</span>
+                                <span class="step-chip">6. Live and seeding</span>
+                            </div>
+                            <div class="deploy-stage-box">
+                                <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
+                                <div id="deploy-stage-detail" class="stage-detail">Artifact not staged</div>
+                            </div>
+                        </section>
+
+                        <section class="quick-upload deploy-card">
+                            <h3>Deployment Artifact</h3>
                             <div id="drop-zone" class="drop-zone">
                                 <div class="drop-content">
-                                    <div class="drop-icon">📁</div>
-                                    <h4>Drag &amp; Drop Your Website</h4>
-                                    <p>Drop a folder with your website files</p>
+                                    <h4>Upload website folder</h4>
+                                    <p>Drag and drop your static site files or choose a folder.</p>
                                     <div class="drop-buttons">
-                                        <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
+                                        <button id="select-folder" class="btn btn-primary">Select Folder</button>
                                     </div>
                                 </div>
                                 <div id="upload-progress" class="upload-progress hidden">
                                     <div class="progress-container">
-                                        <div id="upload-progress-bar" class="progress-bar"></div>
-                                        <div id="upload-progress-text" class="progress-text">Processing files...</div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div id="upload-result" class="upload-result hidden">
-                                <div class="result-success">
-                                    <h4>✅ Website Ready!</h4>
-                                    <div class="result-info">
-                                        <p><strong>Hash:</strong> <code id="result-hash"></code></p>
-                                        <p><strong>Web25.Cloud URL:</strong> <code id="result-url"></code></p>
-                                    </div>
-                                    <div class="result-actions">
-                                        <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
-                                        <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
-                                        <a id="download-torrent-file" class="btn btn-secondary" download
-                                            >💾 Download .torrent</a
-                                        >
-                                        <a
-                                            id="download-signature-file"
-                                            class="btn btn-secondary"
-                                            download
-                                            style="display: none"
-                                            >🖋️ Download Signature (.sig.json)</a
-                                        >
-                                    </div>
-                                    <div class="hosting-notice">
-                                        <div class="notice-box">
-                                            <h5>☁️ Hosting Notice</h5>
-                                            <p>
-                                                <strong>Keep this tab open to host your site!</strong> As long as this
-                                                tab remains open, your website will be available to others through the
-                                                peer-to-peer network.
-                                            </p>
-                                            <p>
-                                                💡 <strong>Alternative:</strong> Download our desktop client for
-                                                permanent hosting without keeping browser tabs open:
-                                            </p>
-                                            <div class="desktop-clients">
-                                                <a href="#" class="desktop-link" data-os="windows">🪟 Windows</a>
-                                                <a href="#" class="desktop-link" data-os="mac">🍎 macOS</a>
-                                                <a href="#" class="desktop-link" data-os="linux">🐧 Linux</a>
-                                            </div>
+                                        <div class="progress-track">
+                                            <div id="upload-progress-bar" class="progress-bar"></div>
                                         </div>
+                                        <div id="upload-progress-text" class="progress-text">Preparing deployment...</div>
                                     </div>
                                 </div>
                             </div>
                         </section>
 
-                        <section class="controls">
-                            <h3>✍️ Deployment Signing</h3>
-                            <p id="signature-status">Signature: pending</p>
+                        <section class="controls deploy-card">
+                            <h3>Signing</h3>
+                            <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             <div class="button-group">
-                                <button id="sign-publish-btn" class="btn btn-primary">Sign Deploy Payload</button>
-                                <button id="publish-btn" class="btn btn-create">Deploy</button>
+                                <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Deploy Payload</button>
+                                <button id="publish-btn" class="btn btn-create" disabled>Deploy Signed Torrent</button>
                             </div>
-                            <h4>Payload Preview</h4>
-                            <pre id="publish-payload-preview" class="code-block"></pre>
-                            <h4>Deploy Output</h4>
-                            <pre id="publish-output" class="code-block"></pre>
+                            <details>
+                                <summary>View technical details</summary>
+                                <h4>Payload Preview</h4>
+                                <pre id="publish-payload-preview" class="code-block"></pre>
+                                <h4>Deploy Output</h4>
+                                <pre id="publish-output" class="code-block"></pre>
+                            </details>
+                        </section>
+
+                        <section id="upload-result" class="upload-result hidden deploy-card">
+                            <div class="result-success">
+                                <h4>Deployment completed</h4>
+                                <div class="result-info">
+                                    <p><strong>Status:</strong> Live and seeding</p>
+                                    <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
+                                    <p><strong>Deploy URL:</strong> <code id="result-url"></code></p>
+                                    <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
+                                    <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
+                                    <p><strong>Signature status:</strong> <code id="result-signature-status">UNVERIFIED</code></p>
+                                </div>
+                                <div class="result-actions">
+                                    <button id="open-site" class="btn btn-primary">Open Site</button>
+                                    <button id="copy-link" class="btn btn-secondary">Copy Link</button>
+                                    <a id="download-torrent-file" class="btn btn-secondary" download>Download .torrent</a>
+                                </div>
+                                <div class="hosting-notice">
+                                    <div class="notice-box">
+                                        <h5>Hosting status</h5>
+                                        <p>Your artifact is signed, deployed, and actively seeding from this session.</p>
+                                        <p>Keep this tab open or use desktop host clients for longer uptime.</p>
+                                    </div>
+                                </div>
+                            </div>
                         </section>
                         <section class="usage">
                             <h3>📚 How to Host</h3>
@@ -451,6 +453,9 @@
 
         <!-- Site Viewer -->
         <div id="site-viewer" class="site-viewer hidden">
+            <div class="site-viewer-header">
+                <span id="site-signature-status" class="status-chip status-pending">Publisher: unverified</span>
+            </div>
             <iframe
                 id="site-frame"
                 class="site-frame"
