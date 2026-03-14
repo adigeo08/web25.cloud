@@ -2,7 +2,6 @@
 
 import { signWithExternalWallet } from './ExternalWalletService.js';
 import { signWithLocalWallet } from './LocalWalletService.js';
-import { loadViemAccounts } from '../web3/viemClients.js';
 import { serializePayload } from '../torrent/TorrentSignaturePayload.js';
 
 export async function signPublishPayload(payload, identityType, messageOverride) {
@@ -15,8 +14,8 @@ export async function signPublishPayload(payload, identityType, messageOverride)
 }
 
 export async function verifyPublishSignature(message, signature, publisherAddress) {
-    const viemAccounts = await loadViemAccounts();
-    const recovered = await viemAccounts.recoverMessageAddress({
+    const viem = await import('https://esm.sh/viem@2.22.21');
+    const recovered = await viem.recoverMessageAddress({
         message,
         signature: /** @type {`0x${string}`} */ (signature)
     });

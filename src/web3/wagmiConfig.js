@@ -32,25 +32,24 @@ export async function getWagmiCore() {
         ]);
 
         const projectId = getWalletConnectProjectId();
-        const wagmiConnectors = [];
-        if (projectId) {
-            wagmiConnectors.push(
-                connectors.walletConnect({
-                    projectId,
-                    showQrModal: true,
-                    metadata: {
-                        name: 'Web25.Cloud',
-                        description: 'Torrent publish identity',
-                        url: window.location.origin,
-                        icons: []
-                    }
-                })
-            );
-        } else {
-            console.warn(
-                'WalletConnect disabled: no project ID configured. Set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.'
+        if (!projectId) {
+            throw new Error(
+                'WalletConnect project ID not configured. Set window.WALLETCONNECT_PROJECT_ID or localStorage walletconnect_project_id.'
             );
         }
+
+        const wagmiConnectors = [
+            connectors.walletConnect({
+                projectId,
+                showQrModal: true,
+                metadata: {
+                    name: 'Web25.Cloud',
+                    description: 'Torrent publish identity',
+                    url: window.location.origin,
+                    icons: []
+                }
+            })
+        ];
 
         const config = core.createConfig({
             chains: [chains.mainnet],

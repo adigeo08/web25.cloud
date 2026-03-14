@@ -52,8 +52,19 @@ export function setupWalletConnectButton() {
     if (!enabled) {
         button.title =
             'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
+        const existingHint = button.parentElement?.querySelector('.wc-hint');
+        if (!existingHint) {
+            const hint = document.createElement('small');
+            hint.className = 'wc-hint';
+            hint.textContent =
+                '⚠️ WalletConnect: set project ID in console → localStorage.setItem("walletconnect_project_id", "YOUR_ID")';
+            hint.style.cssText = 'color: #e53e3e; display: block; margin-top: 0.25rem; font-size: 0.75rem;';
+            button.parentElement?.appendChild(hint);
+        }
     } else {
         button.title = '';
+        const existingHint = button.parentElement?.querySelector('.wc-hint');
+        if (existingHint) existingHint.remove();
     }
 }
 
@@ -112,6 +123,10 @@ export async function signStagedPayload() {
 
     const createdAt = new Date().toISOString();
     updateDeployProgress({ label: 'Preparing artifact', percent: 25, state: 'running' });
+
+    if (this.lastPublishCandidate?.torrent?.destroy) {
+        try { this.lastPublishCandidate.torrent.destroy(); } catch (_) {}
+    }
 
     const prepared = await this.prepareDeployArtifact(this.pendingDeployFiles, ({ label, percent }) =>
         updateDeployProgress({ label, percent, state: 'running' })
@@ -173,9 +188,6 @@ export async function signStagedPayload() {
     renderDeployStage('Signature ready', 'Signed payload ready for deployment');
     this.refreshDeployUiState();
 }
-
-
-
 
 export function renderDeploymentSummary({ hash, url, signedBy, signature, signatureStatus }) {
     const resultEl = document.getElementById('upload-result');
