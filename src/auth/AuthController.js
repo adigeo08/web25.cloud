@@ -1,7 +1,6 @@
 // @ts-check
 
 import { createAuthState, AUTH_STATUS } from './AuthState.js';
-import { connectExternalWallet, disconnectExternalWallet } from './ExternalWalletService.js';
 import {
     getLocalWalletStatus,
     lockLocalWallet,
@@ -11,7 +10,6 @@ import {
     registerLocalWalletFromSeed
 } from './LocalWalletService.js';
 import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
-import { bindConnectWallet } from '../ui/auth/ConnectWalletModal.js';
 import { bindRegisterWallet } from '../ui/auth/RegisterWalletModal.js';
 import { bindUnlockWallet } from '../ui/auth/UnlockWalletModal.js';
 import { bindRecoverWallet } from '../ui/auth/RecoverWalletModal.js';
@@ -27,7 +25,6 @@ export default class AuthController {
     async init() {
         await this.refreshLocalWalletState();
 
-        bindConnectWallet(() => this.connectExternal());
         bindRegisterWallet(() => this.registerLocal());
         bindUnlockWallet(() => this.unlockLocal());
         bindRecoverWallet((seedPhrase) => this.recoverLocal(seedPhrase));
@@ -70,22 +67,6 @@ export default class AuthController {
             return;
         } else if (localWallet.exists) {
             this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
-        }
-    }
-
-    async connectExternal() {
-        try {
-            const result = await connectExternalWallet();
-            this.state.identityType = 'external';
-            this.state.address = result.address;
-            this.state.chainId = result.chainId;
-            this.state.status = AUTH_STATUS.EXTERNAL_CONNECTED;
-            this.render();
-            this.notify();
-            this.toast.success(`Connected ${result.address}`, 'External wallet connected');
-        } catch (err) {
-            console.error('WalletConnect connection failed:', err);
-            this.toast.error(err.message, 'Connection failed');
         }
     }
 
@@ -138,9 +119,6 @@ export default class AuthController {
 
     async disconnect() {
         try {
-            if (this.state.identityType === 'external') {
-                await disconnectExternalWallet();
-            }
             lockLocalWallet();
             this.state = createAuthState();
             await this.refreshLocalWalletState();
