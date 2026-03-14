@@ -946,3 +946,116 @@ footer {
 .drop-zone:hover::before {
     opacity: 1;
 }
+
+/* Deploy workflow refresh */
+.deploy-workflow,
+.deploy-card {
+    background: #ffffff;
+    color: #1a202c;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.deploy-stepper {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+}
+
+.step-chip {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 999px;
+    background: #edf2f7;
+    color: #2d3748;
+}
+
+.deploy-stage-box {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: #f7fafc;
+    border-radius: 10px;
+}
+
+.stage-label {
+    font-weight: 600;
+}
+
+.stage-detail {
+    color: #4a5568;
+}
+
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.status-pending {
+    color: #975a16;
+    background: #faf089;
+}
+
+.status-success {
+    color: #22543d;
+    background: #c6f6d5;
+}
+
+.btn-disabled,
+.btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.progress-container {
+    margin-top: 1rem;
+}
+
+.progress-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.35);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    width: 0%;
+    height: 8px;
+    background: linear-gradient(90deg, #4299e1, #48bb78);
+    transition: width 0.35s ease;
+}
+
+.progress-indeterminate .progress-bar {
+    width: 35% !important;
+    animation: indeterminate-slide 1.2s infinite;
+}
+
+.progress-success .progress-bar {
+    background: linear-gradient(90deg, #38a169, #2f855a);
+}
+
+.progress-error .progress-bar {
+    background: linear-gradient(90deg, #f56565, #c53030);
+}
+
+@keyframes indeterminate-slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+}
+
+.site-viewer-header {
+    padding: 0.75rem 1rem;
+    background: #111827;
+    border-bottom: 1px solid #374151;
+}

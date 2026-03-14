@@ -2,6 +2,15 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 
+export function updateSiteSignatureBadge(status) {
+    const badge = document.getElementById('site-signature-status');
+    if (!badge) return;
+
+    badge.textContent = status.label;
+    badge.className = status.verified ? 'status-chip status-success' : 'status-chip status-pending';
+}
+
+
 export function checkURL() {
     const urlParams = new URLSearchParams(window.location.search);
     const orcHash = urlParams.get('orc');
@@ -126,6 +135,8 @@ export function showSiteViewer(url, hash, fromCache) {
         cacheStatus.textContent = fromCache ? '💾 From Cache' : '🌐 Fresh Download';
     }
 
+    this.updateSiteSignatureBadge(this.currentSiteSignatureStatus || { label: "Publisher: unverified", verified: false });
+
     if (iframe) {
         iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
 
@@ -156,7 +167,6 @@ export function showMainContent() {
         mainContent.classList.remove('hidden');
     }
 
-    // Clear the iframe
     if (iframe) {
         iframe.src = '';
     }

@@ -14,7 +14,14 @@ async function getWalletConnectConnector(core, config) {
 export async function connectExternalWallet() {
     const { core, config } = await getWagmiCore();
     const connector = await getWalletConnectConnector(core, config);
-    const result = await core.connect(config, { connector });
+
+    const result = await Promise.race([
+        core.connect(config, { connector }),
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('WalletConnect connection timed out after 30s')), 30000)
+        )
+    ]);
+
     return {
         address: result.accounts?.[0] || null,
         chainId: result.chainId || 1

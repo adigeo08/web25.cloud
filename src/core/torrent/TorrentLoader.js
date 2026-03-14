@@ -28,6 +28,18 @@ export async function loadSite(hash) {
     }
 
     this.currentHash = sanitizedHash;
+    const knownSignature = this.signedTorrentMetadata.get(sanitizedHash);
+    this.currentSiteSignatureStatus = knownSignature
+        ? {
+              label: knownSignature.verified
+                  ? `Verified publisher: ${knownSignature.publisher.slice(0, 10)}...`
+                  : `Unverified publisher: ${knownSignature.publisher.slice(0, 10)}...`,
+              verified: Boolean(knownSignature.verified)
+          }
+        : {
+              label: 'Publisher signature unavailable (magnet metadata)',
+              verified: false
+          };
 
     // Check cache first
     const cachedSite = await this.cache.get(sanitizedHash);
@@ -45,6 +57,7 @@ export async function loadSite(hash) {
     try {
         this.client.add(magnetURI, async (torrent) => {
             this.log(`Torrent added: ${torrent.name || 'Unknown'}`);
+            this.log(`Signature status: ${this.currentSiteSignatureStatus.label}`);
             this.updatePeerStats(torrent);
 
             torrent.on('download', () => {
