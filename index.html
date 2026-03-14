@@ -42,6 +42,7 @@
             href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.90em%22 font-size=%2290%22>☁️</text></svg>"
         />
 
+        <link rel="stylesheet" href="https://unpkg.com/terminal.css@0.7.2/dist/terminal.min.css" />
         <link rel="stylesheet" href="./styles.css" />
         <style>
             /* ── Tab Navigation ── */
@@ -206,22 +207,29 @@
                         <div id="seed-phrase-screen" class="upload-result hidden" style="margin-top: 1rem">
                             <h4>⚠️ Save your seed phrase now (shown once)</h4>
                             <pre id="seed-phrase-box" class="code-block"></pre>
-                            <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
+                            <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it, copy phrase</button>
                         </div>
                     </section>
                 </div>
 
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
-                    <section id="deploy-auth-wall" class="quick-upload">
-                        <h3>Authentication required</h3>
-                        <p>Choose an authentication method to deploy signed torrents.</p>
-                        <div class="button-group">
-                            <button id="connect-wallet-btn" class="btn btn-primary">
-                                Connect Wallet (WalletConnect)
-                            </button>
-                            <button id="register-wallet-btn" class="btn btn-secondary">Create Local Wallet</button>
-                            <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Local Wallet</button>
+                    <section id="deploy-auth-wall" class="quick-upload login-zone">
+                        <h3>Secure sign-in required</h3>
+                        <p>Use your local wallet to sign and deploy artifacts.</p>
+                        <div id="captcha-gate" class="captcha-card">
+                            <p class="captcha-title">Step 1 · Human verification</p>
+                            <div class="captcha-row">
+                                <code id="captcha-challenge" class="captcha-challenge"></code>
+                                <button id="captcha-refresh-btn" class="btn btn-clear" type="button">↻</button>
+                            </div>
+                            <input id="captcha-input" class="hash-input" type="text" placeholder="Type captcha text" autocomplete="off" />
+                            <button id="captcha-verify-btn" class="btn btn-primary" type="button">Verify captcha</button>
+                            <small id="captcha-status">Complete captcha to unlock wallet actions.</small>
+                        </div>
+                        <div class="button-group login-actions">
+                            <button id="register-wallet-btn" class="btn btn-secondary">Generate New Wallet</button>
+                            <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Existing Wallet</button>
                             <button id="recover-wallet-btn" class="btn btn-secondary">Recover from Seed</button>
                         </div>
                     </section>
@@ -304,6 +312,11 @@
                                 </div>
                             </div>
                         </section>
+
+                        <section class="deploy-card history-card">
+                            <h3>Recent Deployments</h3>
+                            <div id="deployment-history-list"></div>
+                        </section>
                         <section class="usage">
                             <h3>📚 How to Host</h3>
                             <div class="steps">
@@ -354,7 +367,7 @@
                         <p>
                             Web25.Cloud is a decentralized web platform built on top of
                             <a href="https://peerweb.lol" target="_blank">PeerWeb</a>. It extends peer-to-peer website
-                            hosting with <strong>EVM-based identity &amp; ownership</strong> (IAM via wagmi, inspired by
+                            hosting with <strong>self-custodied local wallet identity</strong>, inspired by
                             ZeroNet) and <strong>end-to-end encrypted direct messaging</strong>
                             (powered by p2pt / WebTorrent trackers) — all without a central server.
                         </p>
@@ -543,6 +556,7 @@
         </script>
 
         <!-- Web25.Cloud Application Script -->
+        <script src="https://cdn.jsdelivr.net/gh/xsukax/xsukax-JS-CAPTCHA@master/js/xsukax-JS-CAPTCHA.js"></script>
         <script type="module" src="./peerweb.min.js"></script>
     </body>
 </html>
