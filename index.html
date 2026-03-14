@@ -7,7 +7,7 @@
         <title>Web25.Cloud - Decentralized Web Platform</title>
         <meta
             name="description"
-            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, EVM wallet-based ownership, token-gated content, and end-to-end encrypted messaging. 🌐☁️"
+            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, signed deployments, local identity, token-gated content, and end-to-end encrypted messaging."
         />
 
         <!-- Facebook Meta Tags -->
@@ -16,7 +16,7 @@
         <meta property="og:title" content="Web25.Cloud - Decentralized Web Platform" />
         <meta
             property="og:description"
-            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, EVM wallet-based ownership, token-gated content, and end-to-end encrypted messaging. 🌐☁️"
+            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, signed deployments, local identity, token-gated content, and end-to-end encrypted messaging."
         />
 
         <!-- Twitter Meta Tags -->
@@ -26,7 +26,7 @@
         <meta name="twitter:title" content="Web25.Cloud - Decentralized Web Platform" />
         <meta
             name="twitter:description"
-            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, EVM wallet-based ownership, token-gated content, and end-to-end encrypted messaging. 🌐☁️"
+            content="Web25.Cloud builds on PeerWeb to deliver peer-to-peer website hosting, signed deployments, local identity, token-gated content, and end-to-end encrypted messaging."
         />
 
         <!-- PWA Meta Tags -->
@@ -180,7 +180,7 @@
             </header>
 
             <!-- Tab Navigation -->
-            <nav class="tab-nav" role="tablist">
+            <nav class="tab-nav" role="tablist" style="justify-content: center">
                 <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
                     🔍 Browse / Load
                 </button>
@@ -195,7 +195,8 @@
                 <!-- ── AUTH TAB ── -->
                 <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload">
-                        <h3>🪪 Identity / Auth</h3>
+                        <h3>🪪 Local Identity</h3>
+                        <p>Manage your local signing identity and recovery options.</p>
                         <p id="identity-badge">Identity: anonymous</p>
                         <p id="auth-status">Status: anonymous</p>
                         <p id="local-wallet-meta">Local wallet: not registered</p>
@@ -204,7 +205,7 @@
                             <button id="delete-local-wallet-btn" class="btn btn-clear">Delete Local Wallet</button>
                         </div>
                         <div id="seed-phrase-screen" class="upload-result hidden" style="margin-top: 1rem">
-                            <h4>⚠️ Save your seed phrase now (shown once)</h4>
+                            <h4>⚠️ Save your seed phrase now</h4>
                             <pre id="seed-phrase-box" class="code-block"></pre>
                             <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
                         </div>
@@ -214,20 +215,71 @@
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
                     <section id="deploy-auth-wall" class="quick-upload">
-                        <h3>Authentication required</h3>
-                        <p>Choose an authentication method to deploy signed torrents.</p>
+                        <h3>🔐 Unlock Deploy</h3>
+                        <p>Create or unlock a local wallet to sign and deploy your website.</p>
                         <div class="button-group">
-                            <button id="connect-wallet-btn" class="btn btn-primary">
-                                Connect Wallet (WalletConnect)
-                            </button>
-                            <button id="register-wallet-btn" class="btn btn-secondary">Create Local Wallet</button>
+                            <button id="register-wallet-btn" class="btn btn-primary">Create Local Wallet</button>
                             <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Local Wallet</button>
                             <button id="recover-wallet-btn" class="btn btn-secondary">Recover from Seed</button>
                         </div>
                     </section>
+
                     <div id="deploy-panel" class="hidden">
-                        <section class="deploy-workflow">
-                            <h3>Sign and Deploy</h3>
+                        <section class="quick-upload">
+                            <h3>📤 Quick Upload</h3>
+                            <div id="drop-zone" class="drop-zone">
+                                <div class="drop-content">
+                                    <div class="drop-icon">📁</div>
+                                    <h4>Drag &amp; Drop Your Website</h4>
+                                    <p>Drop a folder with your static site files, then sign and deploy it.</p>
+                                    <div class="drop-buttons">
+                                        <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
+                                    </div>
+                                </div>
+                                <div id="upload-progress" class="upload-progress hidden">
+                                    <div class="progress-container">
+                                        <div class="progress-track">
+                                            <div id="upload-progress-bar" class="progress-bar"></div>
+                                        </div>
+                                        <div id="upload-progress-text" class="progress-text">Processing files...</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="upload-result" class="upload-result hidden">
+                                <div class="result-success">
+                                    <h4>✅ Website Ready</h4>
+                                    <div class="result-info">
+                                        <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
+                                        <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
+                                        <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
+                                        <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
+                                        <p>
+                                            <strong>Signature status:</strong>
+                                            <code id="result-signature-status">UNVERIFIED</code>
+                                        </p>
+                                    </div>
+                                    <div class="result-actions">
+                                        <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
+                                        <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
+                                        <a id="download-torrent-file" class="btn btn-secondary" download
+                                            >💾 Download .torrent</a
+                                        >
+                                    </div>
+                                    <div class="hosting-notice">
+                                        <div class="notice-box">
+                                            <h5>☁️ Hosting Notice</h5>
+                                            <p>Your website is signed, deployed, and seeding from this session.</p>
+                                            <p>Keep this tab open for longer availability.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="controls deploy-card">
+                            <h3>✍️ Sign and Deploy</h3>
+                            <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             <div class="deploy-stepper">
                                 <span class="step-chip">1. Select files</span>
                                 <span class="step-chip">2. Prepare artifact</span>
@@ -240,34 +292,8 @@
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
                                 <div id="deploy-stage-detail" class="stage-detail">Artifact not staged</div>
                             </div>
-                        </section>
-
-                        <section class="quick-upload deploy-card">
-                            <h3>Deployment Artifact</h3>
-                            <div id="drop-zone" class="drop-zone">
-                                <div class="drop-content">
-                                    <h4>Upload website folder</h4>
-                                    <p>Drag and drop your static site files or choose a folder.</p>
-                                    <div class="drop-buttons">
-                                        <button id="select-folder" class="btn btn-primary">Select Folder</button>
-                                    </div>
-                                </div>
-                                <div id="upload-progress" class="upload-progress hidden">
-                                    <div class="progress-container">
-                                        <div class="progress-track">
-                                            <div id="upload-progress-bar" class="progress-bar"></div>
-                                        </div>
-                                        <div id="upload-progress-text" class="progress-text">Preparing deployment...</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="controls deploy-card">
-                            <h3>Signing</h3>
-                            <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             <div class="button-group">
-                                <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Deploy Payload</button>
+                                <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Payload</button>
                                 <button id="publish-btn" class="btn btn-create" disabled>Deploy Signed Torrent</button>
                             </div>
                             <details>
@@ -279,40 +305,14 @@
                             </details>
                         </section>
 
-                        <section id="upload-result" class="upload-result hidden deploy-card">
-                            <div class="result-success">
-                                <h4>Deployment completed</h4>
-                                <div class="result-info">
-                                    <p><strong>Status:</strong> Live and seeding</p>
-                                    <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
-                                    <p><strong>Deploy URL:</strong> <code id="result-url"></code></p>
-                                    <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
-                                    <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
-                                    <p><strong>Signature status:</strong> <code id="result-signature-status">UNVERIFIED</code></p>
-                                </div>
-                                <div class="result-actions">
-                                    <button id="open-site" class="btn btn-primary">Open Site</button>
-                                    <button id="copy-link" class="btn btn-secondary">Copy Link</button>
-                                    <a id="download-torrent-file" class="btn btn-secondary" download>Download .torrent</a>
-                                </div>
-                                <div class="hosting-notice">
-                                    <div class="notice-box">
-                                        <h5>Hosting status</h5>
-                                        <p>Your artifact is signed, deployed, and actively seeding from this session.</p>
-                                        <p>Keep this tab open or use desktop host clients for longer uptime.</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
                         <section class="usage">
-                            <h3>📚 How to Host</h3>
+                            <h3>📚 How to Deploy</h3>
                             <div class="steps">
-                                <div class="step">🎨 Build a static website — HTML, CSS, JavaScript, and assets</div>
-                                <div class="step">
-                                    📤 Drag &amp; drop your folder — or use the Select Folder button above
-                                </div>
-                                <div class="step">🔗 Copy your unique link — share it with anyone, anywhere</div>
-                                <div class="step">☁️ Keep hosting — leave the tab open or use the desktop client</div>
+                                <div class="step">🎨 Build a static website with HTML, CSS, JavaScript, and assets</div>
+                                <div class="step">📤 Upload your folder using the area above</div>
+                                <div class="step">✍️ Sign the deploy payload with your local identity</div>
+                                <div class="step">🔗 Copy and share your unique Web25 link</div>
+                                <div class="step">☁️ Keep this tab open while you seed the site</div>
                             </div>
                         </section>
 
@@ -322,6 +322,14 @@
                                 <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
                                 <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
                             </div>
+                        </section>
+
+                        <section class="quick-upload">
+                            <h3>🪪 Deploy Identity</h3>
+                            <p>This area shows the signer only after you unlock or create a local wallet.</p>
+                            <p id="identity-badge-deploy">Identity: anonymous</p>
+                            <p id="auth-status-deploy">Status: anonymous</p>
+                            <p id="local-wallet-meta-deploy">Local wallet: not registered</p>
                         </section>
                     </div>
                 </div>
@@ -354,15 +362,15 @@
                         <p>
                             Web25.Cloud is a decentralized web platform built on top of
                             <a href="https://peerweb.lol" target="_blank">PeerWeb</a>. It extends peer-to-peer website
-                            hosting with <strong>EVM-based identity &amp; ownership</strong> (IAM via wagmi, inspired by
-                            ZeroNet) and <strong>end-to-end encrypted direct messaging</strong>
-                            (powered by p2pt / WebTorrent trackers) — all without a central server.
+                            hosting with <strong>local signing identity</strong>, future
+                            <strong>EVM-based ownership</strong>, token-gated content, and
+                            <strong>end-to-end encrypted direct messaging</strong> — all without a central server.
                         </p>
                     </section>
 
                     <section class="features">
                         <h3>💾 Smart Caching</h3>
-                        <p>Visited sites are cached for lightning-fast repeat loads! 🚀</p>
+                        <p>Visited sites are cached for lightning-fast repeat loads.</p>
                         <div class="feature-grid">
                             <div class="feature">🏃‍♂️ Instant Loading — Cached sites load immediately</div>
                             <div class="feature">💽 IndexedDB Storage — Persistent across browser sessions</div>
@@ -371,7 +379,7 @@
                         </div>
                         <br /><br />
                         <h3>🛡️ Security Features</h3>
-                        <p>Multi-layer security with DOMPurify integration! 🔒</p>
+                        <p>Multi-layer security with DOMPurify integration.</p>
                         <div class="feature-grid">
                             <div class="feature">🧼 XSS Protection — All HTML sanitized with DOMPurify</div>
                             <div class="feature">
@@ -399,9 +407,9 @@
                         <div class="benefit-grid">
                             <div class="benefit">🚫 Censorship Resistant — No central point of failure</div>
                             <div class="benefit">💰 Cost Effective — No hosting fees ever</div>
-                            <div class="benefit">�� Global Distribution — Automatically distributed worldwide</div>
+                            <div class="benefit">🌍 Global Distribution — Automatically distributed worldwide</div>
                             <div class="benefit">📱 Always Available — Works as long as peers are online</div>
-                            <div class="benefit">🔐 Self-Sovereign Identity — Own your content via EVM wallet</div>
+                            <div class="benefit">🔐 Signed Publishing — Deployments can be verified by signer</div>
                             <div class="benefit">🔒 Private Comms — E2E encrypted DMs, no relay server</div>
                             <div class="benefit">⚡ Fast Loading — Smart caching for instant repeat visits</div>
                             <div class="benefit">💾 Offline Ready — Cached sites work without internet</div>
