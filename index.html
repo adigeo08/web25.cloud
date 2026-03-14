@@ -215,12 +215,20 @@
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
                     <section id="deploy-auth-wall" class="quick-upload">
-                        <h3>🔐 Unlock Deploy</h3>
-                        <p>Create or unlock a local wallet to sign and deploy your website.</p>
+                        <div>
+                            <h3>🔐 Welcome back</h3>
+                            <p>Choose how you want to continue to signed deploy.</p>
+                        </div>
+
                         <div class="button-group">
-                            <button id="register-wallet-btn" class="btn btn-primary">Create Local Wallet</button>
-                            <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock Local Wallet</button>
-                            <button id="recover-wallet-btn" class="btn btn-secondary">Recover from Seed</button>
+                            <button id="unlock-wallet-btn" class="btn btn-primary">🔓 Unlock Wallet</button>
+                            <button id="register-wallet-btn" class="btn btn-secondary">✨ Create Wallet</button>
+                            <button id="recover-wallet-btn" class="btn btn-secondary">🌱 Recover Wallet</button>
+                        </div>
+
+                        <div>
+                            <p><strong>No external wallet required.</strong></p>
+                            <p>Signing happens locally in your browser before deployment.</p>
                         </div>
                     </section>
 
@@ -322,14 +330,6 @@
                                 <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
                                 <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
                             </div>
-                        </section>
-
-                        <section class="quick-upload">
-                            <h3>🪪 Deploy Identity</h3>
-                            <p>This area shows the signer only after you unlock or create a local wallet.</p>
-                            <p id="identity-badge-deploy">Identity: anonymous</p>
-                            <p id="auth-status-deploy">Status: anonymous</p>
-                            <p id="local-wallet-meta-deploy">Local wallet: not registered</p>
                         </section>
                     </div>
                 </div>
@@ -504,6 +504,7 @@
                     <button id="recover-wallet-cancel" type="button" class="close-btn">×</button>
                 </div>
                 <div class="modal-body">
+                    <div id="recover-wallet-error" class="hidden"></div>
                     <form id="recover-wallet-form">
                         <p>Enter your 12-word seed phrase to recover your local wallet.</p>
                         <input
