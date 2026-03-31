@@ -383,7 +383,21 @@ export async function initializeWebTorrent() {
 
     return new Promise((resolve) => {
         try {
-            this.client = new WebTorrent();
+            const browserTrackers = (this.trackers || []).filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl));
+            this.client = new WebTorrent({
+                tracker: {
+                    announce: browserTrackers
+                },
+                rtcConfig: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ],
+                    iceCandidatePoolSize: 8
+                }
+            });
 
             this.client.on('error', (err) => {
                 this.log('WebTorrent error: ' + err.message);
@@ -415,6 +429,20 @@ export async function initializeWebTorrent() {
             resolve();
         }
     });
+}
+
+export function isBrowserSupportedTracker(trackerUrl) {
+    if (!trackerUrl || typeof trackerUrl !== 'string') {
+        return false;
+    }
+
+    const normalized = trackerUrl.trim().toLowerCase();
+    return (
+        normalized.startsWith('wss://') ||
+        normalized.startsWith('ws://') ||
+        normalized.startsWith('https://') ||
+        normalized.startsWith('http://')
+    );
 }
 
 export function setupEventListeners() {

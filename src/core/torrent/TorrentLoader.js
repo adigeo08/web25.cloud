@@ -52,7 +52,13 @@ export async function loadSite(hash) {
 
     this.showLoadingOverlay();
 
-    const magnetURI = `magnet:?xt=urn:btih:${sanitizedHash}&tr=${this.trackers.join('&tr=')}`;
+    this.sendToServiceWorker('SITE_LOADING', { hash: sanitizedHash });
+
+    const trackerList = (this.trackers || [])
+        .filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl))
+        .map((trackerUrl) => encodeURIComponent(trackerUrl));
+    const trackerQuery = trackerList.length > 0 ? `&tr=${trackerList.join('&tr=')}` : '';
+    const magnetURI = `magnet:?xt=urn:btih:${sanitizedHash}${trackerQuery}`;
     this.log(`Magnet URI: ${magnetURI}`);
 
     try {

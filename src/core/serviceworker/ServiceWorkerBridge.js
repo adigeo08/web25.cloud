@@ -78,16 +78,24 @@ export function handleServiceWorkerResourceRequest(url, requestId, providedFileP
     const file = this.findFileInSiteData(filePath);
     if (file) {
         this.log(`Found file: ${filePath} (${file.size} bytes, ${file.type})`);
+        const rawContent = file.content;
+        const arrayBuffer =
+            rawContent instanceof ArrayBuffer
+                ? rawContent.slice(0)
+                : rawContent?.buffer instanceof ArrayBuffer
+                  ? rawContent.buffer.slice(rawContent.byteOffset || 0, (rawContent.byteOffset || 0) + rawContent.byteLength)
+                  : new Uint8Array(rawContent).buffer;
 
-        // Convert ArrayBuffer to Array for structured cloning
-        const dataArray = Array.from(new Uint8Array(file.content));
-
-        this.sendToServiceWorker('RESOURCE_RESPONSE', {
-            requestId,
-            url,
-            data: dataArray,
-            contentType: file.type
-        });
+        this.sendToServiceWorker(
+            'RESOURCE_RESPONSE',
+            {
+                requestId,
+                url,
+                data: arrayBuffer,
+                contentType: file.type
+            },
+            [arrayBuffer]
+        );
     } else {
         this.log(`File not found: ${filePath}`);
         this.log(`Available files: ${Object.keys(this.currentSiteData).join(', ')}`);
@@ -95,7 +103,7 @@ export function handleServiceWorkerResourceRequest(url, requestId, providedFileP
     }
 }
 
-export async function sendToServiceWorker(type, data) {
+export async function sendToServiceWorker(type, data, transfer = []) {
     // Ensure we have a controller
     if (!navigator.serviceWorker.controller) {
         this.log('No SW controller, waiting for controller...');
@@ -104,7 +112,7 @@ export async function sendToServiceWorker(type, data) {
     }
 
     if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type, ...data });
+        navigator.serviceWorker.controller.postMessage({ type, ...data }, transfer);
         this.log(`Sent to SW: ${type}`);
     } else {
         this.log('ERROR: Still no SW controller available after waiting');

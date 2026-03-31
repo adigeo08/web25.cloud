@@ -84,9 +84,28 @@ function handleResourceResponse(data) {
     if (pendingRequest) {
         pendingRequests.delete(requestId);
 
-        if (fileData && fileData.length > 0) {
-            // Convert array back to Uint8Array
-            const uint8Array = new Uint8Array(fileData);
+        if (fileData) {
+            let uint8Array = null;
+            if (fileData instanceof ArrayBuffer) {
+                uint8Array = new Uint8Array(fileData);
+            } else if (ArrayBuffer.isView(fileData)) {
+                uint8Array = new Uint8Array(fileData.buffer, fileData.byteOffset, fileData.byteLength);
+            } else if (Array.isArray(fileData)) {
+                uint8Array = new Uint8Array(fileData);
+            }
+
+            if (!uint8Array || uint8Array.length === 0) {
+                pendingRequest.resolve(
+                    new Response('File not found in torrent', {
+                        status: 404,
+                        statusText: 'Not Found',
+                        headers: {
+                            'Content-Type': 'text/plain'
+                        }
+                    })
+                );
+                return;
+            }
 
             // Check if this is a media file
             if (isMediaFile(contentType) && uint8Array.length > 1024 * 100) {
@@ -154,6 +173,21 @@ function isMediaFile(contentType) {
         return false;
     }
     return contentType.startsWith('video/') || contentType.startsWith('audio/') || contentType === 'image/gif';
+}
+
+function isMediaPath(filePath) {
+    if (!filePath) return false;
+    const lower = filePath.toLowerCase();
+    return (
+        lower.endsWith('.mp4') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.mkv') ||
+        lower.endsWith('.mp3') ||
+        lower.endsWith('.wav') ||
+        lower.endsWith('.ogg') ||
+        lower.endsWith('.m4a') ||
+        lower.endsWith('.gif')
+    );
 }
 
 function createMediaResponse(uint8Array, contentType, range) {
@@ -473,8 +507,8 @@ async function requestResourceFromMainThread(requestUrl, filePath, range) {
                 resolve(createNavigationFallback(filePath));
             });
 
-        // Timeout after 10 seconds for media files, 5 for others
-        const timeout = isMediaFile(filePath) ? 10000 : 5000;
+        // Timeout after 30 seconds for media files, 15 for others
+        const timeout = isMediaPath(filePath) ? 30000 : 15000;
         setTimeout(() => {
             if (pendingRequests.has(requestId)) {
                 pendingRequests.delete(requestId);
