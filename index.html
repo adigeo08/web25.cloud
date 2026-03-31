@@ -30,7 +30,7 @@
         />
 
         <!-- PWA Meta Tags -->
-        <meta name="theme-color" content="#66d4ea" />
+        <meta name="theme-color" content="#05070d" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -49,7 +49,8 @@
                 display: flex;
                 gap: 0.25rem;
                 padding: 1rem 2rem 0;
-                background: rgba(0, 0, 0, 0.15);
+                background: rgba(2, 8, 18, 0.95);
+                border-bottom: 1px solid rgba(0, 255, 157, 0.2);
                 flex-wrap: wrap;
             }
             .tab-btn {
@@ -59,21 +60,22 @@
                 cursor: pointer;
                 font-size: 0.95rem;
                 font-weight: 600;
-                background: rgba(255, 255, 255, 0.15);
-                color: rgba(255, 255, 255, 0.8);
+                background: rgba(16, 28, 51, 0.85);
+                border: 1px solid rgba(0, 209, 255, 0.25);
+                color: #8ad5b0;
                 transition: all 0.25s ease;
                 display: inline-flex;
                 align-items: center;
                 gap: 0.4rem;
             }
             .tab-btn:hover {
-                background: rgba(255, 255, 255, 0.25);
-                color: #fff;
+                background: rgba(0, 255, 157, 0.18);
+                color: #d8ffe2;
             }
             .tab-btn.active {
-                background: #fff;
-                color: #504ba2;
-                box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+                background: #0f172a;
+                color: #00ff9d;
+                box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.45);
             }
             .tab-panel {
                 display: none;
@@ -88,8 +90,8 @@
                 font-weight: 700;
                 padding: 0.15rem 0.45rem;
                 border-radius: 999px;
-                background: #f6ad55;
-                color: #1a202c;
+                background: #00ff9d;
+                color: #04140d;
                 vertical-align: middle;
                 margin-left: 0.3rem;
                 letter-spacing: 0.03em;
@@ -105,13 +107,13 @@
             .roadmap-card {
                 border-radius: 14px;
                 padding: 1.5rem;
-                border: 2px solid #e2e8f0;
-                background: #f7fafc;
+                border: 2px solid rgba(0, 255, 157, 0.2);
+                background: rgba(10, 19, 37, 0.88);
             }
             .roadmap-card h4 {
                 font-size: 1.15rem;
                 margin-bottom: 0.75rem;
-                color: #4a5568;
+                color: #9fe7bf;
             }
             .roadmap-card ul {
                 list-style: none;
@@ -119,12 +121,12 @@
             }
             .roadmap-card ul li {
                 padding: 0.4rem 0;
-                color: #555;
+                color: #8fb7a1;
                 font-size: 0.95rem;
             }
             .roadmap-card ul li::before {
                 content: '→ ';
-                color: #667eea;
+                color: #00d1ff;
                 font-weight: bold;
             }
             /* ── coming-soon panel ── */
@@ -137,11 +139,11 @@
                 margin-bottom: 1rem;
             }
             .coming-soon-panel h3 {
-                color: #4a5568;
+                color: #9fe7bf;
                 margin-bottom: 0.75rem;
             }
             .coming-soon-panel p {
-                color: #718096;
+                color: #89a79a;
                 max-width: 500px;
                 margin: 0 auto 1.5rem;
             }
@@ -154,7 +156,7 @@
             }
             .feature-list li {
                 padding: 0.5rem 0;
-                color: #4a5568;
+                color: #9fe7bf;
                 display: flex;
                 gap: 0.5rem;
                 align-items: flex-start;
@@ -239,7 +241,10 @@
                                 <div class="drop-content">
                                     <div class="drop-icon">📁</div>
                                     <h4>Drag &amp; Drop Your Website</h4>
-                                    <p>Drop a folder with your static site files. We bundle it in browser memory, then sign and deploy.</p>
+                                    <p>
+                                        Drop a folder with your static site files. We bundle it in browser memory, then
+                                        sign and deploy.
+                                    </p>
                                     <div class="drop-buttons">
                                         <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
                                     </div>
@@ -261,7 +266,9 @@
                                         <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
                                         <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
                                         <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
-                                        <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
+                                        <p>
+                                            <strong>Signature:</strong> <code id="result-signature-preview">N/A</code>
+                                        </p>
                                         <p>
                                             <strong>Signature status:</strong>
                                             <code id="result-signature-status">UNVERIFIED</code>
@@ -277,7 +284,10 @@
                                     <div class="hosting-notice">
                                         <div class="notice-box">
                                             <h5>☁️ Hosting Notice</h5>
-                                            <p>Your website is signed, deployed, and seeding from an in-memory bundle in this session.</p>
+                                            <p>
+                                                Your website is signed, deployed, and seeding from an in-memory bundle
+                                                in this session.
+                                            </p>
                                             <p>Keep this tab open for longer availability.</p>
                                         </div>
                                     </div>
@@ -398,8 +408,13 @@
                             <div class="req">🔗 All resources should use relative paths</div>
                             <div class="req">⚡ Only static content (HTML, CSS, JS, images, fonts, etc.)</div>
                             <div class="req">🔒 Files are served in a sandboxed environment for security</div>
-                            <div class="req">🧠 Deploy flow seeds from an in-memory bundle, not directly from local folder handles</div>
-                            <div class="req">✅ On load, signature metadata is verified and mirrored into <code>manifest.web25.json</code></div>
+                            <div class="req">
+                                🧠 Deploy flow seeds from an in-memory bundle, not directly from local folder handles
+                            </div>
+                            <div class="req">
+                                ✅ On load, signature metadata is verified and mirrored into
+                                <code>manifest.web25.json</code>
+                            </div>
                             <div class="req">📱 Responsive design recommended for best experience</div>
                             <div class="req">🧹 Content is automatically sanitized for security</div>
                         </div>
