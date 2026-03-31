@@ -239,7 +239,7 @@
                                 <div class="drop-content">
                                     <div class="drop-icon">📁</div>
                                     <h4>Drag &amp; Drop Your Website</h4>
-                                    <p>Drop a folder with your static site files, then sign and deploy it.</p>
+                                    <p>Drop a folder with your static site files. We bundle it in browser memory, then sign and deploy.</p>
                                     <div class="drop-buttons">
                                         <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
                                     </div>
@@ -277,7 +277,7 @@
                                     <div class="hosting-notice">
                                         <div class="notice-box">
                                             <h5>☁️ Hosting Notice</h5>
-                                            <p>Your website is signed, deployed, and seeding from this session.</p>
+                                            <p>Your website is signed, deployed, and seeding from an in-memory bundle in this session.</p>
                                             <p>Keep this tab open for longer availability.</p>
                                         </div>
                                     </div>
@@ -290,15 +290,15 @@
                             <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             <div class="deploy-stepper">
                                 <span class="step-chip">1. Select files</span>
-                                <span class="step-chip">2. Prepare artifact</span>
+                                <span class="step-chip">2. Build in-memory bundle</span>
                                 <span class="step-chip">3. Review payload</span>
                                 <span class="step-chip">4. Sign payload</span>
-                                <span class="step-chip">5. Deploy signed torrent</span>
+                                <span class="step-chip">5. Deploy signed memory torrent</span>
                                 <span class="step-chip">6. Live and seeding</span>
                             </div>
                             <div class="deploy-stage-box">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
-                                <div id="deploy-stage-detail" class="stage-detail">Artifact not staged</div>
+                                <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
                             </div>
                             <div class="button-group">
                                 <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Payload</button>
@@ -318,6 +318,7 @@
                             <div class="steps">
                                 <div class="step">🎨 Build a static website with HTML, CSS, JavaScript, and assets</div>
                                 <div class="step">📤 Upload your folder using the area above</div>
+                                <div class="step">🧠 Build and verify the in-memory bundle (paths normalized)</div>
                                 <div class="step">✍️ Sign the deploy payload with your local identity</div>
                                 <div class="step">🔗 Copy and share your unique Web25 link</div>
                                 <div class="step">☁️ Keep this tab open while you seed the site</div>
@@ -393,10 +394,12 @@
                     <section class="requirements">
                         <h3>📋 Requirements for Hosted Sites</h3>
                         <div class="req-list">
-                            <div class="req">📄 Must contain an index.html file (in root or subfolder)</div>
+                            <div class="req">📄 Must contain an index.html file in the bundled artifact</div>
                             <div class="req">🔗 All resources should use relative paths</div>
                             <div class="req">⚡ Only static content (HTML, CSS, JS, images, fonts, etc.)</div>
                             <div class="req">🔒 Files are served in a sandboxed environment for security</div>
+                            <div class="req">🧠 Deploy flow seeds from an in-memory bundle, not directly from local folder handles</div>
+                            <div class="req">✅ On load, signature metadata is verified and mirrored into <code>manifest.web25.json</code></div>
                             <div class="req">📱 Responsive design recommended for best experience</div>
                             <div class="req">🧹 Content is automatically sanitized for security</div>
                         </div>

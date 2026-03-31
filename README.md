@@ -20,7 +20,8 @@ The application UI is now separated into:
   - Delete Local Wallet
 - **Publish**
   - Select/drop files
-  - Create torrent
+  - Build in-memory bundle
+  - Create torrent from memory bundle
   - Preview signing payload
   - Sign payload
   - Publish output (signed metadata)
@@ -94,10 +95,13 @@ Fields used:
 
 Signing flow:
 
-1. User creates/loads torrent
-2. App keeps publish candidate (hash + site metadata)
-3. User signs payload with active identity (external/local)
-4. Signed publish output is generated in-browser
+1. User drops/selects site files
+2. App builds an in-memory normalized bundle (browser memory only)
+3. App creates torrent from that memory bundle and keeps publish candidate (hash + site metadata)
+4. User signs payload with active identity (external/local)
+5. Signed publish output is generated in-browser
+
+At load time (hash browse flow), the client verifies signature metadata from the torrent root and mirrors it into `manifest.web25.json` for runtime introspection and consistency checks.
 
 ---
 
@@ -191,7 +195,7 @@ npm run build
 ## Legacy P2P hosting behavior (still available)
 
 - Drag/drop static website folder
-- Generate torrent hash + shareable URL
+- Generate torrent hash + shareable URL from an in-memory deploy bundle
 - Keep tab open to continue seeding
 - Load any site by hash using Browse/Load tab
 
