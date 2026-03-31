@@ -265,9 +265,9 @@ export function setupAuthAwareUi(state) {
 export async function loadRequiredLibraries() {
     this.log('Loading required libraries...');
 
-    // Load WebTorrent from local scripts folder
+    // Load WebTorrent (prefer modern ESM bundle to avoid asm.js console warnings)
     if (typeof WebTorrent === 'undefined') {
-        await this.loadScript('scripts/webtorrent.min.js');
+        await this.loadWebTorrentLibrary();
         this.log('WebTorrent library loaded');
     }
 
@@ -288,6 +288,35 @@ export async function loadRequiredLibraries() {
 
     this.librariesLoaded = true;
     this.log('All required libraries loaded successfully');
+}
+
+export async function loadWebTorrentLibrary() {
+    const urls = [
+        'https://esm.sh/webtorrent@2.8.4?bundle',
+        'https://cdn.jsdelivr.net/npm/webtorrent@2.8.4/dist/webtorrent.min.js'
+    ];
+
+    for (const url of urls) {
+        try {
+            if (url.includes('?bundle')) {
+                const module = await import(url);
+                const ctor = module.default || module.WebTorrent || module;
+                if (ctor) {
+                    window.WebTorrent = ctor;
+                    return;
+                }
+            } else {
+                await this.loadScript(url);
+                if (typeof WebTorrent !== 'undefined') {
+                    return;
+                }
+            }
+        } catch (error) {
+            this.log(`WebTorrent load fallback from ${url} failed: ${error?.message || error}`);
+        }
+    }
+
+    await this.loadScript('scripts/webtorrent.min.js');
 }
 
 export function loadScript(src, integrity = null, crossorigin = null) {
