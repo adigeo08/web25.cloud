@@ -12,12 +12,25 @@ import {
 
 /** Auto-lock the private key after 15 minutes of inactivity. */
 const AUTO_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
+const SESSION_KEY_STORAGE = 'web25.local.session.privateKey';
 
 /** @type {string | null} */
 let unlockedPrivateKey = null;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let autoLockTimer = null;
 let visibilityListenerAdded = false;
+
+function persistSessionKey(privateKey) {
+    try {
+        if (privateKey) {
+            sessionStorage.setItem(SESSION_KEY_STORAGE, privateKey);
+        } else {
+            sessionStorage.removeItem(SESSION_KEY_STORAGE);
+        }
+    } catch (_err) {
+        // ignore storage errors in restrictive browser contexts
+    }
+}
 
 /** Clears the auto-lock timer and wipes the private key from memory. */
 export function lockLocalWallet() {
@@ -26,6 +39,7 @@ export function lockLocalWallet() {
         autoLockTimer = null;
     }
     unlockedPrivateKey = null;
+    persistSessionKey(null);
 }
 
 /** Resets the inactivity timer every time the key is used. */
@@ -40,8 +54,8 @@ function resetAutoLock() {
 function setupAutoLock() {
     if (!visibilityListenerAdded) {
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'hidden') {
-                lockLocalWallet();
+            if (document.visibilityState === 'visible' && unlockedPrivateKey) {
+                resetAutoLock();
             }
         });
         visibilityListenerAdded = true;
@@ -83,6 +97,7 @@ export async function registerLocalWallet() {
     });
 
     unlockedPrivateKey = privateKey;
+    persistSessionKey(privateKey);
     setupAutoLock();
 
     return { address, seedPhrase: mnemonic };
@@ -114,6 +129,7 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
     });
 
     unlockedPrivateKey = privateKey;
+    persistSessionKey(privateKey);
     setupAutoLock();
     return { address };
 }
@@ -124,13 +140,42 @@ export async function unlockLocalWallet() {
     }
 
     unlockedPrivateKey = await decryptPrivateKey(record.encryptedPrivateKey, record.iv);
+    persistSessionKey(unlockedPrivateKey);
     await saveLocalWallet({ ...record, lastUsedAt: new Date().toISOString() });
     setupAutoLock();
     return { address: record.address };
 }
 
+async function restoreSessionKey(record) {
+    if (!record || unlockedPrivateKey) {
+        return;
+    }
+
+    let persistedKey = null;
+    try {
+        persistedKey = sessionStorage.getItem(SESSION_KEY_STORAGE);
+    } catch (_err) {
+        persistedKey = null;
+    }
+
+    if (!persistedKey) {
+        return;
+    }
+
+    const viemAccounts = await loadViemAccounts();
+    const restoredAddress = viemAccounts.privateKeyToAccount(/** @type {`0x${string}`} */ (persistedKey)).address;
+    if (restoredAddress.toLowerCase() !== record.address.toLowerCase()) {
+        persistSessionKey(null);
+        return;
+    }
+
+    unlockedPrivateKey = persistedKey;
+    resetAutoLock();
+}
+
 export async function getLocalWalletStatus() {
     const record = await getLocalWalletRecord();
+    await restoreSessionKey(record);
     return {
         exists: Boolean(record),
         address: record?.address || null,
