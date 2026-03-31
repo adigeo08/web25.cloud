@@ -384,6 +384,11 @@ export async function initializeWebTorrent() {
     return new Promise((resolve) => {
         try {
             const browserTrackers = (this.trackers || []).filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl));
+            if (browserTrackers.length === 0) {
+                this.log('[WebTorrent] WARN: No browser-friendly trackers configured. Falling back to DHT/local peers only.');
+            } else {
+                this.log(`[WebTorrent] Browser trackers enabled: ${browserTrackers.length}`);
+            }
             this.client = new WebTorrent({
                 tracker: {
                     announce: browserTrackers
@@ -395,9 +400,10 @@ export async function initializeWebTorrent() {
                         { urls: 'stun:stun2.l.google.com:19302' },
                         { urls: 'stun:global.stun.twilio.com:3478' }
                     ],
-                    iceCandidatePoolSize: 8
+                    iceCandidatePoolSize: 10
                 }
             });
+            this.log('[WebTorrent] rtcConfig initialized (STUN + iceCandidatePoolSize=10)');
 
             this.client.on('error', (err) => {
                 this.log('WebTorrent error: ' + err.message);
@@ -439,9 +445,7 @@ export function isBrowserSupportedTracker(trackerUrl) {
     const normalized = trackerUrl.trim().toLowerCase();
     return (
         normalized.startsWith('wss://') ||
-        normalized.startsWith('ws://') ||
-        normalized.startsWith('https://') ||
-        normalized.startsWith('http://')
+        normalized.startsWith('https://')
     );
 }
 

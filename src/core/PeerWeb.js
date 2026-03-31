@@ -33,7 +33,11 @@ class PeerWeb {
         this.processingTimeout = null;
         this.signedTorrentMetadata = new Map();
         this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
-        this.trackers = [
+        const overrideTrackers =
+            Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0
+                ? window.PEERWEB_TRACKERS
+                : null;
+        this.trackers = overrideTrackers || [
             'wss://tracker.btorrent.xyz',
             'wss://tracker.openwebtorrent.com',
             'wss://tracker.webtorrent.dev',
