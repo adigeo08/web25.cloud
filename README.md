@@ -1,6 +1,6 @@
 # ☁️ Web25.Cloud
 
-**Decentralized web platform for peer-to-peer static site hosting + wallet-based identity + signed publishing, fully in-browser.**
+**Decentralized web platform for peer-to-peer static site hosting + local in-browser signing + signed publishing, fully in-browser.**
 
 Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware publishing flow.
 
@@ -13,9 +13,9 @@ Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware pu
 The application UI is now separated into:
 
 - **Identity / Auth**
-  - Connect Wallet (WalletConnect)
   - Register Local Wallet
   - Unlock Local Wallet
+  - Recover Local Wallet from seed phrase
   - Disconnect
   - Delete Local Wallet
 - **Publish**
@@ -28,32 +28,14 @@ The application UI is now separated into:
 - **Browse / Load**
   - Existing torrent-hash loading flow remains available
 
----
-
-### 2) External wallet (wagmi + WalletConnect)
-
-External identity supports:
-
-- WalletConnect-based connection via wagmi connectors
-- Display of connected address in UI
-- Message signing for torrent publish payloads
-- Disconnect flow
-
-`WalletConnect projectId` can be provided via:
-
-- `window.WALLETCONNECT_PROJECT_ID`
-- or `localStorage['walletconnect_project_id']`
-
-If none is set, a demo fallback value is used.
-
----
-
-### 3) Local browser wallet (viem + WebCrypto + IndexedDB)
+### 2) Local browser wallet (viem + WebCrypto + IndexedDB)
 
 Local identity supports:
 
 - Register local wallet
 - Generate and show seed phrase once
+- Auto-copy generated seed phrase to clipboard (best effort)
+- Security warning on generation: **do not use this wallet for deposits or storing funds**
 - Persist wallet metadata in IndexedDB
 - Unlock and sign publish payloads
 - Delete local wallet
@@ -75,11 +57,11 @@ Private key is **not stored in plaintext**:
 3. Encrypted key + IV are stored in IndexedDB.
 4. Private key is decrypted only temporarily in memory for signing.
 
-> Note: seed phrase is displayed at registration time and not persisted in clear text.
+> Note: seed phrase is displayed at registration time and not persisted in clear text. Save it immediately.
 
 ---
 
-### 4) Deterministic publish signing payload
+### 3) Deterministic publish signing payload
 
 Torrent publish signature payload is deterministic and serialized predictably.
 
@@ -98,10 +80,20 @@ Signing flow:
 1. User drops/selects site files
 2. App builds an in-memory normalized bundle (browser memory only)
 3. App creates torrent from that memory bundle and keeps publish candidate (hash + site metadata)
-4. User signs payload with active identity (external/local)
+4. User signs payload with active local identity
 5. Signed publish output is generated in-browser
 
 At load time (hash browse flow), the client verifies signature metadata from the torrent root and mirrors it into `manifest.web25.json` for runtime introspection and consistency checks.
+
+---
+
+### 4) Signed deploy session persistence (refresh-safe)
+
+- Signed deploy artifacts are persisted in `localStorage` under `web25.deploy.session.v1`
+- On refresh, Web25.Cloud restores signing/deploy UI state and re-adds the signed torrent to WebTorrent
+- This enables continuing seeding/redeploy flows without repeating sign steps in normal scenarios
+- WebTorrent runtime script is loaded from:
+  - `https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js`
 
 ---
 
@@ -114,7 +106,6 @@ src/
 ├── auth/
 │   ├── AuthController.js
 │   ├── AuthState.js
-│   ├── ExternalWalletService.js
 │   ├── LocalWalletService.js
 │   ├── SeedPhraseService.js
 │   ├── SecureKeyStore.js
@@ -123,7 +114,6 @@ src/
 ├── ui/
 │   ├── auth/
 │   │   ├── AuthPanel.js
-│   │   ├── ConnectWalletModal.js
 │   │   ├── RegisterWalletModal.js
 │   │   ├── SeedPhraseScreen.js
 │   │   ├── UnlockWalletModal.js
@@ -133,11 +123,6 @@ src/
 │   │   ├── PublishPanel.js
 │   │   ├── PublishReviewModal.js
 │   │   └── SignatureStatus.js
-│
-├── web3/
-│   ├── wagmiConfig.js
-│   ├── walletConnect.js
-│   └── viemClients.js
 │
 ├── torrent/
 │   ├── TorrentPublishService.js
@@ -152,7 +137,6 @@ src/
 
 - Modularized peer web core
 - Identity/Auth panel and flows
-- WalletConnect external wallet integration
 - Local encrypted wallet persistence (WebCrypto + IndexedDB)
 - Deterministic publish payload + signing flow
 - Publish-to-identity linkage in browser
@@ -162,8 +146,8 @@ src/
 - Smart contracts
 - Backend auth
 - Token gating
-- Multi-wallet management
-- Hardware wallets
+- Multi-wallet management for signing
+- Hardware wallet integration
 
 ---
 

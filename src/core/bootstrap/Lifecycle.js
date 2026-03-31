@@ -7,8 +7,10 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
-import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
+
+const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
+const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
 export async function init() {
     try {
@@ -20,6 +22,7 @@ export async function init() {
         this.checkURL();
         this.updateDebugToggle();
         await this.initAuth();
+        await this.restoreDeploySession();
     } catch (error) {
         console.error('PeerWeb initialization failed:', error);
         this.showError('Failed to initialize PeerWeb: ' + error.message);
@@ -35,37 +38,11 @@ export async function initAuth() {
     this.lastDeployResult = null;
     this.setupAuthAwareUi(this.authController.state);
     this.refreshDeployUiState();
-    this.setupWalletConnectButton();
     renderSignatureStatus(null);
     renderPublishReview(null);
     renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
     hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
-}
-
-export function setupWalletConnectButton() {
-    const button = /** @type {HTMLButtonElement | null} */ (document.getElementById('connect-wallet-btn'));
-    if (!button) return;
-
-    const enabled = hasWalletConnectProjectId();
-    button.disabled = !enabled;
-    if (!enabled) {
-        button.title =
-            'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
-        const existingHint = button.parentElement?.querySelector('.wc-hint');
-        if (!existingHint) {
-            const hint = document.createElement('small');
-            hint.className = 'wc-hint';
-            hint.textContent =
-                '⚠️ WalletConnect: set project ID in console → localStorage.setItem("walletconnect_project_id", "YOUR_ID")';
-            hint.style.cssText = 'color: #e53e3e; display: block; margin-top: 0.25rem; font-size: 0.75rem;';
-            button.parentElement?.appendChild(hint);
-        }
-    } else {
-        button.title = '';
-        const existingHint = button.parentElement?.querySelector('.wc-hint');
-        if (existingHint) existingHint.remove();
-    }
 }
 
 
@@ -78,6 +55,7 @@ export function refreshDeployUiState() {
 export function invalidateSignedState(message = 'Signature invalidated') {
     this.lastSignature = null;
     this.lastSignedPublish = null;
+    this.clearDeploySession();
 
     renderSignatureStatus(null);
     renderPublishReview(null);
@@ -164,6 +142,7 @@ export async function signStagedPayload() {
     this.lastSignature = signature;
     this.lastSignedPublish = attachPublishMetadata(prepared.infoHash, signature);
     this.lastPublishCandidate.signedTorrentFile = signedArtifact.signedTorrent;
+    this.persistDeploySession();
 
     renderSignatureStatus(signature);
     renderPublishReview(signature.payload);
@@ -255,6 +234,7 @@ export async function deploySignedArtifact() {
     });
 
     this.lastDeployResult = { hash, url, signedBy: identity.address };
+    this.persistDeploySession();
     updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live and seeding from memory');
 }
@@ -291,9 +271,9 @@ export function setupAuthAwareUi(state) {
 export async function loadRequiredLibraries() {
     this.log('Loading required libraries...');
 
-    // Load WebTorrent from local scripts folder
+    // Load WebTorrent only from the CDN endpoint requested for reliability.
     if (typeof WebTorrent === 'undefined') {
-        await this.loadScript('scripts/webtorrent.min.js');
+        await this.loadScript(WEBTORRENT_CDN_URL);
         this.log('WebTorrent library loaded');
     }
 
@@ -577,6 +557,140 @@ export function setupEventListeners() {
             }
         }
     });
+}
+
+export function persistDeploySession() {
+    if (!this.lastPublishCandidate?.hash || !this.lastSignature || !this.lastPublishCandidate?.signedTorrentFile) {
+        return;
+    }
+
+    try {
+        const signedBy = this.lastSignature?.payload?.publisherAddress || this.lastDeployResult?.signedBy || null;
+        const payload = {
+            hash: this.lastPublishCandidate.hash,
+            siteName: this.lastPublishCandidate.siteName || 'website',
+            createdAt: this.lastPublishCandidate.createdAt || null,
+            signature: this.lastSignature,
+            signedTorrentBase64: this.bytesToBase64(this.lastPublishCandidate.signedTorrentFile),
+            deployed: Boolean(this.lastDeployResult),
+            deployResult: this.lastDeployResult || null,
+            signedBy
+        };
+        localStorage.setItem(DEPLOY_SESSION_STORAGE_KEY, JSON.stringify(payload));
+        this.log(`Deploy session saved for ${payload.hash}`);
+    } catch (error) {
+        this.log(`Failed to persist deploy session: ${error.message}`);
+    }
+}
+
+export function clearDeploySession() {
+    try {
+        localStorage.removeItem(DEPLOY_SESSION_STORAGE_KEY);
+    } catch (_) {}
+}
+
+export async function restoreDeploySession() {
+    if (!this.clientReady || !this.client) return;
+
+    let savedSession = null;
+    try {
+        const raw = localStorage.getItem(DEPLOY_SESSION_STORAGE_KEY);
+        if (!raw) return;
+        savedSession = JSON.parse(raw);
+    } catch (error) {
+        this.log(`Failed to parse deploy session: ${error.message}`);
+        this.clearDeploySession();
+        return;
+    }
+
+    if (!savedSession?.hash || !savedSession?.signature || !savedSession?.signedTorrentBase64) {
+        this.clearDeploySession();
+        return;
+    }
+
+    try {
+        const signedTorrentBytes = this.base64ToBytes(savedSession.signedTorrentBase64);
+        const signedTorrentBuffer = signedTorrentBytes.buffer.slice(
+            signedTorrentBytes.byteOffset,
+            signedTorrentBytes.byteOffset + signedTorrentBytes.byteLength
+        );
+
+        this.lastSignature = savedSession.signature;
+        this.lastSignedPublish = attachPublishMetadata(savedSession.hash, savedSession.signature);
+        this.lastPublishCandidate = {
+            hash: savedSession.hash,
+            siteName: savedSession.siteName || 'website',
+            createdAt: savedSession.createdAt || new Date().toISOString(),
+            signedTorrentFile: signedTorrentBuffer
+        };
+        this.lastDeployResult = savedSession.deployResult || null;
+
+        renderSignatureStatus(this.lastSignature);
+        renderPublishReview(this.lastSignature.payload || null);
+        renderDeployStage(
+            savedSession.deployed ? 'Deployment restored' : 'Signature restored',
+            savedSession.deployed
+                ? 'Reconnected to previous signed deployment after refresh'
+                : 'Signed bundle restored. You can deploy now.'
+        );
+
+        await new Promise((resolve, reject) => {
+            this.client.add(
+                signedTorrentBytes,
+                { announce: this.trackers },
+                (torrent) => {
+                    this.lastPublishCandidate.torrent = torrent;
+                    this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
+
+                    if (savedSession.deployed) {
+                        const url = `${window.location.origin}${window.location.pathname}?orc=${savedSession.hash}`;
+                        this.lastDeployResult =
+                            savedSession.deployResult || {
+                                hash: savedSession.hash,
+                                url,
+                                signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
+                            };
+                        this.showUploadResult(savedSession.hash, signedTorrentBuffer, torrent);
+                        this.renderDeploymentSummary({
+                            hash: savedSession.hash,
+                            url: this.lastDeployResult.url,
+                            signedBy: this.lastDeployResult.signedBy,
+                            signature: this.lastSignature.signature,
+                            signatureStatus: 'VERIFIED'
+                        });
+                    }
+                    resolve();
+                }
+            );
+
+            setTimeout(() => reject(new Error('Timed out while restoring deploy session')), 12000);
+        });
+
+        this.refreshDeployUiState();
+        this.toast.info('Signed torrent session restored after refresh.', 'Session restored');
+        this.log(`Deploy session restored for ${savedSession.hash}`);
+    } catch (error) {
+        this.log(`Failed to restore deploy session: ${error.message}`);
+        this.clearDeploySession();
+    }
+}
+
+export function bytesToBase64(value) {
+    const uint8 = value instanceof Uint8Array ? value : new Uint8Array(value);
+    let binary = '';
+    for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+    }
+    return btoa(binary);
+}
+
+export function base64ToBytes(base64Value) {
+    const binary = atob(base64Value);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
 }
 
 export function calculateProcessingTimeout(torrent) {
