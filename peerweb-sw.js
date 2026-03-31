@@ -23,6 +23,8 @@ let currentSiteFiles = new Set();
 const pendingRequests = new Map();
 /** @type {Map<string, {data: Uint8Array, contentType: string, length: number}>} */
 const mediaCache = new Map(); // Cache for media files
+const MEDIA_CACHE_MAX_BYTES = 300 * 1024 * 1024;
+let mediaCacheTotalBytes = 0;
 
 // Listen for messages from main thread
 self.addEventListener('message', (event) => {
@@ -39,6 +41,7 @@ self.addEventListener('message', (event) => {
             currentSiteHash = data.hash;
             currentSiteFiles.clear();
             mediaCache.clear(); // Clear media cache when loading new site
+            mediaCacheTotalBytes = 0;
             console.log('[PeerWeb SW] Site loading:', currentSiteHash);
             break;
 
@@ -55,6 +58,7 @@ self.addEventListener('message', (event) => {
             currentSiteHash = null;
             currentSiteFiles.clear();
             mediaCache.clear();
+            mediaCacheTotalBytes = 0;
             pendingRequests.clear();
             console.log('[PeerWeb SW] Site unloaded');
             break;
@@ -67,6 +71,10 @@ self.addEventListener('message', (event) => {
             handleMediaChunkResponse(data);
             break;
     }
+
+    if (data.__ackId && event.source) {
+        event.source.postMessage({ type: 'ACK', ackId: data.__ackId });
+    }
 });
 
 function handleResourceResponse(data) {
@@ -77,22 +85,50 @@ function handleResourceResponse(data) {
         requestId,
         url,
         contentType,
-        fileData ? `${fileData.length} bytes` : 'NO DATA'
+        fileData
+            ? `${fileData.byteLength || fileData.length || 0} bytes`
+            : 'NO DATA'
     );
 
     const pendingRequest = pendingRequests.get(requestId);
     if (pendingRequest) {
         pendingRequests.delete(requestId);
 
-        if (fileData && fileData.length > 0) {
-            // Convert array back to Uint8Array
-            const uint8Array = new Uint8Array(fileData);
+        if (fileData) {
+            let uint8Array = null;
+            if (fileData instanceof ArrayBuffer) {
+                uint8Array = new Uint8Array(fileData);
+            } else if (ArrayBuffer.isView(fileData)) {
+                uint8Array = new Uint8Array(fileData.buffer, fileData.byteOffset, fileData.byteLength);
+            } else if (Array.isArray(fileData)) {
+                uint8Array = new Uint8Array(fileData);
+            }
+
+            if (!uint8Array) {
+                pendingRequest.resolve(new Response('File not found in torrent', { status: 404, statusText: 'Not Found' }));
+                return;
+            }
+
+            // Compatibility: existing clients may expect 200 for empty files.
+            if (uint8Array.length === 0) {
+                pendingRequest.resolve(
+                    new Response(new Blob([Uint8Array.from(uint8Array)]), {
+                        status: 200,
+                        statusText: 'OK',
+                        headers: {
+                            'Content-Type': contentType || 'application/octet-stream',
+                            'Content-Length': '0'
+                        }
+                    })
+                );
+                return;
+            }
 
             // Check if this is a media file
             if (isMediaFile(contentType) && uint8Array.length > 1024 * 100) {
                 // > 100KB
                 // Cache media file for range requests
-                mediaCache.set(url, {
+                cacheMediaFile(url, {
                     data: uint8Array,
                     contentType: contentType,
                     length: uint8Array.length
@@ -129,7 +165,7 @@ function handleMediaChunkResponse(data) {
 
         if (chunk && chunk.length > 0) {
             const uint8Array = new Uint8Array(chunk);
-            const response = new Response(uint8Array, {
+            const response = new Response(new Blob([Uint8Array.from(uint8Array)]), {
                 status: 206,
                 statusText: 'Partial Content',
                 headers: {
@@ -156,10 +192,57 @@ function isMediaFile(contentType) {
     return contentType.startsWith('video/') || contentType.startsWith('audio/') || contentType === 'image/gif';
 }
 
+function isMediaPath(filePath) {
+    if (!filePath) return false;
+    const lower = filePath.toLowerCase();
+    return (
+        lower.endsWith('.mp4') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.mkv') ||
+        lower.endsWith('.mp3') ||
+        lower.endsWith('.wav') ||
+        lower.endsWith('.ogg') ||
+        lower.endsWith('.m4a') ||
+        lower.endsWith('.gif')
+    );
+}
+
+function cacheMediaFile(url, entry) {
+    const incomingSize = entry.length || 0;
+    if (incomingSize <= 0) return;
+
+    if (incomingSize > MEDIA_CACHE_MAX_BYTES) {
+        console.warn('[PeerWeb SW] Media caching refused (file exceeds cache max):', url, incomingSize);
+        return;
+    }
+
+    if (mediaCache.has(url)) {
+        const previous = mediaCache.get(url);
+        mediaCacheTotalBytes -= previous?.length || 0;
+        mediaCache.delete(url);
+    }
+
+    while (mediaCacheTotalBytes + incomingSize > MEDIA_CACHE_MAX_BYTES && mediaCache.size > 0) {
+        const oldestKey = mediaCache.keys().next().value;
+        const oldestEntry = mediaCache.get(oldestKey);
+        mediaCache.delete(oldestKey);
+        mediaCacheTotalBytes -= oldestEntry?.length || 0;
+        console.warn('[PeerWeb SW] Media cache eviction:', oldestKey, oldestEntry?.length || 0);
+    }
+
+    if (mediaCacheTotalBytes + incomingSize > MEDIA_CACHE_MAX_BYTES) {
+        console.warn('[PeerWeb SW] Media caching refused (insufficient space):', url, incomingSize);
+        return;
+    }
+
+    mediaCache.set(url, entry);
+    mediaCacheTotalBytes += incomingSize;
+}
+
 function createMediaResponse(uint8Array, contentType, range) {
     if (!range || !isMediaFile(contentType)) {
         // Regular response for non-media files or no range request
-        return new Response(uint8Array, {
+        return new Response(new Blob([Uint8Array.from(uint8Array)]), {
             status: 200,
             statusText: 'OK',
             headers: {
@@ -177,7 +260,7 @@ function createMediaResponse(uint8Array, contentType, range) {
     const chunkSize = end - start + 1;
     const chunk = uint8Array.slice(start, end + 1);
 
-    return new Response(chunk, {
+    return new Response(new Blob([Uint8Array.from(chunk)]), {
         status: 206,
         statusText: 'Partial Content',
         headers: {
@@ -473,8 +556,8 @@ async function requestResourceFromMainThread(requestUrl, filePath, range) {
                 resolve(createNavigationFallback(filePath));
             });
 
-        // Timeout after 10 seconds for media files, 5 for others
-        const timeout = isMediaFile(filePath) ? 10000 : 5000;
+        // Timeout after 30 seconds for media files, 15 for others
+        const timeout = isMediaPath(filePath) ? 30000 : 15000;
         setTimeout(() => {
             if (pendingRequests.has(requestId)) {
                 pendingRequests.delete(requestId);
@@ -614,3 +697,11 @@ self.addEventListener('activate', (event) => {
 });
 
 console.log('[PeerWeb SW] Service worker loaded and ready');
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        parseRangeHeader,
+        createMediaResponse,
+        isMediaPath
+    };
+}

@@ -52,7 +52,22 @@ export async function loadSite(hash) {
 
     this.showLoadingOverlay();
 
-    const magnetURI = `magnet:?xt=urn:btih:${sanitizedHash}&tr=${this.trackers.join('&tr=')}`;
+    const trackerList = (this.trackers || [])
+        .filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl))
+        .map((trackerUrl) => encodeURIComponent(trackerUrl));
+    if (trackerList.length === 0) {
+        this.log('[TorrentLoader] WARN: No browser-friendly trackers in magnet URI; fallback will rely on DHT/local peers');
+    }
+    const trackerQuery = trackerList.length > 0 ? `&tr=${trackerList.join('&tr=')}` : '';
+    const magnetURI = `magnet:?xt=urn:btih:${sanitizedHash}${trackerQuery}`;
+    const loadId = `load_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.sendToServiceWorker('SITE_LOADING', {
+        hash: sanitizedHash,
+        state: 'start',
+        loadId,
+        magnetURI,
+        expectedSize: null
+    });
     this.log(`Magnet URI: ${magnetURI}`);
 
     try {
@@ -103,6 +118,13 @@ export async function loadSite(hash) {
 
             torrent.on('done', async () => {
                 this.log('Download completed (100%)!');
+                this.sendToServiceWorker('SITE_LOADING', {
+                    hash: sanitizedHash,
+                    state: 'stop',
+                    loadId,
+                    magnetURI,
+                    expectedSize: torrent.length || null
+                });
                 if (!this.processingInProgress) {
                     this.processingInProgress = true;
                     if (this.processingTimeout) {
@@ -115,6 +137,13 @@ export async function loadSite(hash) {
 
             torrent.on('error', (error) => {
                 this.log(`Torrent error: ${error.message}`);
+                this.sendToServiceWorker('SITE_LOADING', {
+                    hash: sanitizedHash,
+                    state: 'stop',
+                    loadId,
+                    magnetURI,
+                    expectedSize: torrent.length || null
+                });
                 this.hideLoadingOverlay();
                 alert(
                     '❌ Torrent Load Error\n\n' +

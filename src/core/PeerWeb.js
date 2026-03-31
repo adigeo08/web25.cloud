@@ -33,14 +33,15 @@ class PeerWeb {
         this.processingTimeout = null;
         this.signedTorrentMetadata = new Map();
         this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
-        this.trackers = [
+        const overrideTrackers =
+            Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0
+                ? window.PEERWEB_TRACKERS
+                : null;
+        this.trackers = overrideTrackers || [
             'wss://tracker.btorrent.xyz',
             'wss://tracker.openwebtorrent.com',
-            'udp://tracker.leechers-paradise.org:6969',
-            'udp://tracker.coppersurfer.tk:6969',
-            'udp://tracker.opentrackr.org:1337',
-            'udp://explodie.org:6969',
-            'udp://tracker.empire-js.us:1337'
+            'wss://tracker.webtorrent.dev',
+            'wss://tracker.files.fm:7073/announce'
         ];
 
         this.init();

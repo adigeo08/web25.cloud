@@ -1,6 +1,7 @@
 // @ts-check
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
+import { normalizeToTransferableArrayBuffer } from './TransferUtils.js';
 
 export async function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
@@ -78,16 +79,20 @@ export function handleServiceWorkerResourceRequest(url, requestId, providedFileP
     const file = this.findFileInSiteData(filePath);
     if (file) {
         this.log(`Found file: ${filePath} (${file.size} bytes, ${file.type})`);
+        const arrayBuffer = normalizeToTransferableArrayBuffer(file.content);
+        this.log(`[SW Bridge] RESOURCE_RESPONSE bytes=${arrayBuffer ? arrayBuffer.byteLength : 0}`);
 
-        // Convert ArrayBuffer to Array for structured cloning
-        const dataArray = Array.from(new Uint8Array(file.content));
-
-        this.sendToServiceWorker('RESOURCE_RESPONSE', {
-            requestId,
-            url,
-            data: dataArray,
-            contentType: file.type
-        });
+        void this.sendToServiceWorker(
+            'RESOURCE_RESPONSE',
+            {
+                requestId,
+                url,
+                data: arrayBuffer,
+                contentType: file.type
+            },
+            arrayBuffer ? [arrayBuffer] : [],
+            { requireAck: true, ackTimeoutMs: 4000 }
+        );
     } else {
         this.log(`File not found: ${filePath}`);
         this.log(`Available files: ${Object.keys(this.currentSiteData).join(', ')}`);
@@ -95,7 +100,7 @@ export function handleServiceWorkerResourceRequest(url, requestId, providedFileP
     }
 }
 
-export async function sendToServiceWorker(type, data) {
+export async function sendToServiceWorker(type, data, transfer = [], options = {}) {
     // Ensure we have a controller
     if (!navigator.serviceWorker.controller) {
         this.log('No SW controller, waiting for controller...');
@@ -103,12 +108,57 @@ export async function sendToServiceWorker(type, data) {
         await this.waitForController();
     }
 
-    if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type, ...data });
-        this.log(`Sent to SW: ${type}`);
-    } else {
+    if (!navigator.serviceWorker.controller) {
         this.log('ERROR: Still no SW controller available after waiting');
+        return false;
     }
+
+    const requireAck = Boolean(options.requireAck);
+    const ackTimeoutMs = Number(options.ackTimeoutMs || 3000);
+    const ackId = requireAck ? `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+
+    const message = { type, ...data };
+    if (ackId) {
+        message.__ackId = ackId;
+    }
+
+    const doPostMessage = () => {
+        if (transfer && transfer.length > 0) {
+            navigator.serviceWorker.controller.postMessage(message, transfer);
+            this.log(`[SW Bridge] Sent to SW: ${type} (transfer=${transfer.length})`);
+        } else {
+            navigator.serviceWorker.controller.postMessage(message);
+            this.log(`[SW Bridge] Sent to SW: ${type} (structured clone)`);
+        }
+    };
+
+    try {
+        doPostMessage();
+    } catch (error) {
+        this.log(`[SW Bridge] Transfer failed, falling back to structured clone: ${error.message}`);
+        navigator.serviceWorker.controller.postMessage(message);
+    }
+
+    if (!requireAck) {
+        return true;
+    }
+
+    return new Promise((resolve) => {
+        let timeoutId = null;
+        const onMessage = (event) => {
+            if (event?.data?.type === 'ACK' && event?.data?.ackId === ackId) {
+                navigator.serviceWorker.removeEventListener('message', onMessage);
+                if (timeoutId) clearTimeout(timeoutId);
+                resolve(true);
+            }
+        };
+        navigator.serviceWorker.addEventListener('message', onMessage);
+        timeoutId = setTimeout(() => {
+            navigator.serviceWorker.removeEventListener('message', onMessage);
+            this.log(`[SW Bridge] ACK timeout for ${type} (${ackId})`);
+            resolve(false);
+        }, ackTimeoutMs);
+    });
 }
 
 export async function waitForController(timeout = null) {

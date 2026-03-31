@@ -383,7 +383,27 @@ export async function initializeWebTorrent() {
 
     return new Promise((resolve) => {
         try {
-            this.client = new WebTorrent();
+            const browserTrackers = (this.trackers || []).filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl));
+            if (browserTrackers.length === 0) {
+                this.log('[WebTorrent] WARN: No browser-friendly trackers configured. Falling back to DHT/local peers only.');
+            } else {
+                this.log(`[WebTorrent] Browser trackers enabled: ${browserTrackers.length}`);
+            }
+            this.client = new WebTorrent({
+                tracker: {
+                    announce: browserTrackers
+                },
+                rtcConfig: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ],
+                    iceCandidatePoolSize: 10
+                }
+            });
+            this.log('[WebTorrent] rtcConfig initialized (STUN + iceCandidatePoolSize=10)');
 
             this.client.on('error', (err) => {
                 this.log('WebTorrent error: ' + err.message);
@@ -415,6 +435,18 @@ export async function initializeWebTorrent() {
             resolve();
         }
     });
+}
+
+export function isBrowserSupportedTracker(trackerUrl) {
+    if (!trackerUrl || typeof trackerUrl !== 'string') {
+        return false;
+    }
+
+    const normalized = trackerUrl.trim().toLowerCase();
+    return (
+        normalized.startsWith('wss://') ||
+        normalized.startsWith('https://')
+    );
 }
 
 export function setupEventListeners() {

@@ -179,7 +179,9 @@ export function sanitizeHtml(html) {
     const config = {
         ADD_TAGS: ['link', 'style', 'script'],
         ADD_ATTR: ['href', 'src', 'type', 'rel', 'crossorigin', 'integrity', 'target', 'data', 'srcset'],
-        ALLOW_UNKNOWN_PROTOCOLS: true // Allow protocols like mailto:, tel:, etc.
+        ALLOW_UNKNOWN_PROTOCOLS: true, // Preserve compatibility for torrent/web3 linked content
+        ALLOWED_URI_REGEXP:
+            /^(?:(?:(?:https?|wss?|magnet|ipfs|ipns|blob|data|mailto|tel):)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
     };
     return DOMPurify.sanitize(html, config);
 }
