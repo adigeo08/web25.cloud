@@ -523,6 +523,7 @@ export async function handleFolderUpload(files) {
     this.lastSignedPublish = null;
     this.lastSignature = null;
     this.lastDeployResult = null;
+    this.clearDeploySession?.();
     this.invalidateSignedState?.('Artifact updated. Previous signature invalidated.');
 
     const output = document.getElementById('publish-output');
