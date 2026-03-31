@@ -7,7 +7,6 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
-import { hasWalletConnectProjectId } from '../../web3/walletConnect.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 
 export async function init() {
@@ -35,39 +34,12 @@ export async function initAuth() {
     this.lastDeployResult = null;
     this.setupAuthAwareUi(this.authController.state);
     this.refreshDeployUiState();
-    this.setupWalletConnectButton();
     renderSignatureStatus(null);
     renderPublishReview(null);
     renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
     hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
 }
-
-export function setupWalletConnectButton() {
-    const button = /** @type {HTMLButtonElement | null} */ (document.getElementById('connect-wallet-btn'));
-    if (!button) return;
-
-    const enabled = hasWalletConnectProjectId();
-    button.disabled = !enabled;
-    if (!enabled) {
-        button.title =
-            'WalletConnect disabled: set window.WALLETCONNECT_PROJECT_ID or localStorage.walletconnect_project_id.';
-        const existingHint = button.parentElement?.querySelector('.wc-hint');
-        if (!existingHint) {
-            const hint = document.createElement('small');
-            hint.className = 'wc-hint';
-            hint.textContent =
-                '⚠️ WalletConnect: set project ID in console → localStorage.setItem("walletconnect_project_id", "YOUR_ID")';
-            hint.style.cssText = 'color: #e53e3e; display: block; margin-top: 0.25rem; font-size: 0.75rem;';
-            button.parentElement?.appendChild(hint);
-        }
-    } else {
-        button.title = '';
-        const existingHint = button.parentElement?.querySelector('.wc-hint');
-        if (existingHint) existingHint.remove();
-    }
-}
-
 
 export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
@@ -125,7 +97,9 @@ export async function signStagedPayload() {
     updateDeployProgress({ label: 'Normalizing bundle paths', percent: 25, state: 'running' });
 
     if (this.lastPublishCandidate?.torrent?.destroy) {
-        try { this.lastPublishCandidate.torrent.destroy(); } catch (_) {}
+        try {
+            this.lastPublishCandidate.torrent.destroy();
+        } catch (_) {}
     }
 
     const prepared = await this.prepareDeployArtifact(this.pendingDeployFiles, ({ label, percent }) =>
@@ -291,9 +265,9 @@ export function setupAuthAwareUi(state) {
 export async function loadRequiredLibraries() {
     this.log('Loading required libraries...');
 
-    // Load WebTorrent from local scripts folder
+    // Load WebTorrent (prefer modern ESM bundle to avoid asm.js console warnings)
     if (typeof WebTorrent === 'undefined') {
-        await this.loadScript('scripts/webtorrent.min.js');
+        await this.loadWebTorrentLibrary();
         this.log('WebTorrent library loaded');
     }
 
@@ -314,6 +288,35 @@ export async function loadRequiredLibraries() {
 
     this.librariesLoaded = true;
     this.log('All required libraries loaded successfully');
+}
+
+export async function loadWebTorrentLibrary() {
+    const urls = [
+        'https://esm.sh/webtorrent@2.8.4?bundle',
+        'https://cdn.jsdelivr.net/npm/webtorrent@2.8.4/dist/webtorrent.min.js'
+    ];
+
+    for (const url of urls) {
+        try {
+            if (url.includes('?bundle')) {
+                const module = await import(url);
+                const ctor = module.default || module.WebTorrent || module;
+                if (ctor) {
+                    window.WebTorrent = ctor;
+                    return;
+                }
+            } else {
+                await this.loadScript(url);
+                if (typeof WebTorrent !== 'undefined') {
+                    return;
+                }
+            }
+        } catch (error) {
+            this.log(`WebTorrent load fallback from ${url} failed: ${error?.message || error}`);
+        }
+    }
+
+    await this.loadScript('scripts/webtorrent.min.js');
 }
 
 export function loadScript(src, integrity = null, crossorigin = null) {
@@ -383,9 +386,13 @@ export async function initializeWebTorrent() {
 
     return new Promise((resolve) => {
         try {
-            const browserTrackers = (this.trackers || []).filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl));
+            const browserTrackers = (this.trackers || []).filter((trackerUrl) =>
+                this.isBrowserSupportedTracker(trackerUrl)
+            );
             if (browserTrackers.length === 0) {
-                this.log('[WebTorrent] WARN: No browser-friendly trackers configured. Falling back to DHT/local peers only.');
+                this.log(
+                    '[WebTorrent] WARN: No browser-friendly trackers configured. Falling back to DHT/local peers only.'
+                );
             } else {
                 this.log(`[WebTorrent] Browser trackers enabled: ${browserTrackers.length}`);
             }
@@ -443,10 +450,7 @@ export function isBrowserSupportedTracker(trackerUrl) {
     }
 
     const normalized = trackerUrl.trim().toLowerCase();
-    return (
-        normalized.startsWith('wss://') ||
-        normalized.startsWith('https://')
-    );
+    return normalized.startsWith('wss://') || normalized.startsWith('https://');
 }
 
 export function setupEventListeners() {

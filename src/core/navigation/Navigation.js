@@ -10,7 +10,6 @@ export function updateSiteSignatureBadge(status) {
     badge.className = status.verified ? 'status-chip status-success' : 'status-chip status-pending';
 }
 
-
 export function checkURL() {
     const urlParams = new URLSearchParams(window.location.search);
     const orcHash = urlParams.get('orc');
@@ -135,10 +134,12 @@ export function showSiteViewer(url, hash, fromCache) {
         cacheStatus.textContent = fromCache ? '💾 From Cache' : '🌐 Fresh Download';
     }
 
-    this.updateSiteSignatureBadge(this.currentSiteSignatureStatus || { label: "Publisher: unverified", verified: false });
+    this.updateSiteSignatureBadge(
+        this.currentSiteSignatureStatus || { label: 'Publisher: unverified', verified: false }
+    );
 
     if (iframe) {
-        iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+        iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
 
         // Add error handler for iframe
         iframe.onerror = (e) => {
