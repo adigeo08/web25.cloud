@@ -506,8 +506,11 @@ export function readFileAsArrayBuffer(file) {
 export async function handleFolderUpload(files) {
     this.log(`Processing ${files.length} files for deployment`);
 
-    // Check for index.html
-    const hasIndex = files.some((file) => (file.webkitRelativePath || file.name).toLowerCase().includes('index.html'));
+    // Check for index.html in normalized deploy paths
+    const hasIndex = files.some((file) => {
+        const normalizedPath = this.getNormalizedDeployPath(file).toLowerCase();
+        return normalizedPath === 'index.html' || normalizedPath.endsWith('/index.html');
+    });
 
     if (!hasIndex) {
         if (!confirm('No index.html found. Continue anyway? (Site may not load properly)')) {
@@ -524,7 +527,7 @@ export async function handleFolderUpload(files) {
 
     const output = document.getElementById('publish-output');
     if (output) {
-        output.textContent = `Artifact staged with ${files.length} files. Sign the payload to continue.`;
+        output.textContent = `Artifact staged with ${files.length} files. Deploy uses an in-memory bundle (no direct local-directory seeding). Sign the payload to continue.`;
     }
 
     const resultEl = document.getElementById('upload-result');
@@ -532,7 +535,7 @@ export async function handleFolderUpload(files) {
         resultEl.classList.add('hidden');
     }
 
-    this.toast.success('Artifact staged. Sign payload to continue deployment.', 'Stage 1 complete');
+    this.toast.success('Artifact staged in memory. Sign payload to continue deployment.', 'Stage 1 complete');
 }
 
 export async function prepareDeployArtifact(files, onProgress) {
@@ -547,19 +550,21 @@ export async function prepareDeployArtifact(files, onProgress) {
     let timeoutId = null;
 
     try {
-        onProgress?.({ label: 'Creating torrent', percent: 45 });
+        onProgress?.({ label: 'Bundling files in memory', percent: 35 });
+        const inMemoryFiles = await this.buildInMemoryDeployBundle(files, onProgress);
+        onProgress?.({ label: 'Creating torrent from memory bundle', percent: 55 });
         const createdTorrent = await new Promise((resolve, reject) => {
             timeoutId = setTimeout(() => reject(new Error('Timed out while creating torrent')), 30000);
 
             this.client.seed(
-                files,
+                inMemoryFiles,
                 {
                     announce: this.trackers,
                     name: this.generateTorrentName(files),
-                    comment: 'Web25 Deploy Artifact',
+                    comment: 'Web25 Deploy Artifact (in-memory bundle)',
                     createdBy: 'Web25.Cloud Deploy',
                     private: false,
-                    pieceLength: this.calculateOptimalPieceLength(files)
+                    pieceLength: this.calculateOptimalPieceLength(inMemoryFiles)
                 },
                 (torrent) => {
                     if (timeoutId) {
@@ -576,6 +581,43 @@ export async function prepareDeployArtifact(files, onProgress) {
             clearTimeout(timeoutId);
         }
     }
+}
+
+export function getNormalizedDeployPath(file) {
+    const rawPath = (file.webkitRelativePath || file.path || file.name || '').replace(/\\/g, '/').trim();
+    const sanitized = rawPath.replace(/^\/+/, '');
+    return sanitized || file.name || 'unnamed-file';
+}
+
+export async function buildInMemoryDeployBundle(files, onProgress) {
+    const total = files.length;
+    const inMemoryFiles = [];
+
+    for (let i = 0; i < total; i++) {
+        const sourceFile = files[i];
+        const normalizedPath = this.getNormalizedDeployPath(sourceFile);
+        const buffer = await sourceFile.arrayBuffer();
+        const virtualFile = new File([buffer], sourceFile.name, {
+            type: sourceFile.type || 'application/octet-stream',
+            lastModified: sourceFile.lastModified || Date.now()
+        });
+
+        try {
+            Object.defineProperty(virtualFile, 'path', { value: normalizedPath });
+        } catch (_) {}
+
+        try {
+            Object.defineProperty(virtualFile, 'webkitRelativePath', { value: normalizedPath });
+        } catch (_) {}
+
+        inMemoryFiles.push(virtualFile);
+
+        const percent = 35 + Math.round(((i + 1) / total) * 15);
+        onProgress?.({ label: `Bundling files in memory (${i + 1}/${total})`, percent });
+    }
+
+    this.log(`Prepared in-memory deploy bundle with ${inMemoryFiles.length} files`);
+    return inMemoryFiles;
 }
 
 export function showUploadProgress(message) {

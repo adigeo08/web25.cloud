@@ -1,6 +1,7 @@
 // @ts-check
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
+import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
 
 export async function loadSite(hash) {
     // Sanitize hash first to prevent XSS
@@ -58,6 +59,27 @@ export async function loadSite(hash) {
         this.client.add(magnetURI, async (torrent) => {
             this.log(`Torrent added: ${torrent.name || 'Unknown'}`);
             this.log(`Signature status: ${this.currentSiteSignatureStatus.label}`);
+
+            // Verify embedded signed metadata when available from torrent payload.
+            try {
+                const rawTorrent = torrent.torrentFile || torrent._torrentFile || null;
+                if (rawTorrent) {
+                    const signedMeta = await readSignedTorrentMetadata(rawTorrent);
+                    if (signedMeta && signedMeta.torrentHash === sanitizedHash) {
+                        this.signedTorrentMetadata.set(sanitizedHash, signedMeta);
+                        this.currentSiteSignatureStatus = {
+                            label: signedMeta.verified
+                                ? `Verified publisher: ${signedMeta.publisher.slice(0, 10)}...`
+                                : `Unverified publisher: ${signedMeta.publisher.slice(0, 10)}...`,
+                            verified: Boolean(signedMeta.verified)
+                        };
+                        this.log(`Verified signed metadata at load: ${this.currentSiteSignatureStatus.label}`);
+                    }
+                }
+            } catch (metadataError) {
+                this.log(`Signed metadata verification skipped: ${metadataError.message}`);
+            }
+
             this.updatePeerStats(torrent);
 
             torrent.on('download', () => {
@@ -113,8 +135,8 @@ export async function loadSite(hash) {
             this.log(`Torrent size: ${this.formatBytes(this.currentTorrentSize)} (${torrentSizeMB.toFixed(2)} MB)`);
             this.log(`File count: ${this.currentFileCount}`);
             
-            // Find index file
-            const indexFile = this.findIndexFile(torrent.files);
+            // Find entry file (wait briefly for metadata/file list stabilization)
+            const indexFile = await this.waitForEntryFile(torrent);
             if (!indexFile) {
                 this.log('No index.html found!');
                 this.hideLoadingOverlay();
@@ -317,6 +339,9 @@ export async function processTorrentEarly(torrent, hash) {
 
     this.log(`Successfully processed ${Object.keys(siteData).length} files with index.html present`);
 
+    this.attachSignatureManifest(siteData, hash);
+    this.validateReceivedManifest(siteData, hash);
+
     // Cache the site (even if incomplete)
     await this.cache.set(hash, siteData);
 
@@ -406,6 +431,9 @@ export async function processTorrent(torrent, hash) {
     this.log(`Successfully processed ${Object.keys(siteData).length} files`);
     this.log(`File list: ${Object.keys(siteData).join(', ')}`);
 
+    this.attachSignatureManifest(siteData, hash);
+    this.validateReceivedManifest(siteData, hash);
+
     // Cache the site
     await this.cache.set(hash, siteData);
 
@@ -424,6 +452,105 @@ export function findIndexFile(files) {
     });
 }
 
+export function attachSignatureManifest(siteData, hash) {
+    const signedMeta = this.signedTorrentMetadata.get(hash);
+    const existingManifest = siteData['manifest.web25.json'];
+
+    let parsedManifest = null;
+    if (existingManifest && existingManifest.content) {
+        try {
+            parsedManifest = JSON.parse(new TextDecoder().decode(existingManifest.content));
+        } catch (_) {}
+    }
+
+    const enrichedManifest = {
+        schema: 'web25-signature-manifest-v1',
+        ...(parsedManifest || {}),
+        torrentHash: hash,
+        signatureSource: 'torrent-root-metadata',
+        signature: signedMeta
+            ? {
+                  publisher: signedMeta.publisher,
+                  signature: signedMeta.signature,
+                  signatureAlgorithm: signedMeta.signatureAlgorithm,
+                  signedAt: signedMeta.signedAt,
+                  chainDigest: signedMeta.digestHex,
+                  verified: Boolean(signedMeta.verified)
+              }
+            : null
+    };
+
+    const content = new TextEncoder().encode(JSON.stringify(enrichedManifest, null, 2));
+    siteData['manifest.web25.json'] = {
+        content,
+        type: 'application/json',
+        isText: true,
+        size: content.length
+    };
+}
+
+export function validateReceivedManifest(siteData, hash) {
+    const signedMeta = this.signedTorrentMetadata.get(hash);
+    const manifestEntry = siteData['manifest.web25.json'];
+    if (!signedMeta || !manifestEntry?.content) {
+        return;
+    }
+
+    try {
+        const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.content));
+        const manifestSignature = manifest?.signature || null;
+
+        if (!manifestSignature) {
+            this.log('Manifest signature missing; root metadata signature remains source of truth.');
+            return;
+        }
+
+        const consistent =
+            manifestSignature.publisher === signedMeta.publisher &&
+            manifestSignature.signature === signedMeta.signature &&
+            manifest.torrentHash === hash;
+
+        if (!consistent) {
+            this.currentSiteSignatureStatus = {
+                label: 'Signature manifest mismatch detected',
+                verified: false
+            };
+            this.log('Manifest signature mismatch with torrent root metadata');
+        } else {
+            this.log('Manifest signature matches torrent root metadata');
+        }
+    } catch (error) {
+        this.log(`Manifest verification skipped: ${error.message}`);
+    }
+}
+
+export async function waitForEntryFile(torrent, timeoutMs = 5000) {
+    const start = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+        const files = Array.isArray(torrent.files) ? torrent.files : [];
+        if (files.length > 0) {
+            const indexFile = this.findIndexFile(files);
+            if (indexFile) {
+                return indexFile;
+            }
+
+            // Fallback: accept any .html file if index.html is missing.
+            // This avoids hard-failing on torrents that have a valid single-page entry
+            // but use a non-standard filename.
+            const htmlFallback = files.find((file) => file.name.toLowerCase().endsWith('.html'));
+            if (htmlFallback) {
+                this.log(`No index.html found, using HTML fallback entry: ${htmlFallback.name}`);
+                return htmlFallback;
+            }
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return null;
+}
+
 export async function displayCachedSite(siteData, hash) {
     this.displaySite(siteData, hash, true);
 }
@@ -437,10 +564,17 @@ export function displaySite(siteData, hash, fromCache = false) {
     this.currentHash = hash;
 
     // Find index.html
-    const indexFileName = Object.keys(siteData).find((name) => {
+    let indexFileName = Object.keys(siteData).find((name) => {
         const lowerName = name.toLowerCase();
         return lowerName === 'index.html' || lowerName.endsWith('/index.html');
     });
+
+    if (!indexFileName) {
+        indexFileName = Object.keys(siteData).find((name) => name.toLowerCase().endsWith('.html'));
+        if (indexFileName) {
+            this.log(`No index.html in site data, using HTML fallback entry: ${indexFileName}`);
+        }
+    }
 
     if (!indexFileName) {
         alert(

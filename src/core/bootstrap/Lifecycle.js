@@ -118,11 +118,11 @@ export async function signStagedPayload() {
         throw new Error('Authenticate before signing.');
     }
 
-    renderDeployStage('Signing', 'Preparing deploy artifact for signature');
-    updateDeployProgress({ label: 'Reading files', percent: 10, state: 'running' });
+    renderDeployStage('Signing', 'Preparing in-memory deploy bundle for signature');
+    updateDeployProgress({ label: 'Reading files into browser memory', percent: 10, state: 'running' });
 
     const createdAt = new Date().toISOString();
-    updateDeployProgress({ label: 'Preparing artifact', percent: 25, state: 'running' });
+    updateDeployProgress({ label: 'Normalizing bundle paths', percent: 25, state: 'running' });
 
     if (this.lastPublishCandidate?.torrent?.destroy) {
         try { this.lastPublishCandidate.torrent.destroy(); } catch (_) {}
@@ -185,7 +185,7 @@ export async function signStagedPayload() {
     }
 
     updateDeployProgress({ label: 'Signature confirmed', percent: 100, state: 'success' });
-    renderDeployStage('Signature ready', 'Signed payload ready for deployment');
+    renderDeployStage('Signature ready', 'Signed in-memory bundle ready for deployment');
     this.refreshDeployUiState();
 }
 
@@ -214,7 +214,7 @@ export async function deploySignedArtifact() {
     const hash = this.lastPublishCandidate.hash;
     const identity = this.authController.getActiveIdentity();
 
-    renderDeployStage('Deploying', 'Finalizing signed torrent deployment');
+    renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
     updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
 
     this.showUploadResult(
@@ -229,6 +229,7 @@ export async function deploySignedArtifact() {
             {
                 deploymentStatus: 'completed',
                 torrentHash: hash,
+                artifactMode: 'in-memory-bundle',
                 signedBy: identity.address,
                 signature: this.lastSignature.signature,
                 signatureAlgorithm: this.lastSignature.signatureAlgorithm || 'EVM_SECP256K1',
@@ -255,7 +256,7 @@ export async function deploySignedArtifact() {
 
     this.lastDeployResult = { hash, url, signedBy: identity.address };
     updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
-    renderDeployStage('Deployment complete', 'Live and seeding');
+    renderDeployStage('Deployment complete', 'Live and seeding from memory');
 }
 
 export function setupAuthAwareUi(state) {
