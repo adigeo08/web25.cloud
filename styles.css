@@ -4,19 +4,39 @@
     box-sizing: border-box;
 }
 
+:root {
+    --bg-primary: #05070d;
+    --bg-secondary: #0b1020;
+    --panel: #0f172a;
+    --panel-soft: #111b33;
+    --text-main: #d8ffe2;
+    --text-muted: #8fb7a1;
+    --accent: #00ff9d;
+    --accent-alt: #00d1ff;
+    --danger: #ff4f87;
+}
+
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family:
+        'JetBrains Mono',
+        'Fira Code',
+        -apple-system,
+        BlinkMacSystemFont,
+        'Segoe UI',
+        Roboto,
+        sans-serif;
     line-height: 1.6;
-    color: #333;
-    background: linear-gradient(324deg, #66d4ea 0%, #504ba2 100%);
+    color: var(--text-main);
+    background: radial-gradient(circle at top, #13223f 0%, var(--bg-primary) 45%, #020307 100%);
     min-height: 100vh;
 }
 
 .hero {
     text-align: center;
     padding: 2rem 0;
-    color: white;
-    background: rgba(0, 0, 0, 0.2);
+    color: var(--text-main);
+    background: linear-gradient(180deg, rgba(0, 255, 157, 0.14), rgba(0, 0, 0, 0));
+    border-bottom: 1px solid rgba(0, 255, 157, 0.18);
 }
 
 .hero h1 {
@@ -28,11 +48,11 @@ body {
 
 .maintitle {
     text-decoration: none;
-    color: #ddd;
+    color: var(--accent);
 }
 
 #create-torrent {
-    display: none;
+    display: inline-flex;
 }
 
 .hero h2 {
@@ -45,11 +65,12 @@ body {
     max-width: 1200px;
     margin: 0 auto;
     padding: 2rem;
-    background: white;
+    background: linear-gradient(180deg, rgba(12, 20, 38, 0.94), rgba(8, 14, 26, 0.98));
     border-radius: 20px;
     margin-top: 2rem;
     margin-bottom: 2rem;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(0, 255, 157, 0.18);
 }
 
 section {
@@ -59,7 +80,7 @@ section {
 h3 {
     font-size: 1.8rem;
     margin-bottom: 1rem;
-    color: #4a5568;
+    color: var(--accent);
 }
 
 .steps,
@@ -72,9 +93,9 @@ h3 {
 .step,
 .req {
     padding: 1rem;
-    background: #f7fafc;
+    background: rgba(15, 27, 51, 0.7);
     border-radius: 10px;
-    border-left: 4px solid #667eea;
+    border-left: 4px solid var(--accent-alt);
 }
 
 .code-block {
@@ -125,12 +146,13 @@ h3 {
 }
 
 .btn-primary {
-    background: #667eea;
-    color: white;
+    background: linear-gradient(90deg, var(--accent), var(--accent-alt));
+    color: #03120a;
+    font-weight: 700;
 }
 
 .btn-primary:hover {
-    background: #5a67d8;
+    filter: brightness(1.08);
     transform: translateY(-2px);
 }
 
@@ -155,10 +177,10 @@ h3 {
 }
 
 .btn-secondary {
-    display: none;
-    background: #edf2f7;
-    color: #4a5568;
-    border: 1px solid #e2e8f0;
+    display: inline-flex;
+    background: rgba(15, 27, 51, 0.86);
+    color: var(--text-main);
+    border: 1px solid rgba(0, 209, 255, 0.35);
 }
 
 .hash-input-group {
@@ -397,8 +419,9 @@ h3 {
 footer {
     text-align: center;
     padding: 2rem;
-    color: white;
-    background: rgba(0, 0, 0, 0.2);
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.45);
+    border-top: 1px solid rgba(0, 255, 157, 0.16);
 }
 
 .tech-stack {
@@ -1050,12 +1073,60 @@ footer {
 }
 
 @keyframes indeterminate-slide {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(300%); }
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(300%);
+    }
 }
 
 .site-viewer-header {
     padding: 0.75rem 1rem;
     background: #111827;
     border-bottom: 1px solid #374151;
+}
+
+/* Dark/hacking UI accents */
+code,
+.code-block {
+    border: 1px solid rgba(0, 255, 157, 0.18);
+    box-shadow: inset 0 0 18px rgba(0, 255, 157, 0.08);
+}
+
+.drop-zone,
+.deploy-card,
+.notice-box,
+.upload-result,
+.file-list-container,
+.torrent-stats {
+    background: rgba(9, 15, 28, 0.82) !important;
+    border: 1px solid rgba(0, 255, 157, 0.16) !important;
+    color: var(--text-main);
+}
+
+p,
+.stat-label,
+.stage-detail,
+.viewer-info,
+.peer-stats {
+    color: var(--text-muted);
+}
+
+.seed-copy-status {
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.consent-check {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+    margin-top: 1rem;
+    color: var(--text-main);
+}
+
+.consent-check input {
+    margin-top: 0.2rem;
 }
