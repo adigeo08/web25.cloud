@@ -10,7 +10,7 @@ import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
-const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@2.5.19/dist/webtorrent.min.js';
+const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
 export async function init() {
     try {
@@ -262,8 +262,8 @@ export function setupAuthAwareUi(state) {
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
         if (activeTab && activeTab.getAttribute('data-tab') === 'auth') {
-            const publishTab = document.querySelector('[data-tab="publish"]');
-            if (publishTab instanceof HTMLElement) publishTab.click();
+            const browseTab = document.querySelector('[data-tab=\"browse\"]');
+            if (browseTab instanceof HTMLElement) browseTab.click();
         }
     }
 }
