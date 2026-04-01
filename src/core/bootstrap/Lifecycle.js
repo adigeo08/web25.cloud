@@ -95,15 +95,14 @@ export function setupChannels() {
 
     this.channelsService.onUpdate((event) => {
         if (event.type === 'joined') {
-            renderChannelsStatus({ channel: event.channel, channelHash: event.channelHash, peers: 0, connected: true });
+            renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
         } else if (event.type === 'left') {
             renderChannelsStatus({ connected: false });
             clearChannelsMessages();
         } else if (event.type === 'peer-count') {
             renderChannelsStatus({
                 connected: Boolean(this.channelsService.currentChannel),
-                channel: this.channelsService.currentChannelLabel || this.channelsService.currentChannel,
-                channelHash: this.channelsService.currentChannelHash || this.channelsService.currentChannel,
+                channel: this.channelsService.currentChannel,
                 peers: event.count || this.channelsService.currentPeerCount || 0
             });
         } else if (event.type === 'message') {

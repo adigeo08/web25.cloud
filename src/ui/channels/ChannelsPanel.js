@@ -24,16 +24,10 @@ export function bindChannelsPanel({ onJoin, onLeave, onSend }) {
     });
 }
 
-export function renderChannelsStatus({ channel = '', channelHash = '', peers = 0, connected = false }) {
+export function renderChannelsStatus({ channel = '', peers = 0, connected = false }) {
     const status = document.getElementById('channels-status');
     if (!status) return;
-    if (!connected) {
-        status.textContent = 'Disconnected';
-        return;
-    }
-
-    const hashLabel = channelHash ? ` · hash: ${channelHash.slice(0, 12)}…` : '';
-    status.textContent = `Connected to #${channel} · peers: ${peers}${hashLabel}`;
+    status.textContent = connected ? `Connected to #${channel} · peers: ${peers}` : 'Disconnected';
 }
 
 export function clearChannelsMessages() {

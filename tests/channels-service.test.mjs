@@ -36,9 +36,7 @@ test('ChannelsService joins with existing trackers and emits joined state', asyn
 
     await service.joinChannel('Builders', { address: '0xabc' });
 
-    assert.match(service.currentChannel, /^[a-f0-9]{40}$/);
-    assert.equal(service.currentChannelLabel, 'builders');
-    assert.equal(service.currentChannelHash, service.currentChannel);
+    assert.equal(service.currentChannel, 'builders');
     assert.match(addArgs.magnet, /magnet:\?xt=urn:btih:[a-f0-9]{40}/);
     assert.deepEqual(addArgs.opts.announce, ['wss://existing-tracker.test']);
     assert.equal(events.some((event) => event.type === 'joined'), true);
@@ -60,7 +58,7 @@ test('ChannelsService deduplicates repeated inbound messages', async () => {
         type: 'chat',
         id: 'm1',
         text: 'hello',
-        channel: service.currentChannel,
+        channel: 'builders',
         from: '0xdef',
         timestamp: new Date().toISOString()
     };
@@ -86,7 +84,7 @@ test('ChannelsService handleInbound marks remote messages as non-local (Fix 3 bu
         type: 'chat',
         id: 'remote-1',
         text: 'from remote peer',
-        channel: service.currentChannel,
+        channel: 'test',
         from: '0xremote',
         timestamp: new Date().toISOString()
     };
@@ -110,7 +108,7 @@ test('ChannelsService handleInbound passing a truthy wire object marks message a
         type: 'chat',
         id: 'wire-1',
         text: 'bug demo',
-        channel: service.currentChannel,
+        channel: 'test',
         from: '0xpeer',
         timestamp: new Date().toISOString()
     };
@@ -136,7 +134,7 @@ test('ChannelsService emits presence event when presence message received (Fix 3
     const presenceMsg = {
         type: 'presence',
         id: 'pres-1',
-        channel: service.currentChannel,
+        channel: 'test',
         from: '0xpeer42',
         timestamp: new Date().toISOString()
     };
@@ -164,7 +162,7 @@ test('ChannelsService deduplicates repeated presence messages', async () => {
     const presenceMsg = {
         type: 'presence',
         id: 'pres-dup',
-        channel: service.currentChannel,
+        channel: 'test',
         from: '0xpeer',
         timestamp: new Date().toISOString()
     };
