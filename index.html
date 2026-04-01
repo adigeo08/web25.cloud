@@ -67,6 +67,9 @@
                 <button class="tab-btn" data-tab="auth" role="tab" aria-selected="false" style="display: none">
                     🪪 Identity
                 </button>
+                <button class="tab-btn" data-tab="channels" role="tab" aria-selected="false" style="display: none">
+                    💬 Channels
+                </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
 
@@ -213,6 +216,36 @@
                             </div>
                         </section>
                     </div>
+                </div>
+
+                <!-- ── CHANNELS TAB ── -->
+                <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
+                    <section class="quick-upload">
+                        <h3>💬 Channels</h3>
+                        <p>P2P real-time chat over the same WebTorrent tracker mesh used by Web25.Cloud.</p>
+                        <div class="hash-input-group">
+                            <input
+                                type="text"
+                                id="channels-name-input"
+                                placeholder="channel name (ex: builders)"
+                                class="hash-input"
+                                maxlength="40"
+                            />
+                            <button id="channels-join-btn" class="btn btn-primary">Join</button>
+                            <button id="channels-leave-btn" class="btn btn-secondary">Leave</button>
+                        </div>
+                        <p id="channels-status" class="status-chip status-pending">Disconnected</p>
+                        <div id="channels-messages" class="channels-messages"></div>
+                        <div class="hash-input-group" style="margin-top: 0.75rem">
+                            <input
+                                type="text"
+                                id="channels-message-input"
+                                placeholder="Write a message..."
+                                class="hash-input"
+                            />
+                            <button id="channels-send-btn" class="btn btn-primary">Send</button>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- ── BROWSE TAB ── -->

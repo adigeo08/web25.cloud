@@ -8,6 +8,14 @@ import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
+import ChannelsService from '../../channels/ChannelsService.js';
+import {
+    appendChannelsMessage,
+    bindChannelsPanel,
+    clearChannelsComposer,
+    clearChannelsMessages,
+    renderChannelsStatus
+} from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
@@ -47,6 +55,63 @@ export async function initAuth() {
     renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
     hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
+    this.setupChannels();
+}
+
+export function setupChannels() {
+    this.channelsService = new ChannelsService({
+        client: this.client,
+        trackers: this.trackers
+    });
+
+    bindChannelsPanel({
+        onJoin: async (channelName) => {
+            const identity = this.authController.getActiveIdentity();
+            if (!identity?.address) {
+                this.toast.warning('Authenticate first to use Channels.', 'Authentication required');
+                return;
+            }
+
+            try {
+                clearChannelsMessages();
+                await this.channelsService.joinChannel(channelName, identity);
+            } catch (error) {
+                this.toast.error(error.message, 'Channels');
+            }
+        },
+        onLeave: async () => {
+            await this.channelsService.leaveChannel();
+        },
+        onSend: (text) => {
+            try {
+                const identity = this.authController.getActiveIdentity();
+                this.channelsService.sendChatMessage(text, identity);
+                clearChannelsComposer();
+            } catch (error) {
+                this.toast.error(error.message, 'Channels');
+            }
+        }
+    });
+
+    this.channelsService.onUpdate((event) => {
+        if (event.type === 'joined') {
+            renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
+        } else if (event.type === 'left') {
+            renderChannelsStatus({ connected: false });
+            clearChannelsMessages();
+        } else if (event.type === 'peer-count') {
+            renderChannelsStatus({
+                connected: Boolean(this.channelsService.currentChannel),
+                channel: this.channelsService.currentChannel,
+                peers: event.count || this.channelsService.currentPeerCount || 0
+            });
+        } else if (event.type === 'message') {
+            const identity = this.authController.getActiveIdentity();
+            appendChannelsMessage(event.message, Boolean(identity?.address && event.message.from === identity.address));
+        } else if (event.type === 'error') {
+            this.toast.error(event.error?.message || 'Unexpected channels error', 'Channels');
+        }
+    });
 }
 
 
@@ -248,6 +313,8 @@ export function setupAuthAwareUi(state) {
     const identityTabPanel = document.getElementById('tab-auth');
     const deployWall = document.getElementById('deploy-auth-wall');
     const deployPanel = document.getElementById('deploy-panel');
+    const channelsTabBtn = document.querySelector('[data-tab="channels"]');
+    const channelsTabPanel = document.getElementById('tab-channels');
     const hasIdentity = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const isAuthenticated = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const hasJustAuthenticated = !this._hadAuthenticatedIdentity && isAuthenticated;
@@ -269,13 +336,21 @@ export function setupAuthAwareUi(state) {
     if (deployPanel) {
         deployPanel.classList.toggle('hidden', !isAuthenticated);
     }
+    if (channelsTabBtn) {
+        channelsTabBtn.style.display = hasIdentity ? 'inline-flex' : 'none';
+    }
+    if (channelsTabPanel) {
+        channelsTabPanel.style.display = hasIdentity ? '' : 'none';
+    }
 
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
-        if (activeTab && activeTab.getAttribute('data-tab') === 'auth') {
+        const activeName = activeTab?.getAttribute('data-tab');
+        if (activeName === 'auth' || activeName === 'channels') {
             const browseTab = document.querySelector('[data-tab=\"browse\"]');
             if (browseTab instanceof HTMLElement) browseTab.click();
         }
+        this.channelsService?.leaveChannel?.();
         return;
     }
 
@@ -757,6 +832,7 @@ export function clearInMemoryStreamingState({ resetDeploySession = false } = {})
     this.signedTorrentMetadata.clear();
     this.currentSiteSignatureStatus = { label: 'Publisher: unverified', verified: false };
     this.revokeAllObjectURLs();
+    this.channelsService?.leaveChannel?.();
 
     this.sendToServiceWorker('SITE_UNLOADED', {});
     this.showMainContent();
