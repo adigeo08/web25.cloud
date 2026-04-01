@@ -66,7 +66,15 @@ export default class AuthController {
             this.state.address = localWallet.address;
             return;
         } else if (localWallet.exists) {
-            this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
+            try {
+                const result = await unlockLocalWallet();
+                this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+                this.state.identityType = 'local';
+                this.state.address = result.address;
+                this.state.localWalletUnlocked = true;
+            } catch (_err) {
+                this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
+            }
         }
     }
 
