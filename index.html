@@ -185,21 +185,23 @@
                     🔍 Browse / Load
                 </button>
                 <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">🚀 Deploy</button>
-                <button class="tab-btn" data-tab="auth" role="tab" aria-selected="false" style="display: none">
-                    🪪 Identity
-                </button>
+                <button class="tab-btn" data-tab="auth" role="tab" aria-selected="false">🪪 Identity</button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
 
             <main class="container">
                 <!-- ── AUTH TAB ── -->
                 <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
-                    <section class="quick-upload">
+                    <section class="deploy-card identity-card">
                         <h3>🪪 Local Identity</h3>
-                        <p>Manage your local signing identity and recovery options.</p>
-                        <p id="identity-badge">Identity: anonymous</p>
-                        <p id="auth-status">Status: anonymous</p>
-                        <p id="local-wallet-meta">Local wallet: not registered</p>
+                        <p class="identity-card-subtitle">Manage your local signing identity and recovery options.</p>
+                        <div class="identity-grid">
+                            <p id="identity-badge">Identity: anonymous</p>
+                            <p id="auth-status">Status: anonymous</p>
+                            <p id="local-wallet-meta">Local wallet: not registered</p>
+                            <p id="identity-address">Address: not available</p>
+                            <p id="identity-chain">Chain: Ethereum Mainnet (1)</p>
+                        </div>
                         <div class="button-group">
                             <button id="disconnect-auth-btn" class="btn btn-clear">Disconnect</button>
                             <button id="delete-local-wallet-btn" class="btn btn-clear">Delete Local Wallet</button>
