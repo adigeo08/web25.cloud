@@ -1,6 +1,6 @@
 # ☁️ Web25.Cloud
 
-**Decentralized web platform for peer-to-peer static site hosting + local in-browser signing + signed publishing, fully in-browser.**
+**Decentralized web platform for peer-to-peer static site hosting + local in-browser signing + signed torrent publishing + P2P channels, fully in-browser.**
 
 Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware publishing flow.
 
@@ -8,7 +8,7 @@ Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware pu
 
 ## What is implemented now
 
-### 1) Clear UI split (Identity / Publish / Browse)
+### 1) Clear UI split (Identity / Publish / Channels / Browse)
 
 The application UI is now separated into:
 
@@ -27,6 +27,11 @@ The application UI is now separated into:
   - Publish output (signed metadata)
 - **Browse / Load**
   - Existing torrent-hash loading flow remains available
+- **Channels (P2P chat over torrent swarm extension)**
+  - Join/leave named channels
+  - Peer count updates in real time
+  - Send/receive signed identity-tagged messages over WebTorrent wires
+  - Per-session chat stream in dedicated Channels tab
 
 ### 2) Local browser wallet (viem + WebCrypto + IndexedDB)
 
@@ -61,7 +66,7 @@ Private key is **not stored in plaintext**:
 
 ---
 
-### 3) Deterministic publish signing payload
+### 3) Deterministic publish signing payload + signed torrent metadata
 
 Torrent publish signature payload is deterministic and serialized predictably.
 
@@ -82,8 +87,17 @@ Signing flow:
 3. App creates torrent from that memory bundle and keeps publish candidate (hash + site metadata)
 4. User signs payload with active local identity
 5. Signed publish output is generated in-browser
+6. Signed metadata is attached directly inside the `.torrent` artifact (`publisher`, `signature`, `signature_algorithm`, `signed_at`, `chain_id`)
 
 At load time (hash browse flow), the client verifies signature metadata from the torrent root and mirrors it into `manifest.web25.json` for runtime introspection and consistency checks.
+
+Supported signed torrent flow now includes:
+
+- deterministic payload build (`TorrentSignaturePayload`)
+- signer digest generation + local wallet message signing
+- signature embedding into bencoded torrent metadata
+- signature verification when loading artifacts
+- publisher badge/status rendering in runtime UI
 
 ---
 
@@ -94,6 +108,18 @@ At load time (hash browse flow), the client verifies signature metadata from the
 - This enables continuing seeding/redeploy flows without repeating sign steps in normal scenarios
 - WebTorrent runtime script is loaded from:
   - `https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js`
+
+---
+
+### 5) Channels over WebTorrent peer wires
+
+Channels are implemented as deterministic swarms derived from channel names:
+
+- channel names are normalized and hashed into stable info hashes
+- each channel is joined as a lightweight magnet swarm
+- chat payloads are exchanged through a custom extension (`web25_channels_v1`)
+- UI renders message timeline, local-vs-remote message markers, and live peer count
+- identity address (when available) is included in message metadata
 
 ---
 
@@ -111,6 +137,9 @@ src/
 │   ├── SecureKeyStore.js
 │   └── SigningService.js
 │
+├── channels/
+│   └── ChannelsService.js
+│
 ├── ui/
 │   ├── auth/
 │   │   ├── AuthPanel.js
@@ -123,10 +152,14 @@ src/
 │   │   ├── PublishPanel.js
 │   │   ├── PublishReviewModal.js
 │   │   └── SignatureStatus.js
+│   │
+│   └── channels/
+│       └── ChannelsPanel.js
 │
 ├── torrent/
 │   ├── TorrentPublishService.js
-│   └── TorrentSignaturePayload.js
+│   ├── TorrentSignaturePayload.js
+│   └── SignedTorrentProtocol.js
 ```
 
 ---
@@ -140,6 +173,8 @@ src/
 - Local encrypted wallet persistence (WebCrypto + IndexedDB)
 - Deterministic publish payload + signing flow
 - Publish-to-identity linkage in browser
+- Signed torrent protocol (metadata embed + verification)
+- Channels tab + swarm chat transport via WebTorrent wire extension
 
 ### Non-goals (still not implemented)
 
@@ -148,6 +183,7 @@ src/
 - Token gating
 - Multi-wallet management for signing
 - Hardware wallet integration
+- Cross-channel history persistence
 
 ---
 
