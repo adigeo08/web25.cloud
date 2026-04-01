@@ -17,6 +17,8 @@ const cleanupOldCaches = async () => {
 
 /** @type {string | null} */
 let currentSiteHash = null;
+/** @type {string | null} */
+let currentEntryFile = null;
 /** @type {Set<string>} */
 let currentSiteFiles = new Set();
 /** @type {Map<string, any>} */
@@ -39,6 +41,7 @@ self.addEventListener('message', (event) => {
 
         case 'SITE_LOADING':
             currentSiteHash = data.hash;
+            currentEntryFile = null;
             currentSiteFiles.clear();
             mediaCache.clear(); // Clear media cache when loading new site
             mediaCacheTotalBytes = 0;
@@ -47,6 +50,7 @@ self.addEventListener('message', (event) => {
 
         case 'SITE_READY':
             currentSiteHash = data.hash;
+            currentEntryFile = data.entryFile || null;
             if (data.fileList) {
                 currentSiteFiles = new Set(data.fileList);
                 console.log('[PeerWeb SW] Site ready with files:', data.fileList);
@@ -56,6 +60,7 @@ self.addEventListener('message', (event) => {
 
         case 'SITE_UNLOADED':
             currentSiteHash = null;
+            currentEntryFile = null;
             currentSiteFiles.clear();
             mediaCache.clear();
             mediaCacheTotalBytes = 0;
@@ -450,10 +455,11 @@ async function handlePeerWebRequest(request) {
 }
 
 function normalizeFilePath(filePath, url) {
-    // If no file path or it's empty, default to index.html
+    // If no file path or it's empty, use the known entry file (or fall back to index.html)
     if (!filePath || filePath === '') {
-        console.log('[PeerWeb SW] Empty path, defaulting to index.html');
-        return 'index.html';
+        const entry = currentEntryFile || 'index.html';
+        console.log('[PeerWeb SW] Empty path, defaulting to', entry);
+        return entry;
     }
 
     // If path ends with /, append index.html
