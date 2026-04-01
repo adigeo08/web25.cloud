@@ -50,6 +50,8 @@ export default class ChannelsService {
         this.trackers = trackers;
         this.currentTorrent = null;
         this.currentChannel = '';
+        this.currentChannelLabel = '';
+        this.currentChannelHash = '';
         this.messageIds = new Set();
         this.listeners = new Set();
         this.currentPeerCount = 0;
@@ -67,8 +69,8 @@ export default class ChannelsService {
     }
 
     async joinChannel(channelName, identity) {
-        const normalized = this.normalizeChannel(channelName);
-        if (!normalized) throw new Error('Channel name is required.');
+        const descriptor = await this.resolveChannelDescriptor(channelName);
+        if (!descriptor) throw new Error('Channel name or hash is required.');
 
         // Cancel any pending retry before replacing the channel.
         if (this._retryTimeout) {
@@ -79,26 +81,27 @@ export default class ChannelsService {
         await this.leaveChannel();
         this.messageIds.clear();
         this.currentPeerCount = 0;
-        this.currentChannel = normalized;
+        this.currentChannel = descriptor.key;
+        this.currentChannelLabel = descriptor.label;
+        this.currentChannelHash = descriptor.infoHash;
 
-        const infoHash = await this.sha1Hex(`web25:${normalized}`);
-        const magnetURI = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(`web25-channel-${normalized}`)}`;
+        const magnetURI = `magnet:?xt=urn:btih:${descriptor.infoHash}&dn=${encodeURIComponent(`web25-channel-${descriptor.label}`)}`;
 
-        const torrent = this._addChannelTorrent(magnetURI, normalized, identity, 0);
+        const torrent = this._addChannelTorrent(magnetURI, descriptor, identity, 0);
         if (!torrent) throw new Error('Could not open channel swarm.');
 
-        this.emit({ type: 'joined', channel: normalized, infoHash });
-        this.pushLocalSystemMessage(`Connected to #${normalized}.`, identity?.address);
+        this.emit({ type: 'joined', channel: descriptor.label, channelHash: descriptor.infoHash, infoHash: descriptor.infoHash });
+        this.pushLocalSystemMessage(`Connected to #${descriptor.label} (${descriptor.infoHash.slice(0, 10)}…).`, identity?.address);
     }
 
     /**
      * Internal: add a channel torrent and wire up listeners with retry support.
      * @param {string} magnetURI
-     * @param {string} normalized  - already-normalised channel name
+     * @param {{ key: string, label: string, infoHash: string }} descriptor
      * @param {*} identity
      * @param {number} retryAttempt - how many noPeers retries have been performed
      */
-    _addChannelTorrent(magnetURI, normalized, identity, retryAttempt) {
+    _addChannelTorrent(magnetURI, descriptor, identity, retryAttempt) {
         const torrent = this.client.add(magnetURI, { announce: this.trackers, destroyStoreOnDestroy: true });
         if (!torrent) return null;
 
@@ -117,7 +120,7 @@ export default class ChannelsService {
             this.emit({ type: 'peer-count', count: this.currentPeerCount });
 
             // Guard: don't retry if the user already left or re-joined a different channel.
-            if (this.currentTorrent !== torrent || this.currentChannel !== normalized) return;
+            if (this.currentTorrent !== torrent || this.currentChannel !== descriptor.key) return;
             if (retryAttempt >= CHANNEL_RETRY_MAX) return;
 
             const nextAttempt = retryAttempt + 1;
@@ -126,11 +129,11 @@ export default class ChannelsService {
             if (this._retryTimeout) clearTimeout(this._retryTimeout);
             this._retryTimeout = setTimeout(() => {
                 // Re-check guards after the delay fires.
-                if (this.currentTorrent !== torrent || this.currentChannel !== normalized) return;
+                if (this.currentTorrent !== torrent || this.currentChannel !== descriptor.key) return;
                 torrent.destroy({ destroyStore: true }, () => {
-                    if (this.currentChannel !== normalized) return;
+                    if (this.currentChannel !== descriptor.key) return;
                     this.currentTorrent = null;
-                    this._addChannelTorrent(magnetURI, normalized, identity, nextAttempt);
+                    this._addChannelTorrent(magnetURI, descriptor, identity, nextAttempt);
                 });
             }, delay);
         });
@@ -153,6 +156,8 @@ export default class ChannelsService {
         });
         this.currentTorrent = null;
         this.currentChannel = '';
+        this.currentChannelLabel = '';
+        this.currentChannelHash = '';
         this.currentPeerCount = 0;
         this.emit({ type: 'left' });
     }
@@ -220,6 +225,33 @@ export default class ChannelsService {
 
     normalizeChannel(value) {
         return `${value || ''}`.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 40);
+    }
+
+    isHashChannel(value) {
+        return /^[a-f0-9]{40}$/i.test(`${value || ''}`.trim());
+    }
+
+    async resolveChannelDescriptor(value) {
+        const raw = `${value || ''}`.trim();
+        if (!raw) return null;
+
+        if (this.isHashChannel(raw)) {
+            const hash = raw.toLowerCase();
+            return {
+                key: hash,
+                label: `hash-${hash.slice(0, 12)}`,
+                infoHash: hash
+            };
+        }
+
+        const normalized = this.normalizeChannel(raw);
+        if (!normalized) return null;
+        const infoHash = await this.sha1Hex(`web25:${normalized}`);
+        return {
+            key: infoHash,
+            label: normalized,
+            infoHash
+        };
     }
 
     async sha1Hex(input) {
