@@ -277,11 +277,30 @@
                             Web25.Cloud is a decentralized web platform built on top of
                             <a href="https://peerweb.lol" target="_blank">PeerWeb</a>. It extends peer-to-peer website
                             hosting with a <strong>local in-browser signing wallet</strong>,
-                            <strong>signed torrent deployments</strong>, and browser-native distribution without a central server.
+                            <strong>signed torrent deployments</strong>, <strong>P2P channels</strong>, and browser-native
+                            distribution without a central server.
                         </p>
                     </section>
 
                     <section class="features">
+                        <h3>💬 Channels (P2P chat)</h3>
+                        <p>Join a named channel and exchange messages directly over WebTorrent peer wires.</p>
+                        <div class="feature-grid">
+                            <div class="feature">🧭 Deterministic Swarms — Channel names map to predictable info hashes</div>
+                            <div class="feature">👥 Live Peer Status — Connected peers update in real time</div>
+                            <div class="feature">🪪 Identity Context — Messages include your active local identity metadata</div>
+                            <div class="feature">🛰️ Pure P2P Transport — No centralized chat backend required</div>
+                        </div>
+                        <br /><br />
+                        <h3>🔏 Signed Torrent Publishing</h3>
+                        <p>Publish artifacts are signed in browser and embedded directly in torrent metadata.</p>
+                        <div class="feature-grid">
+                            <div class="feature">🧾 Deterministic Payload — Reproducible fields before signing</div>
+                            <div class="feature">✍️ Local Signature — Signing key never leaves your browser</div>
+                            <div class="feature">🧷 Embedded Proof — Publisher, signature, algorithm, and timestamp in .torrent</div>
+                            <div class="feature">✅ Verification on Load — Signature status shown when a site is opened by hash</div>
+                        </div>
+                        <br /><br />
                         <h3>💾 Smart Caching</h3>
                         <p>Visited sites are cached for lightning-fast repeat loads.</p>
                         <div class="feature-grid">
@@ -312,6 +331,7 @@
                             <div class="req">🔒 Files are served in a sandboxed environment for security</div>
                             <div class="req">🧠 Deploy flow seeds from an in-memory bundle, not directly from local folder handles</div>
                             <div class="req">✅ On load, signature metadata is verified and mirrored into <code>manifest.web25.json</code></div>
+                            <div class="req">🧷 Signed torrents include publisher + signature metadata for validation</div>
                             <div class="req">📱 Responsive design recommended for best experience</div>
                             <div class="req">🧹 Content is automatically sanitized for security</div>
                         </div>
@@ -326,6 +346,7 @@
                             <div class="benefit">📱 Always Available — Works as long as peers are online</div>
                             <div class="benefit">🔐 Signed Publishing — Deployments can be verified by signer</div>
                             <div class="benefit">🪪 Local-Only Identity — Signing keys stay in your browser</div>
+                            <div class="benefit">💬 Native Channels — Coordinate with peers directly in-app</div>
                             <div class="benefit">⚡ Fast Loading — Smart caching for instant repeat visits</div>
                             <div class="benefit">💾 Offline Ready — Cached sites work without internet</div>
                         </div>
