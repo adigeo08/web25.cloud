@@ -102,6 +102,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
                                 : `Unverified publisher: ${signedMeta.publisher.slice(0, 10)}...`,
                             verified: Boolean(signedMeta.verified)
                         };
+                        this.updateSiteSignatureBadge(this.currentSiteSignatureStatus);
                         this.log(`Verified signed metadata at load: ${this.currentSiteSignatureStatus.label}`);
                     }
                 }
@@ -593,6 +594,7 @@ export function validateReceivedManifest(siteData, hash) {
                 label: 'Signature manifest mismatch detected',
                 verified: false
             };
+            this.updateSiteSignatureBadge(this.currentSiteSignatureStatus);
             this.log('Manifest signature mismatch with torrent root metadata');
         } else {
             this.log('Manifest signature matches torrent root metadata');
