@@ -37,12 +37,7 @@ class PeerWeb {
             Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0
                 ? window.PEERWEB_TRACKERS
                 : null;
-        this.trackers = overrideTrackers || [
-            'wss://tracker.btorrent.xyz',
-            'wss://tracker.openwebtorrent.com',
-            'wss://tracker.webtorrent.dev',
-            'wss://tracker.files.fm:7073/announce'
-        ];
+        this.trackers = overrideTrackers || ['wss://tracker.openwebtorrent.com/'];
 
         this.init();
     }

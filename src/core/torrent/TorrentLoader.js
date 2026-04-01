@@ -3,7 +3,21 @@
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
 
-export async function loadSite(hash) {
+/** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
+const LOAD_RETRY_MAX = 5;
+/** Base delay (ms) for exponential-backoff retry of site loads. */
+const LOAD_RETRY_BASE_MS = 2000;
+
+/**
+ * Exponential backoff with jitter, capped at 30 s.
+ * @param {number} attempt - zero-based attempt index
+ * @param {number} baseMs
+ */
+function calcRetryDelay(attempt, baseMs) {
+    return Math.min(30000, baseMs * Math.pow(2, attempt) + Math.random() * 1000);
+}
+
+export async function loadSite(hash, _retryAttempt = 0) {
     // Sanitize hash first to prevent XSS
     const sanitizedHash = this.sanitizeHash(hash);
     this.log(`Loading site with hash: ${sanitizedHash}`);
@@ -144,12 +158,47 @@ export async function loadSite(hash) {
                     magnetURI,
                     expectedSize: torrent.length || null
                 });
-                this.hideLoadingOverlay();
-                alert(
-                    '❌ Torrent Load Error\n\n' +
-                        error.message +
-                        '\n\n🔧 Troubleshooting:\n• Check your internet connection\n• Verify the hash is correct\n• Ensure the torrent has active seeders\n• Try again in a few moments'
-                );
+                if (!this.processingInProgress && this.currentHash === sanitizedHash && _retryAttempt < LOAD_RETRY_MAX) {
+                    const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
+                    this.log(`Torrent error, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`);
+                    if (this.processingTimeout) {
+                        clearTimeout(this.processingTimeout);
+                        this.processingTimeout = null;
+                    }
+                    setTimeout(() => {
+                        if (this.currentHash !== sanitizedHash) return;
+                        this.loadSite(sanitizedHash, _retryAttempt + 1);
+                    }, delay);
+                } else if (!this.processingInProgress) {
+                    this.hideLoadingOverlay();
+                    alert(
+                        '❌ Torrent Load Error\n\n' +
+                            error.message +
+                            '\n\n🔧 Troubleshooting:\n• Check your internet connection\n• Verify the hash is correct\n• Ensure the torrent has active seeders\n• Try again in a few moments'
+                    );
+                }
+            });
+
+            torrent.on('noPeers', () => {
+                if (this.processingInProgress) return;
+                if (this.currentHash !== sanitizedHash) return;
+                if (_retryAttempt >= LOAD_RETRY_MAX) {
+                    this.log(`No peers found after ${LOAD_RETRY_MAX} retries, giving up`);
+                    return;
+                }
+                const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
+                this.log(`No peers found, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`);
+                if (this.processingTimeout) {
+                    clearTimeout(this.processingTimeout);
+                    this.processingTimeout = null;
+                }
+                setTimeout(() => {
+                    if (this.currentHash !== sanitizedHash) return;
+                    torrent.destroy(() => {
+                        if (this.currentHash !== sanitizedHash) return;
+                        this.loadSite(sanitizedHash, _retryAttempt + 1);
+                    });
+                }, delay);
             });
 
             // Select all files for download
@@ -614,6 +663,13 @@ export function displaySite(siteData, hash, fromCache = false) {
 
     this.log(`Found index file: ${indexFileName}`);
 
+    // Alias: if entry is nested (e.g. site/index.html), ensure bare 'index.html' also resolves.
+    // This prevents 404s when the SW normalises the root request to 'index.html'.
+    if (indexFileName !== 'index.html') {
+        siteData['index.html'] = siteData[indexFileName];
+        this.log(`Aliased 'index.html' -> '${indexFileName}'`);
+    }
+
     // Get and process the HTML content
     const indexFile = siteData[indexFileName];
     let htmlContent = new TextDecoder().decode(indexFile.content);
@@ -646,7 +702,8 @@ export function displaySite(siteData, hash, fromCache = false) {
         await this.sendToServiceWorker('SITE_READY', {
             hash,
             fileCount: Object.keys(siteData).length,
-            fileList: Object.keys(siteData) // Send the list of available files
+            fileList: Object.keys(siteData), // Send the list of available files
+            entryFile: indexFileName          // Tell SW the canonical entry path
         });
         
         // Small delay to ensure the service worker receives the message before iframe loads
