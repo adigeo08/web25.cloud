@@ -10,7 +10,7 @@ import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
-const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
+const WEBTORRENT_CDN_URL = './scripts/webtorrent.min.js';
 
 export async function init() {
     try {
@@ -240,18 +240,10 @@ export async function deploySignedArtifact() {
 }
 
 export function setupAuthAwareUi(state) {
-    const identityTabBtn = document.querySelector('[data-tab="auth"]');
-    const identityTabPanel = document.getElementById('tab-auth');
     const deployWall = document.getElementById('deploy-auth-wall');
     const deployPanel = document.getElementById('deploy-panel');
     const isAuthenticated = Boolean(state.address && state.identityType);
 
-    if (identityTabBtn) {
-        identityTabBtn.style.display = isAuthenticated ? 'inline-flex' : 'none';
-    }
-    if (identityTabPanel) {
-        identityTabPanel.style.display = isAuthenticated ? 'block' : 'none';
-    }
     if (deployWall) {
         deployWall.classList.toggle('hidden', isAuthenticated);
     }
