@@ -30,7 +30,11 @@ export async function init() {
 }
 
 export async function initAuth() {
-    this.authController = new AuthController(this.toast);
+    this.authController = new AuthController(this.toast, {
+        onDisconnect: async () => {
+            await this.clearCache({ includeMemoryState: true, resetDeploySession: true });
+        }
+    });
     await this.authController.init();
     this.lastSignedPublish = null;
     this.lastSignature = null;
@@ -737,8 +741,37 @@ export function calculateFileTimeout(file) {
     return Math.floor(timeout);
 }
 
-export async function clearCache() {
+export function clearInMemoryStreamingState({ resetDeploySession = false } = {}) {
+    if (this.lastPublishCandidate?.torrent?.destroy) {
+        try {
+            this.lastPublishCandidate.torrent.destroy();
+        } catch (_) {}
+    }
+
+    this.currentSiteData = null;
+    this.currentHash = null;
+    this.lastSignedPublish = null;
+    this.lastSignature = null;
+    this.lastPublishCandidate = null;
+    this.lastDeployResult = null;
+    this.signedTorrentMetadata.clear();
+    this.currentSiteSignatureStatus = { label: 'Publisher: unverified', verified: false };
+    this.revokeAllObjectURLs();
+
+    this.sendToServiceWorker('SITE_UNLOADED', {});
+    this.showMainContent();
+
+    if (resetDeploySession) {
+        this.clearDeploySession();
+    }
+}
+
+export async function clearCache(options = {}) {
+    const { includeMemoryState = true, resetDeploySession = false } = options;
     await this.cache.clear();
+    if (includeMemoryState) {
+        this.clearInMemoryStreamingState({ resetDeploySession });
+    }
     this.log('Cache cleared');
-    this.toast.success('All cached sites have been removed.', 'Cache Cleared Successfully');
+    this.toast.success('All cached sites and in-memory streaming state have been removed.', 'Cache Cleared Successfully');
 }

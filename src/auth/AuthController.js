@@ -2,8 +2,8 @@
 
 import { createAuthState, AUTH_STATUS } from './AuthState.js';
 import {
+    clearLocalWalletSession,
     getLocalWalletStatus,
-    lockLocalWallet,
     registerLocalWallet,
     removeLocalWallet,
     unlockLocalWallet,
@@ -16,10 +16,11 @@ import { bindRecoverWallet } from '../ui/auth/RecoverWalletModal.js';
 import { hideSeedPhrase, showSeedPhrase } from '../ui/auth/SeedPhraseScreen.js';
 
 export default class AuthController {
-    constructor(toast) {
+    constructor(toast, options = {}) {
         this.toast = toast;
         this.state = createAuthState();
         this.listeners = new Set();
+        this.onDisconnect = typeof options.onDisconnect === 'function' ? options.onDisconnect : null;
     }
 
     async init() {
@@ -133,7 +134,10 @@ export default class AuthController {
 
     async disconnect() {
         try {
-            lockLocalWallet();
+            await clearLocalWalletSession();
+            if (this.onDisconnect) {
+                await this.onDisconnect();
+            }
             this.state = createAuthState();
             await this.refreshLocalWalletState();
             this.render();
