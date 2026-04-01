@@ -244,13 +244,18 @@ export function setupAuthAwareUi(state) {
     const identityTabPanel = document.getElementById('tab-auth');
     const deployWall = document.getElementById('deploy-auth-wall');
     const deployPanel = document.getElementById('deploy-panel');
-    const isAuthenticated = Boolean(state.address && state.identityType);
+    const hasIdentity = Boolean(state.localWalletExists && state.address && state.identityType);
+    const isAuthenticated = Boolean(state.localWalletUnlocked && state.address && state.identityType);
 
     if (identityTabBtn) {
-        identityTabBtn.style.display = isAuthenticated ? 'inline-flex' : 'none';
+        identityTabBtn.style.display = hasIdentity ? 'inline-flex' : 'none';
     }
     if (identityTabPanel) {
-        identityTabPanel.style.display = isAuthenticated ? 'block' : 'none';
+        if (hasIdentity) {
+            identityTabPanel.style.removeProperty('display');
+        } else {
+            identityTabPanel.style.display = 'none';
+        }
     }
     if (deployWall) {
         deployWall.classList.toggle('hidden', isAuthenticated);

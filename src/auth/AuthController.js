@@ -60,10 +60,13 @@ export default class AuthController {
         this.state.localWalletExists = localWallet.exists;
         this.state.localWalletUnlocked = localWallet.unlocked;
 
-        if (localWallet.unlocked) {
-            this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+        if (localWallet.exists && localWallet.address) {
             this.state.identityType = 'local';
             this.state.address = localWallet.address;
+        }
+
+        if (localWallet.unlocked) {
+            this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             return;
         } else if (localWallet.exists) {
             this.state.status = AUTH_STATUS.LOCAL_REGISTERED_LOCKED;
