@@ -19,13 +19,32 @@ let unlockedPrivateKey = null;
 let autoLockTimer = null;
 let visibilityListenerAdded = false;
 
+function getSessionExpiryIso() {
+    return new Date(Date.now() + AUTO_LOCK_TIMEOUT_MS).toISOString();
+}
+
+async function persistSessionExpiry(sessionExpiresAt) {
+    const record = await getLocalWalletRecord();
+    if (!record) return;
+    await saveLocalWallet({ ...record, sessionExpiresAt });
+}
+
 /** Clears the auto-lock timer and wipes the private key from memory. */
 export function lockLocalWallet() {
+    void clearLocalWalletSession();
+}
+
+function clearInMemorySession() {
     if (autoLockTimer !== null) {
         clearTimeout(autoLockTimer);
         autoLockTimer = null;
     }
     unlockedPrivateKey = null;
+}
+
+export async function clearLocalWalletSession() {
+    clearInMemorySession();
+    await persistSessionExpiry(null);
 }
 
 /** Resets the inactivity timer every time the key is used. */
@@ -34,19 +53,24 @@ function resetAutoLock() {
         clearTimeout(autoLockTimer);
     }
     autoLockTimer = setTimeout(lockLocalWallet, AUTO_LOCK_TIMEOUT_MS);
+    void persistSessionExpiry(getSessionExpiryIso());
+}
+
+function setAutoLockForRemainingMs(remainingMs) {
+    if (autoLockTimer !== null) {
+        clearTimeout(autoLockTimer);
+    }
+    autoLockTimer = setTimeout(lockLocalWallet, remainingMs);
 }
 
 /** Sets up the auto-lock timer and the visibility-change listener (idempotent). */
 function setupAutoLock() {
-    if (!visibilityListenerAdded) {
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'hidden') {
-                lockLocalWallet();
-            }
-        });
-        visibilityListenerAdded = true;
+    // Do not lock on visibility changes (file-picker, tab-switch, refresh lifecycle),
+    // otherwise active sessions can be unexpectedly dropped while users are still working.
+    visibilityListenerAdded = true;
+    if (autoLockTimer === null) {
+        resetAutoLock();
     }
-    resetAutoLock();
 }
 
 /**
@@ -84,6 +108,7 @@ export async function registerLocalWallet() {
 
     unlockedPrivateKey = privateKey;
     setupAutoLock();
+    resetAutoLock();
 
     return { address, seedPhrase: mnemonic };
 }
@@ -115,6 +140,7 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
 
     unlockedPrivateKey = privateKey;
     setupAutoLock();
+    resetAutoLock();
     return { address };
 }
 export async function unlockLocalWallet() {
@@ -126,11 +152,27 @@ export async function unlockLocalWallet() {
     unlockedPrivateKey = await decryptPrivateKey(record.encryptedPrivateKey, record.iv);
     await saveLocalWallet({ ...record, lastUsedAt: new Date().toISOString() });
     setupAutoLock();
+    resetAutoLock();
     return { address: record.address };
 }
 
 export async function getLocalWalletStatus() {
     const record = await getLocalWalletRecord();
+    if (record && !unlockedPrivateKey && record.sessionExpiresAt) {
+        const expiresAtMs = new Date(record.sessionExpiresAt).getTime();
+        if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) {
+            try {
+                unlockedPrivateKey = await decryptPrivateKey(record.encryptedPrivateKey, record.iv);
+                setupAutoLock();
+                setAutoLockForRemainingMs(expiresAtMs - Date.now());
+            } catch (_) {
+                unlockedPrivateKey = null;
+                await saveLocalWallet({ ...record, sessionExpiresAt: null });
+            }
+        } else {
+            await saveLocalWallet({ ...record, sessionExpiresAt: null });
+        }
+    }
     return {
         exists: Boolean(record),
         address: record?.address || null,
@@ -149,6 +191,6 @@ export async function signWithLocalWallet(message) {
 }
 
 export async function removeLocalWallet() {
-    lockLocalWallet();
+    clearInMemorySession();
     await deleteLocalWallet();
 }
