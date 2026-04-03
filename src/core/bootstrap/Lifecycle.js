@@ -9,6 +9,7 @@ import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.js';
 import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
+import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import {
     appendChannelsMessage,
@@ -51,6 +52,7 @@ export async function initAuth() {
     this.lastDeployResult = null;
     this.setupAuthAwareUi(this.authController.state);
     this.refreshDeployUiState();
+    initDeployWizard();
     renderSignatureStatus(null);
     renderPublishReview(null);
     renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
@@ -120,6 +122,7 @@ export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
     const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
     setPublishButtonsState({ canSign: hasFiles, canDeploy: hasFiles && hasSignature });
+    updateDeployWizard({ hasFiles, hasSignature, hasDeployResult: Boolean(this.lastDeployResult) });
 }
 
 export function invalidateSignedState(message = 'Signature invalidated') {
@@ -685,6 +688,12 @@ export function setupEventListeners() {
                 updateDeployProgress({ label: error.message, percent: 100, state: 'error' });
                 renderDeployStage('Signing failed', error.message);
                 this.refreshDeployUiState();
+                updateDeployWizard({
+                    hasFiles: Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0),
+                    hasSignature: false,
+                    hasDeployResult: false,
+                    isError: true
+                });
                 this.toast.error(error.message, 'Sign failed');
             }
         },
@@ -695,6 +704,12 @@ export function setupEventListeners() {
             } catch (error) {
                 updateDeployProgress({ label: error.message, percent: 100, state: 'error' });
                 renderDeployStage('Deploy blocked', error.message);
+                updateDeployWizard({
+                    hasFiles: Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0),
+                    hasSignature: Boolean(this.lastSignature && this.lastSignedPublish),
+                    hasDeployResult: false,
+                    isError: true
+                });
                 this.toast.error(error.message, 'Deploy failed');
             }
         }
