@@ -110,8 +110,8 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 this.log(`Signed metadata verification skipped: ${metadataError.message}`);
             }
 
-            const chainVerified = await this.verifyTorrentChainBeforeDownload(torrent, sanitizedHash);
-            if (!chainVerified) {
+            const chainGate = await this.verifyTorrentChainBeforeDownload(torrent, sanitizedHash);
+            if (!chainGate.ok) {
                 this.sendToServiceWorker('SITE_LOADING', {
                     hash: sanitizedHash,
                     state: 'stop',
@@ -238,6 +238,29 @@ export async function loadSite(hash, _retryAttempt = 0) {
             }
             this.log(`Found index file: ${indexFile.name}`);
 
+            if (chainGate.manifest) {
+                const entryVerified = await this.verifyEntryFileIntegrity(indexFile, chainGate.manifest);
+                if (!entryVerified.ok) {
+                    this.currentSiteSignatureStatus = {
+                        label: '❌ Integrity failed: entry file not in .torrentchain or hash mismatch',
+                        verified: false
+                    };
+                    this.notifySignatureAbort(sanitizedHash, entryVerified.publisher || 'unknown', entryVerified.reason);
+                    this.hideLoadingOverlay();
+                    this.sendToServiceWorker('SITE_LOADING', {
+                        hash: sanitizedHash,
+                        state: 'stop',
+                        loadId,
+                        magnetURI,
+                        expectedSize: torrent.length || null
+                    });
+                    try {
+                        torrent.destroy();
+                    } catch (_) {}
+                    return;
+                }
+            }
+
             // Calculate dynamic timeout based on torrent size and file count
             const dynamicTimeout = this.calculateProcessingTimeout(torrent);
             this.log(`Dynamic processing timeout set to: ${(dynamicTimeout / 1000).toFixed(1)} seconds`);
@@ -269,17 +292,22 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
     });
 
     if (!chainFile) {
+        const orphanStatus = '⚠️ Orphan site: no .torrentchain manifest (signature not verifiable)';
         this.currentSiteSignatureStatus = {
-            label: 'Missing .torrentchain signature manifest',
+            label: orphanStatus,
             verified: false
         };
-        this.log('Missing .torrentchain in bundle, aborting load.');
-        this.hideLoadingOverlay();
-        alert('❌ Missing .torrentchain signature manifest. Download aborted for safety.');
-        try {
-            torrent.destroy();
-        } catch (_) {}
-        return false;
+        this.log('Missing .torrentchain in bundle.');
+        if (PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN) {
+            this.log('Strict mode enabled: aborting load because .torrentchain is required.');
+            this.hideLoadingOverlay();
+            alert('❌ Missing .torrentchain signature manifest. Download aborted (strict mode).');
+            try {
+                torrent.destroy();
+            } catch (_) {}
+            return { ok: false, manifest: null, legacy: true };
+        }
+        return { ok: true, manifest: null, legacy: true };
     }
 
     try {
@@ -293,13 +321,13 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
                 verified: false
             };
             this.log(`Invalid .torrentchain signature for hash ${hash}.`);
-            this.notifySignatureAbort(hash, verification.publisher || manifest?.payload?.publisher || 'unknown');
+            this.notifySignatureAbort(hash, verification.publisher || manifest?.payload?.publisher || 'unknown', 'signature-invalid');
             this.hideLoadingOverlay();
             alert('❌ Signature validation failed. Download stopped.');
             try {
                 torrent.destroy();
             } catch (_) {}
-            return false;
+            return { ok: false, manifest: null, legacy: false };
         }
 
         this.currentSiteSignatureStatus = {
@@ -307,7 +335,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             verified: true
         };
         this.log(`Verified .torrentchain signature for ${hash}.`);
-        return true;
+        return { ok: true, manifest, legacy: false };
     } catch (error) {
         this.currentSiteSignatureStatus = {
             label: 'Failed to parse .torrentchain',
@@ -319,21 +347,42 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
         try {
             torrent.destroy();
         } catch (_) {}
-        return false;
+        return { ok: false, manifest: null, legacy: false };
     }
 }
 
-export function notifySignatureAbort(hash, publisher) {
+export async function verifyEntryFileIntegrity(indexFile, manifest) {
+    const manifestFiles = Array.isArray(manifest?.files) ? manifest.files : [];
+    const entryPath = `${indexFile.path || indexFile.name || ''}`.replace(/\\/g, '/').replace(/^\/+/, '');
+    const manifestRecord =
+        manifestFiles.find((item) => item.path === entryPath) ||
+        manifestFiles.find((item) => item.path === (indexFile.name || ''));
+    if (!manifestRecord) {
+        return { ok: false, reason: 'entry-not-listed', publisher: manifest?.payload?.publisher };
+    }
+
+    const entryBuffer = await this.readFileBuffer(indexFile);
+    const digest = await crypto.subtle.digest('SHA-256', entryBuffer);
+    const digestHex = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+    if (digestHex !== manifestRecord.sha256) {
+        return { ok: false, reason: 'entry-hash-mismatch', publisher: manifest?.payload?.publisher };
+    }
+    return { ok: true, reason: 'ok', publisher: manifest?.payload?.publisher };
+}
+
+export function notifySignatureAbort(hash, publisher, reason = 'receiver-signature-validation-failed') {
     const payload = {
-        type: 'signature-abort',
         hash,
         publisher,
-        reason: 'receiver-signature-validation-failed',
+        reason,
         at: new Date().toISOString()
     };
     this.log(`Notifying publisher channel about signature abort: ${JSON.stringify(payload)}`);
     try {
-        this.channelsService?.sendSystemMessage?.(payload);
+        this.channelsService?.sendSystemMessage?.('signature-abort', payload);
     } catch (error) {
         this.log(`Signature abort notification skipped: ${error.message}`);
     }

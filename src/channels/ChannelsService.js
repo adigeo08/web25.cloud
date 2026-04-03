@@ -175,15 +175,18 @@ export default class ChannelsService {
         this.broadcast(payload);
     }
 
-    sendSystemMessage(data, identity = null) {
+    sendSystemMessage(kind, data, identity = null) {
         if (!this.currentTorrent || !this.currentChannel) return;
         const payload = {
-            type: 'signature-abort',
+            type: 'system',
             id: `sig-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             channel: this.currentChannel,
             from: identity?.address || 'system',
             timestamp: new Date().toISOString(),
-            data
+            data: {
+                kind,
+                ...data
+            }
         };
         this.broadcast(payload);
     }
@@ -208,7 +211,7 @@ export default class ChannelsService {
         if (payload.id && this.messageIds.has(payload.id)) return;
         if (payload.id) this.messageIds.add(payload.id);
         if (payload.type === 'chat') this.emit({ type: 'message', message: payload, local: isLocal });
-        if (payload.type === 'signature-abort') this.emit({ type: 'system', payload, local: isLocal });
+        if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal });
         if (payload.type === 'presence') {
             // Emit a presence event so the UI can react to peer announcements.
             this.emit({ type: 'presence', from: payload.from, timestamp: payload.timestamp });

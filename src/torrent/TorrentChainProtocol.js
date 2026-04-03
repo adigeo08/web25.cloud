@@ -19,10 +19,6 @@ function hexToBytes(hex) {
     return new Uint8Array(pairs.map((pair) => parseInt(pair, 16)));
 }
 
-function buildLeafRecord(fileInfo) {
-    return `${fileInfo.path}:${fileInfo.size}:${fileInfo.sha256}`;
-}
-
 export async function buildTorrentChainDraft(inMemoryFiles) {
     const fileEntries = [];
     let totalBytes = 0;
