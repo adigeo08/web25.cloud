@@ -272,8 +272,8 @@ export async function deploySignedArtifact() {
         this.lastPublishCandidate.torrent
     );
 
-    // BEP10: atașează extensia de semnătură pe torrentul live pentru a transmite
-    // semnătura EVM tuturor peers care se conectează la swarm
+    // BEP10: attach signature extension to the live torrent to broadcast the EVM
+    // signature to all peers connecting to the swarm
     if (this.lastPublishCandidate?.torrent) {
         const sigMeta = {
             publisher: identity.address,
@@ -751,7 +751,7 @@ export async function restoreDeploySession() {
                     this.lastPublishCandidate.torrent = torrent;
                     this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
 
-                    // BEP10: re-atașează extensia de semnătură după restore
+                    // BEP10: re-attach signature extension after session restore
                     if (savedSession.signature?.signature) {
                         const sigMeta = {
                             publisher: savedSession.signedBy || savedSession.signature?.payload?.publisherAddress || '',

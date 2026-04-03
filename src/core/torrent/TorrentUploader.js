@@ -649,7 +649,7 @@ export function attachSignatureExtensionToTorrent(torrent, signedMeta) {
         wire.use(SignatureExt)
     })
 
-    // Aplică și pe wire-urile deja existente (dacă torrentul e deja seeded)
+    // Apply to already-existing wires (if torrent is already seeded)
     if (Array.isArray(torrent.wires)) {
         torrent.wires.forEach((wire) => {
             try { wire.use(SignatureExt) } catch (_) {}
