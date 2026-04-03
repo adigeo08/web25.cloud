@@ -2,6 +2,7 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { verifyTorrentChainManifest } from '../../torrent/TorrentChainProtocol.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -52,7 +53,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
               verified: Boolean(knownSignature.verified)
           }
         : {
-              label: 'Publisher signature unavailable (magnet metadata)',
+              label: 'Publisher signature pending (.torrentchain)',
               verified: false
           };
 
@@ -107,6 +108,18 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 }
             } catch (metadataError) {
                 this.log(`Signed metadata verification skipped: ${metadataError.message}`);
+            }
+
+            const chainGate = await this.verifyTorrentChainBeforeDownload(torrent, sanitizedHash);
+            if (!chainGate.ok) {
+                this.sendToServiceWorker('SITE_LOADING', {
+                    hash: sanitizedHash,
+                    state: 'stop',
+                    loadId,
+                    magnetURI,
+                    expectedSize: torrent.length || null
+                });
+                return;
             }
 
             this.updatePeerStats(torrent);
@@ -201,7 +214,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 }, delay);
             });
 
-            // Select all files for download
+            // Select all files for download after .torrentchain verification.
             torrent.files.forEach((file) => file.select());
             this.log(`Selected ${torrent.files.length} files for download`);
 
@@ -225,6 +238,29 @@ export async function loadSite(hash, _retryAttempt = 0) {
             }
             this.log(`Found index file: ${indexFile.name}`);
 
+            if (chainGate.manifest) {
+                const entryVerified = await this.verifyEntryFileIntegrity(indexFile, chainGate.manifest);
+                if (!entryVerified.ok) {
+                    this.currentSiteSignatureStatus = {
+                        label: '❌ Integrity failed: entry file not in .torrentchain or hash mismatch',
+                        verified: false
+                    };
+                    this.notifySignatureAbort(sanitizedHash, entryVerified.publisher || 'unknown', entryVerified.reason);
+                    this.hideLoadingOverlay();
+                    this.sendToServiceWorker('SITE_LOADING', {
+                        hash: sanitizedHash,
+                        state: 'stop',
+                        loadId,
+                        magnetURI,
+                        expectedSize: torrent.length || null
+                    });
+                    try {
+                        torrent.destroy();
+                    } catch (_) {}
+                    return;
+                }
+            }
+
             // Calculate dynamic timeout based on torrent size and file count
             const dynamicTimeout = this.calculateProcessingTimeout(torrent);
             this.log(`Dynamic processing timeout set to: ${(dynamicTimeout / 1000).toFixed(1)} seconds`);
@@ -247,6 +283,121 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 "\n\n🔧 Troubleshooting:\n• Verify the hash format is correct (40 hex characters)\n• Check that seeders are available\n• Ensure your firewall isn't blocking WebRTC connections\n• Try loading the torrent again"
         );
     }
+}
+
+export async function verifyTorrentChainBeforeDownload(torrent, hash) {
+    const chainFile = torrent.files.find((file) => {
+        const name = (file.name || '').toLowerCase();
+        return name === '.torrentchain' || name.endsWith('/.torrentchain');
+    });
+
+    if (!chainFile) {
+        const orphanStatus = '⚠️ Orphan site: no .torrentchain manifest (signature not verifiable)';
+        this.currentSiteSignatureStatus = {
+            label: orphanStatus,
+            verified: false
+        };
+        this.log('Missing .torrentchain in bundle.');
+        if (PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN) {
+            this.log('Strict mode enabled: aborting load because .torrentchain is required.');
+            this.hideLoadingOverlay();
+            alert('❌ Missing .torrentchain signature manifest. Download aborted (strict mode).');
+            try {
+                torrent.destroy();
+            } catch (_) {}
+            return { ok: false, manifest: null, legacy: true };
+        }
+        return { ok: true, manifest: null, legacy: true };
+    }
+
+    try {
+        const buffer = await this.readFileBuffer(chainFile);
+        const manifestText = new TextDecoder().decode(buffer);
+        const manifest = JSON.parse(manifestText);
+        const verification = await verifyTorrentChainManifest(manifest);
+        if (!verification.verified) {
+            this.currentSiteSignatureStatus = {
+                label: 'Invalid .torrentchain signature',
+                verified: false
+            };
+            this.log(`Invalid .torrentchain signature for hash ${hash}.`);
+            this.notifySignatureAbort(hash, verification.publisher || manifest?.payload?.publisher || 'unknown', 'signature-invalid');
+            this.hideLoadingOverlay();
+            alert('❌ Signature validation failed. Download stopped.');
+            try {
+                torrent.destroy();
+            } catch (_) {}
+            return { ok: false, manifest: null, legacy: false };
+        }
+
+        this.currentSiteSignatureStatus = {
+            label: `Verified publisher: ${verification.publisher.slice(0, 10)}...`,
+            verified: true
+        };
+        this.log(`Verified .torrentchain signature for ${hash}.`);
+        return { ok: true, manifest, legacy: false };
+    } catch (error) {
+        this.currentSiteSignatureStatus = {
+            label: 'Failed to parse .torrentchain',
+            verified: false
+        };
+        this.log(`Failed to verify .torrentchain: ${error.message}`);
+        this.hideLoadingOverlay();
+        alert('❌ Could not read .torrentchain signature manifest. Download stopped.');
+        try {
+            torrent.destroy();
+        } catch (_) {}
+        return { ok: false, manifest: null, legacy: false };
+    }
+}
+
+export async function verifyEntryFileIntegrity(indexFile, manifest) {
+    const manifestFiles = Array.isArray(manifest?.files) ? manifest.files : [];
+    const entryPath = `${indexFile.path || indexFile.name || ''}`.replace(/\\/g, '/').replace(/^\/+/, '');
+    const manifestRecord =
+        manifestFiles.find((item) => item.path === entryPath) ||
+        manifestFiles.find((item) => item.path === (indexFile.name || ''));
+    if (!manifestRecord) {
+        return { ok: false, reason: 'entry-not-listed', publisher: manifest?.payload?.publisher };
+    }
+
+    const entryBuffer = await this.readFileBuffer(indexFile);
+    const digest = await crypto.subtle.digest('SHA-256', entryBuffer);
+    const digestHex = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+    if (digestHex !== manifestRecord.sha256) {
+        return { ok: false, reason: 'entry-hash-mismatch', publisher: manifest?.payload?.publisher };
+    }
+    return { ok: true, reason: 'ok', publisher: manifest?.payload?.publisher };
+}
+
+export function notifySignatureAbort(hash, publisher, reason = 'receiver-signature-validation-failed') {
+    const payload = {
+        hash,
+        publisher,
+        reason,
+        at: new Date().toISOString()
+    };
+    this.log(`Notifying publisher channel about signature abort: ${JSON.stringify(payload)}`);
+    try {
+        this.channelsService?.sendSystemMessage?.('signature-abort', payload);
+    } catch (error) {
+        this.log(`Signature abort notification skipped: ${error.message}`);
+    }
+}
+
+export function readFileBuffer(file) {
+    return new Promise((resolve, reject) => {
+        file.getBuffer((error, buffer) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve(buffer);
+        });
+    });
 }
 
 export function shouldProcessSiteEarly(torrent) {
