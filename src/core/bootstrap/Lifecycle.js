@@ -16,7 +16,6 @@ import {
     clearChannelsMessages,
     renderChannelsStatus
 } from '../../ui/channels/ChannelsPanel.js';
-import { attachSignatureExtensionToTorrent } from '../torrent/TorrentUploader.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
@@ -32,7 +31,6 @@ export async function init() {
         this.updateDebugToggle();
         await this.initAuth();
         await this.restoreDeploySession();
-        document.dispatchEvent(new CustomEvent('peerweb:ready'));
     } catch (error) {
         console.error('PeerWeb initialization failed:', error);
         this.showError('Failed to initialize PeerWeb: ' + error.message);
@@ -227,7 +225,7 @@ export async function signStagedPayload() {
                 signatureAlgorithm: signature.signatureAlgorithm,
                 payload: signature.payload,
                 signature: signature.signature,
-                torrentEmbedding: 'embedded-torrent-metadata + bep10-extended-handshake'
+                torrentEmbedding: 'embedded-torrent-metadata'
             },
             null,
             2
@@ -273,19 +271,6 @@ export async function deploySignedArtifact() {
         this.lastPublishCandidate.torrent
     );
 
-    // BEP10: attach signature extension to broadcast the EVM signature to all peers
-    if (this.lastPublishCandidate?.torrent) {
-        const sigMeta = {
-            publisher: identity.address,
-            signature: this.lastSignature.signature,
-            signatureAlgorithm: this.lastSignature.signatureAlgorithm || 'EVM_SECP256K1',
-            signedAt: this.lastSignature.signedAt,
-            torrentHash: hash,
-            chainId: String(identity.chainId || 1)
-        };
-        attachSignatureExtensionToTorrent.call(this, this.lastPublishCandidate.torrent, sigMeta);
-    }
-
     const output = document.getElementById('publish-output');
     if (output) {
         output.textContent = JSON.stringify(
@@ -301,7 +286,7 @@ export async function deploySignedArtifact() {
                     integrity: 'Torrent hash guarantees content integrity',
                     authorship: 'Wallet signature embedded in torrent root metadata and bound to torrentHash'
                 },
-                signatureStorage: ['embedded-torrent-metadata', 'bep10-extended-handshake']
+                signatureStorage: ['embedded-torrent-metadata']
             },
             null,
             2
@@ -750,19 +735,6 @@ export async function restoreDeploySession() {
                 (torrent) => {
                     this.lastPublishCandidate.torrent = torrent;
                     this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
-
-                    // BEP10: re-attach signature extension after session restore
-                    if (savedSession.signature?.signature) {
-                        const sigMeta = {
-                            publisher: savedSession.signedBy || savedSession.signature?.payload?.publisherAddress || '',
-                            signature: savedSession.signature.signature,
-                            signatureAlgorithm: savedSession.signature.signatureAlgorithm || 'EVM_SECP256K1',
-                            signedAt: savedSession.signature.signedAt || '',
-                            torrentHash: savedSession.hash,
-                            chainId: String(savedSession.signature?.payload?.chainId || 1)
-                        };
-                        attachSignatureExtensionToTorrent.call(this, torrent, sigMeta);
-                    }
 
                     if (savedSession.deployed) {
                         const url = `${window.location.origin}${window.location.pathname}?orc=${savedSession.hash}`;
