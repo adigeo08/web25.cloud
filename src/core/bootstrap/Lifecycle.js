@@ -6,7 +6,7 @@ import { bindPublishActions, renderDeployStage, setPublishButtonsState } from '.
 import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
-import { createSignedTorrentArtifact } from '../../torrent/SignedTorrentProtocol.js';
+import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import {
@@ -175,8 +175,24 @@ export async function signStagedPayload() {
         try { this.lastPublishCandidate.torrent.destroy(); } catch (_) {}
     }
 
-    const prepared = await this.prepareDeployArtifact(this.pendingDeployFiles, ({ label, percent }) =>
+    const inMemoryFiles = await this.buildInMemoryDeployBundle(this.pendingDeployFiles, ({ label, percent }) =>
         updateDeployProgress({ label, percent, state: 'running' })
+    );
+    updateDeployProgress({ label: 'Generating .torrentchain signature manifest', percent: 55, state: 'running' });
+
+    const chainArtifact = await createTorrentChainArtifact({
+        inMemoryFiles,
+        publisher: identity.address,
+        chainId: identity.chainId || 1,
+        identityType: identity.identityType,
+        createdAt
+    });
+
+    const torrentChainFile = this.createVirtualBundleFile('.torrentchain', chainArtifact.content, 'application/json');
+    const prepared = await this.seedInMemoryDeployBundle(
+        [torrentChainFile, ...inMemoryFiles],
+        this.pendingDeployFiles,
+        ({ label, percent }) => updateDeployProgress({ label, percent, state: 'running' })
     );
 
     this.lastPublishCandidate = {
@@ -190,27 +206,17 @@ export async function signStagedPayload() {
     const payloadInput = this.getSignedPayloadInput(prepared.infoHash, createdAt);
     renderPublishReview(payloadInput);
 
-    updateDeployProgress({ label: 'Waiting for wallet signature', indeterminate: true, state: 'running' });
-
-    const signedArtifact = await createSignedTorrentArtifact({
-        torrentFile: prepared.torrentFile,
-        torrentHash: prepared.infoHash,
-        publisher: identity.address,
-        chainId: identity.chainId || 1,
-        identityType: identity.identityType
-    });
-
     const signature = {
-        payload: signedArtifact.signingPayload,
-        message: signedArtifact.signingDigest,
-        signature: signedArtifact.signature,
-        signatureAlgorithm: signedArtifact.signatureAlgorithm,
-        signedAt: signedArtifact.signedAt
+        payload: chainArtifact.payload,
+        message: chainArtifact.message,
+        signature: chainArtifact.signature,
+        signatureAlgorithm: chainArtifact.signatureAlgorithm,
+        signedAt: createdAt
     };
 
     this.lastSignature = signature;
     this.lastSignedPublish = attachPublishMetadata(prepared.infoHash, signature);
-    this.lastPublishCandidate.signedTorrentFile = signedArtifact.signedTorrent;
+    this.lastPublishCandidate.signedTorrentFile = prepared.torrentFile;
     this.persistDeploySession();
 
     renderSignatureStatus(signature);
@@ -225,7 +231,7 @@ export async function signStagedPayload() {
                 signatureAlgorithm: signature.signatureAlgorithm,
                 payload: signature.payload,
                 signature: signature.signature,
-                torrentEmbedding: 'embedded-torrent-metadata'
+                torrentEmbedding: '.torrentchain bundle manifest'
             },
             null,
             2
@@ -284,9 +290,9 @@ export async function deploySignedArtifact() {
                 signedAt: this.lastSignature.signedAt,
                 authenticity: {
                     integrity: 'Torrent hash guarantees content integrity',
-                    authorship: 'Wallet signature embedded in torrent root metadata and bound to torrentHash'
+                    authorship: 'Wallet signature is embedded in .torrentchain and verified before site rendering'
                 },
-                signatureStorage: ['embedded-torrent-metadata']
+                signatureStorage: ['.torrentchain']
             },
             null,
             2

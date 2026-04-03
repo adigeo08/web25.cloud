@@ -548,20 +548,23 @@ export async function prepareDeployArtifact(files, onProgress) {
         throw new Error('WebTorrent client is not ready');
     }
 
-    let timeoutId = null;
+    onProgress?.({ label: 'Bundling files in memory', percent: 35 });
+    const inMemoryFiles = await this.buildInMemoryDeployBundle(files, onProgress);
+    return this.seedInMemoryDeployBundle(inMemoryFiles, files, onProgress);
+}
 
+export async function seedInMemoryDeployBundle(inMemoryFiles, sourceFiles, onProgress) {
+    let timeoutId = null;
+    onProgress?.({ label: 'Creating torrent from memory bundle', percent: 55 });
     try {
-        onProgress?.({ label: 'Bundling files in memory', percent: 35 });
-        const inMemoryFiles = await this.buildInMemoryDeployBundle(files, onProgress);
-        onProgress?.({ label: 'Creating torrent from memory bundle', percent: 55 });
-        const createdTorrent = await new Promise((resolve, reject) => {
+        return await new Promise((resolve, reject) => {
             timeoutId = setTimeout(() => reject(new Error('Timed out while creating torrent')), 30000);
 
             this.client.seed(
                 inMemoryFiles,
                 {
                     announce: this.trackers,
-                    name: this.generateTorrentName(files),
+                    name: this.generateTorrentName(sourceFiles || inMemoryFiles),
                     comment: 'Web25 Deploy Artifact (in-memory bundle)',
                     createdBy: 'Web25.Cloud Deploy',
                     private: false,
@@ -576,11 +579,8 @@ export async function prepareDeployArtifact(files, onProgress) {
                 }
             );
         });
-        return createdTorrent;
     } finally {
-        if (timeoutId) {
-            clearTimeout(timeoutId);
-        }
+        if (timeoutId) clearTimeout(timeoutId);
     }
 }
 
@@ -619,6 +619,23 @@ export async function buildInMemoryDeployBundle(files, onProgress) {
 
     this.log(`Prepared in-memory deploy bundle with ${inMemoryFiles.length} files`);
     return inMemoryFiles;
+}
+
+export function createVirtualBundleFile(path, content, type = 'application/octet-stream') {
+    const virtualFile = new File([content], path.split('/').pop() || path, {
+        type,
+        lastModified: Date.now()
+    });
+
+    try {
+        Object.defineProperty(virtualFile, 'path', { value: path });
+    } catch (_) {}
+
+    try {
+        Object.defineProperty(virtualFile, 'webkitRelativePath', { value: path });
+    } catch (_) {}
+
+    return virtualFile;
 }
 
 export function showUploadProgress(message) {
