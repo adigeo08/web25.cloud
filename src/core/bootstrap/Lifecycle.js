@@ -688,6 +688,12 @@ export function setupEventListeners() {
                 updateDeployProgress({ label: error.message, percent: 100, state: 'error' });
                 renderDeployStage('Signing failed', error.message);
                 this.refreshDeployUiState();
+                updateDeployWizard({
+                    hasFiles: Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0),
+                    hasSignature: false,
+                    hasDeployResult: false,
+                    isError: true
+                });
                 this.toast.error(error.message, 'Sign failed');
             }
         },
@@ -698,6 +704,12 @@ export function setupEventListeners() {
             } catch (error) {
                 updateDeployProgress({ label: error.message, percent: 100, state: 'error' });
                 renderDeployStage('Deploy blocked', error.message);
+                updateDeployWizard({
+                    hasFiles: Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0),
+                    hasSignature: Boolean(this.lastSignature && this.lastSignedPublish),
+                    hasDeployResult: false,
+                    isError: true
+                });
                 this.toast.error(error.message, 'Deploy failed');
             }
         }

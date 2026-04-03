@@ -7,7 +7,7 @@
  */
 
 /**
- * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean }} DeployWizardState
+ * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean, isError?: boolean }} DeployWizardState
  */
 
 /** @type {NodeListOf<HTMLElement> | null} */
@@ -29,7 +29,7 @@ export function initDeployWizard() {
     );
     wizardNextEl = document.getElementById('deploy-wizard-next');
     techDetails = /** @type {HTMLDetailsElement | null} */ (
-        document.querySelector('#tab-publish .deploy-card details')
+        document.getElementById('deploy-tech-details')
     );
 }
 
@@ -41,9 +41,9 @@ export function initDeployWizard() {
 export function updateDeployWizard(state) {
     if (!stepChips || stepChips.length === 0) return;
 
-    const { hasFiles, hasSignature, hasDeployResult } = state;
+    const { hasFiles, hasSignature, hasDeployResult, isError = false } = state;
 
-    // Derive active step (1-based, matching the 6 step chips)
+    // Determine active step (1-based, matching the 6 step chips)
     // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign  5 – Deploy  6 – Live
     let activeStep;
     if (hasDeployResult) {
@@ -88,15 +88,7 @@ export function updateDeployWizard(state) {
     }
 
     // Auto-open technical details panel on error states
-    if (techDetails) {
-        const stageLabel = document.getElementById('deploy-stage-label');
-        const stageText = stageLabel ? stageLabel.textContent || '' : '';
-        const isErrorState =
-            stageText.toLowerCase().includes('failed') ||
-            stageText.toLowerCase().includes('blocked') ||
-            stageText.toLowerCase().includes('error');
-        if (isErrorState) {
-            techDetails.open = true;
-        }
+    if (techDetails && isError) {
+        techDetails.open = true;
     }
 }
