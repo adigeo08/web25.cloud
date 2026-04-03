@@ -28,15 +28,16 @@ class PeerWebCache {
         });
     }
 
-    async set(hash, data) {
+    async set(hash, siteData, metadata = {}) {
         try {
             const db = await this.openDB();
             const transaction = db.transaction([this.storeName], 'readwrite');
             const store = transaction.objectStore(this.storeName);
 
             const record = {
-                hash: hash,
-                data: data,
+                hash,
+                data: siteData,
+                signatureState: metadata.signatureState || null,
                 timestamp: Date.now()
             };
 
@@ -47,7 +48,7 @@ class PeerWebCache {
         }
     }
 
-    async get(hash) {
+    async getEntry(hash) {
         try {
             const db = await this.openDB();
             const transaction = db.transaction([this.storeName], 'readonly');
@@ -59,10 +60,9 @@ class PeerWebCache {
                     const result = request.result;
                     if (result && Date.now() - result.timestamp < this.maxAge) {
                         console.log(`[PeerWebCache] Cache hit: ${hash}`);
-                        resolve(result.data);
+                        resolve(result);
                     } else {
                         if (result) {
-                            // Clean up expired entry
                             this.delete(hash);
                         }
                         resolve(null);
@@ -74,6 +74,11 @@ class PeerWebCache {
             console.error('[PeerWebCache] Error retrieving from cache:', error);
             return null;
         }
+    }
+
+    async get(hash) {
+        const entry = await this.getEntry(hash);
+        return entry?.data || null;
     }
 
     async delete(hash) {

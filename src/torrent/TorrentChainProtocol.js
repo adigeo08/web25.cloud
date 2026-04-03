@@ -65,7 +65,7 @@ export async function buildTorrentChainDraft(inMemoryFiles) {
     };
 }
 
-export async function createTorrentChainArtifact({ inMemoryFiles, publisher, chainId, identityType, createdAt }) {
+export async function createTorrentChainArtifact({ inMemoryFiles, publisher, chainId, identityType, createdAt, bundle = null }) {
     const draft = await buildTorrentChainDraft(inMemoryFiles);
     const payload = {
         schema: 'web25-torrentchain-v1',
@@ -74,7 +74,8 @@ export async function createTorrentChainArtifact({ inMemoryFiles, publisher, cha
         createdAt,
         fileCount: draft.fileCount,
         totalBytes: draft.totalBytes,
-        merkleRoot: draft.merkleRoot
+        merkleRoot: draft.merkleRoot,
+        ...(bundle ? { bundle } : {})
     };
     const signed = await signPublishPayload(payload, identityType);
 
