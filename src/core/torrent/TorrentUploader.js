@@ -1,6 +1,7 @@
 // @ts-check
 
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { createBep10SignatureExtension } from '../../torrent/Bep10SignatureExtension.js';
 
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
@@ -635,6 +636,27 @@ export function showUploadProgress(message) {
     if (resultEl) {
         resultEl.classList.add('hidden');
     }
+}
+
+export function attachSignatureExtensionToTorrent(torrent, signedMeta) {
+    if (!torrent || !signedMeta || !signedMeta.signature) return
+
+    const SignatureExt = createBep10SignatureExtension(signedMeta, (receivedMeta) => {
+        this.log(`[BEP10/sig] Received sig_announce from peer: publisher=${receivedMeta.publisher}, verified=pending`)
+    })
+
+    torrent.on('wire', (wire) => {
+        wire.use(SignatureExt)
+    })
+
+    // Apply to already-existing wires (if torrent is already seeded)
+    if (Array.isArray(torrent.wires)) {
+        torrent.wires.forEach((wire) => {
+            try { wire.use(SignatureExt) } catch (_) {}
+        })
+    }
+
+    this.log(`[BEP10/sig] Signature extension attached to torrent ${signedMeta.torrentHash?.slice(0, 8)}`)
 }
 
 export function hideUploadProgress() {
