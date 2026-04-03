@@ -7,6 +7,7 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.js';
+import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import {
@@ -178,6 +179,45 @@ export async function signStagedPayload() {
     const inMemoryFiles = await this.buildInMemoryDeployBundle(this.pendingDeployFiles, ({ label, percent }) =>
         updateDeployProgress({ label, percent, state: 'running' })
     );
+
+    const usingGzipBundle = PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && supportsNativeGzipStreams;
+    let deployPayloadFiles = inMemoryFiles;
+    let bundleMetadata = null;
+
+    if (PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && !supportsNativeGzipStreams) {
+        this.log('Gzip bundle mode requested but CompressionStream/DecompressionStream is unavailable. Falling back to files mode.');
+        this.toast?.warning?.(
+            'Gzip bundle mode is unavailable in this browser (missing CompressionStream/DecompressionStream). Falling back to standard files mode.',
+            'Gzip mode unavailable'
+        );
+    }
+
+    if (usingGzipBundle) {
+        updateDeployProgress({ label: 'Encoding site.bundle.json.gz payload', percent: 45, state: 'running' });
+        const bundleInputFiles = [];
+        for (const file of inMemoryFiles) {
+            const path = this.getNormalizedDeployPath(file);
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            bundleInputFiles.push({
+                path,
+                contentType: file.type || this.getContentType(path),
+                bytes
+            });
+        }
+
+        const entryPath = bundleInputFiles
+            .map((entry) => entry.path)
+            .find((path) => path.toLowerCase() === 'index.html' || path.toLowerCase().endsWith('/index.html'));
+        const encodedBundle = await encodeSiteBundleGzip(bundleInputFiles, { entryPath });
+        bundleMetadata = {
+            name: SITE_BUNDLE_FILE_NAME,
+            sha256: encodedBundle.sha256,
+            contentEncoding: 'gzip',
+            schema: SITE_BUNDLE_SCHEMA
+        };
+        deployPayloadFiles = [this.createVirtualBundleFile(SITE_BUNDLE_FILE_NAME, encodedBundle.gzipBytes, 'application/gzip')];
+    }
+
     updateDeployProgress({ label: 'Generating .torrentchain signature manifest', percent: 55, state: 'running' });
 
     const chainArtifact = await createTorrentChainArtifact({
@@ -185,12 +225,14 @@ export async function signStagedPayload() {
         publisher: identity.address,
         chainId: identity.chainId || 1,
         identityType: identity.identityType,
-        createdAt
+        createdAt,
+        bundle: bundleMetadata,
+        filesSemantics: usingGzipBundle ? 'bundle-contents' : 'torrent-entries'
     });
 
     const torrentChainFile = this.createVirtualBundleFile('.torrentchain', chainArtifact.content, 'application/json');
     const prepared = await this.seedInMemoryDeployBundle(
-        [torrentChainFile, ...inMemoryFiles],
+        [torrentChainFile, ...deployPayloadFiles],
         this.pendingDeployFiles,
         ({ label, percent }) => updateDeployProgress({ label, percent, state: 'running' })
     );
