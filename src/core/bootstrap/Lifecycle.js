@@ -186,7 +186,7 @@ export async function signStagedPayload() {
 
     if (PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && !supportsNativeGzipStreams) {
         this.log('Gzip bundle mode requested but CompressionStream/DecompressionStream is unavailable. Falling back to files mode.');
-        this.toast.warning(
+        this.toast?.warning?.(
             'Gzip bundle mode is unavailable in this browser (missing CompressionStream/DecompressionStream). Falling back to standard files mode.',
             'Gzip mode unavailable'
         );
