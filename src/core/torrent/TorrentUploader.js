@@ -1,6 +1,7 @@
 // @ts-check
 
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { createBep10SignatureExtension } from '../../torrent/Bep10SignatureExtension.js';
 
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
@@ -242,18 +243,19 @@ export async function handleTorrentFile(torrentFile) {
         this.hideUploadProgress();
 
         if (error.message.includes('Invalid torrent identifier')) {
-            alert(
-                "❌ Invalid Torrent File\n\nThe file appears to be corrupted or incompatible with WebTorrent.\n\n🔧 Troubleshooting:\n• Try creating a new torrent using the Advanced Torrent Creator\n• Verify the .torrent file isn't damaged\n• Make sure it's a BitTorrent v1 torrent (v2 not yet supported)"
+            this.toast.error(
+                'The file appears to be corrupted or incompatible with WebTorrent. Try creating a new torrent or verify the .torrent file is a BitTorrent v1 torrent.',
+                '❌ Invalid Torrent File'
             );
         } else if (error.message.includes('Invalid torrent file format')) {
-            alert(
-                "❌ Not a Valid Torrent\n\nThis file doesn't have a valid torrent file structure.\n\n🔧 Troubleshooting:\n• Ensure the file has a .torrent extension\n• Try re-downloading the torrent file\n• Use the PeerWeb Advanced Torrent Creator to generate a new one"
+            this.toast.error(
+                "This file doesn't have a valid torrent file structure. Ensure it has a .torrent extension or use the PeerWeb Advanced Torrent Creator.",
+                '❌ Not a Valid Torrent'
             );
         } else {
-            alert(
-                '❌ Torrent Loading Error\n\n' +
-                    error.message +
-                    "\n\n🔧 Troubleshooting:\n• Create a new torrent using the Advanced Torrent Creator\n• Verify your internet connection is stable\n• Check that the file isn't corrupted\n• Make sure you have enough available memory"
+            this.toast.error(
+                `${error.message} — Create a new torrent using the Advanced Torrent Creator, verify your connection, or check that the file isn't corrupted.`,
+                '❌ Torrent Loading Error'
             );
         }
     }
@@ -709,7 +711,65 @@ export function downloadDesktopClient(os) {
 
     const osName = osNames[os] || os;
     this.log(`Desktop client requested for ${osName}`);
-    alert(
-        `🚀 PeerWeb Desktop for ${osName} - Coming Soon!\n\nDesktop clients are currently under development.\n\n💡 In the meantime:\n• Keep this browser tab open to continue hosting\n• Bookmark this page for easy access\n• Your site will remain active as long as this tab is open`
+    this.toast.info(
+        `PeerWeb Desktop for ${osName} is currently under development. Keep this browser tab open to continue hosting, or bookmark the page for easy access.`,
+        `🚀 Desktop Client Coming Soon`
     );
+}
+
+/**
+ * Attach a BEP10 signature extension to a live torrent so the EVM signature
+ * is broadcast to all connecting peers via the extended handshake.
+ *
+ * If the handshake fails or no peer supports BEP10, a warning toast is shown
+ * suggesting the user switch to a different tracker.
+ *
+ * @param {object} torrent - WebTorrent torrent instance
+ * @param {object} signedMeta - signature metadata to broadcast
+ */
+export function attachSignatureExtensionToTorrent(torrent, signedMeta) {
+    if (!torrent || !signedMeta || !signedMeta.signature) return;
+
+    let peersSupportingBep10 = 0;
+    let totalPeers = 0;
+
+    const SignatureExt = createBep10SignatureExtension(signedMeta, (receivedMeta) => {
+        this.log(`[BEP10/sig] Received sig_announce echo from peer: publisher=${receivedMeta.publisher}`);
+    });
+
+    torrent.on('wire', (wire) => {
+        totalPeers++;
+        try {
+            wire.use(SignatureExt);
+            peersSupportingBep10++;
+        } catch (err) {
+            console.warn('[BEP10/sig] wire.use failed for peer:', err);
+        }
+
+        wire.on('close', () => {
+            totalPeers = Math.max(0, totalPeers - 1);
+        });
+    });
+
+    // After a short delay, warn if no peers support BEP10
+    setTimeout(() => {
+        if (totalPeers > 0 && peersSupportingBep10 === 0) {
+            console.warn('[BEP10/sig] No peers support BEP10 — signature may not propagate');
+            this.toast.warning(
+                'BEP10 is not supported by any connected peer. Your signature may not reach other peers. Try switching to a different tracker.',
+                '⚠️ BEP10 Not Supported'
+            );
+        } else if (peersSupportingBep10 === 0 && totalPeers === 0) {
+            console.warn('[BEP10/sig] No peers connected yet — cannot verify BEP10 support');
+        }
+    }, 15000);
+
+    // Apply to already-connected wires (if torrent is already seeding)
+    if (Array.isArray(torrent.wires)) {
+        torrent.wires.forEach((wire) => {
+            try { wire.use(SignatureExt); peersSupportingBep10++; totalPeers++; } catch (_) {}
+        });
+    }
+
+    this.log(`[BEP10/sig] Signature extension attached to torrent ${signedMeta.torrentHash?.slice(0, 8)}`);
 }
