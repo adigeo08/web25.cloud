@@ -3,7 +3,7 @@
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
 import { verifyTorrentChainManifest } from '../../torrent/TorrentChainProtocol.js';
-import { decodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME } from '../../torrent/SiteBundleCodec.js';
+import { decodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { SIGNATURE_STATE_VERIFICATION_VERSION } from '../cache/SignatureStateVersion.js';
 import { evaluateRenderGate } from '../../torrent/RenderGate.js';
 
@@ -309,7 +309,10 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
     });
 
     if (!chainFile) {
-        const orphanStatus = '⚠️ Orphan site: no .torrentchain manifest (signature not verifiable)';
+        const orphanStatus =
+            PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip'
+                ? '⚠️ Orphan gzip bundle: no .torrentchain manifest (bundle hash not verifiable)'
+                : '⚠️ Orphan site: no .torrentchain manifest (signature not verifiable)';
         const signatureState = this.buildSignatureState({
             verified: false,
             label: orphanStatus,
@@ -321,7 +324,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
         if (PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN) {
             this.log('Strict mode enabled: aborting load because .torrentchain is required.');
             this.hideLoadingOverlay();
-            alert('❌ Missing .torrentchain signature manifest. Download aborted (strict mode).');
+            this.reportVerificationIssue('Missing .torrentchain signature manifest. Download aborted (strict mode).');
             try {
                 torrent.destroy();
             } catch (_) {}
@@ -350,7 +353,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             this.log(`Invalid .torrentchain signature for hash ${hash}.`);
             this.notifySignatureAbort(hash, verification.publisher || manifest?.payload?.publisher || 'unknown', 'signature-invalid');
             this.hideLoadingOverlay();
-            alert('❌ Signature validation failed. Download stopped.');
+            this.reportVerificationIssue('Signature validation failed. Download stopped.');
             try {
                 torrent.destroy();
             } catch (_) {}
@@ -378,7 +381,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
         this.currentSiteSignatureStatus = signatureState;
         this.log(`Failed to verify .torrentchain: ${error.message}`);
         this.hideLoadingOverlay();
-        alert('❌ Could not read .torrentchain signature manifest. Download stopped.');
+        this.reportVerificationIssue('Could not read .torrentchain signature manifest. Download stopped.');
         try {
             torrent.destroy();
         } catch (_) {}
@@ -719,6 +722,9 @@ export async function processTorrent(torrent, hash) {
 
 export async function processTorrentGzipBundle(torrent, hash) {
     try {
+        if (!supportsNativeGzipStreams) {
+            throw new Error('Gzip mode requires CompressionStream and DecompressionStream support');
+        }
         const bundleFile = torrent.files.find((file) => {
             const normalized = (file.path || file.name || '').replace(/\\/g, '/');
             return normalized === SITE_BUNDLE_FILE_NAME || normalized.endsWith(`/${SITE_BUNDLE_FILE_NAME}`);
@@ -747,7 +753,7 @@ export async function processTorrentGzipBundle(torrent, hash) {
                 bundleHash: manifestBundleSha
             });
             this.hideLoadingOverlay();
-            alert(`❌ Render blocked (${gate.reason}).`);
+            this.reportVerificationIssue(`Render blocked (${gate.reason}).`);
             this.processingInProgress = false;
             return;
         }
@@ -784,10 +790,19 @@ export async function processTorrentGzipBundle(torrent, hash) {
     } catch (error) {
         this.log(`Failed to process gzip bundle: ${error.message}`);
         this.hideLoadingOverlay();
-        alert(`❌ Failed to decode site bundle: ${error.message}`);
+        this.reportVerificationIssue(`Failed to decode site bundle: ${error.message}`);
     } finally {
         this.processingInProgress = false;
     }
+}
+
+export function reportVerificationIssue(message) {
+    this.log(`[Verification] ${message}`);
+    if (this.toast?.error) {
+        this.toast.error(message, 'Verification Error');
+        return;
+    }
+    console.error(message);
 }
 
 export function findIndexFile(files) {

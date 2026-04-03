@@ -1,9 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { gzipSync, gunzipSync } from 'node:zlib';
 
 global.window = {
     location: { hostname: 'localhost', origin: 'http://localhost', pathname: '/' }
 };
+
+if (typeof global.CompressionStream === 'undefined') {
+    global.CompressionStream = class {
+        constructor(format) {
+            if (format !== 'gzip') throw new Error('Unsupported format');
+            this.readable = null;
+            this.writable = null;
+            const transform = new TransformStream({
+                transform(chunk, controller) {
+                    controller.enqueue(new Uint8Array(gzipSync(chunk)));
+                }
+            });
+            this.readable = transform.readable;
+            this.writable = transform.writable;
+        }
+    };
+}
+
+if (typeof global.DecompressionStream === 'undefined') {
+    global.DecompressionStream = class {
+        constructor(format) {
+            if (format !== 'gzip') throw new Error('Unsupported format');
+            this.readable = null;
+            this.writable = null;
+            const transform = new TransformStream({
+                transform(chunk, controller) {
+                    controller.enqueue(new Uint8Array(gunzipSync(chunk)));
+                }
+            });
+            this.readable = transform.readable;
+            this.writable = transform.writable;
+        }
+    };
+}
 
 const { encodeSiteBundleGzip, decodeSiteBundleGzip } = await import('../src/torrent/SiteBundleCodec.js');
 const { evaluateRenderGate } = await import('../src/torrent/RenderGate.js');
@@ -92,7 +127,8 @@ test('Legacy/orphan permissive mode allows load but strict mode blocks', async (
         currentSiteSignatureStatus: null,
         buildSignatureState,
         log() {},
-        hideLoadingOverlay() {}
+        hideLoadingOverlay() {},
+        reportVerificationIssue() {}
     };
 
     global.alert = () => {};

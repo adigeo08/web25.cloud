@@ -7,7 +7,7 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.js';
-import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA } from '../../torrent/SiteBundleCodec.js';
+import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import {
@@ -180,9 +180,17 @@ export async function signStagedPayload() {
         updateDeployProgress({ label, percent, state: 'running' })
     );
 
-    const usingGzipBundle = PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip';
+    const usingGzipBundle = PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && supportsNativeGzipStreams;
     let deployPayloadFiles = inMemoryFiles;
     let bundleMetadata = null;
+
+    if (PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && !supportsNativeGzipStreams) {
+        this.log('Gzip bundle mode requested but CompressionStream/DecompressionStream is unavailable. Falling back to files mode.');
+        this.toast.warning(
+            'Gzip bundle mode is unavailable in this browser (missing CompressionStream/DecompressionStream). Falling back to standard files mode.',
+            'Gzip mode unavailable'
+        );
+    }
 
     if (usingGzipBundle) {
         updateDeployProgress({ label: 'Encoding site.bundle.json.gz payload', percent: 45, state: 'running' });
@@ -218,7 +226,8 @@ export async function signStagedPayload() {
         chainId: identity.chainId || 1,
         identityType: identity.identityType,
         createdAt,
-        bundle: bundleMetadata
+        bundle: bundleMetadata,
+        filesSemantics: usingGzipBundle ? 'bundle-contents' : 'torrent-entries'
     });
 
     const torrentChainFile = this.createVirtualBundleFile('.torrentchain', chainArtifact.content, 'application/json');

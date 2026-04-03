@@ -41,8 +41,7 @@ async function gzipBytes(data) {
         const compressed = await new Response(stream).arrayBuffer();
         return new Uint8Array(compressed);
     }
-    const { gzipSync } = await import('node:zlib');
-    return new Uint8Array(gzipSync(data));
+    throw new Error('CompressionStream(gzip) is not supported in this browser runtime');
 }
 
 async function gunzipBytes(data) {
@@ -51,8 +50,7 @@ async function gunzipBytes(data) {
         const decompressed = await new Response(stream).arrayBuffer();
         return new Uint8Array(decompressed);
     }
-    const { gunzipSync } = await import('node:zlib');
-    return new Uint8Array(gunzipSync(data));
+    throw new Error('DecompressionStream(gzip) is not supported in this browser runtime');
 }
 
 /**
@@ -144,3 +142,5 @@ export async function decodeSiteBundleGzip(gzipEncodedBytes) {
 
 export const SITE_BUNDLE_SCHEMA = BUNDLE_SCHEMA;
 export const SITE_BUNDLE_FILE_NAME = 'site.bundle.json.gz';
+export const supportsNativeGzipStreams =
+    typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
