@@ -58,19 +58,6 @@
                 <h2>Decentralized Web Platform — Hosting · Identity · Messaging</h2>
             </header>
 
-            <!-- Tracker Selector Bar -->
-            <div class="tracker-bar">
-                <div class="tracker-bar-inner">
-                    <label class="tracker-label" for="tracker-select">🛰️ Tracker</label>
-                    <select id="tracker-select" class="tracker-select">
-                        <option value="wss://tracker.webtorrent.dev">webtorrent.dev</option>
-                        <option value="wss://tracker.openwebtorrent.com">openwebtorrent.com</option>
-                        <option value="wss://tracker.files.fm:7073/announce">files.fm</option>
-                    </select>
-                    <span id="tracker-status" class="tracker-status">●</span>
-                </div>
-            </div>
-
             <!-- Tab Navigation -->
             <nav class="tab-nav" role="tablist" style="justify-content: center">
                 <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
@@ -496,35 +483,6 @@
                         var panel = document.getElementById('tab-' + target);
                         if (panel) panel.classList.add('active');
                     });
-                });
-            })();
-        </script>
-
-        <!-- Tracker Selector Logic -->
-        <script>
-            (function () {
-                var sel = document.getElementById('tracker-select');
-                var statusEl = document.getElementById('tracker-status');
-                if (!sel) return;
-
-                function applyTracker(url) {
-                    if (window.peerWeb && typeof window.peerWeb.setActiveTracker === 'function') {
-                        window.peerWeb.setActiveTracker(url);
-                        if (statusEl) {
-                            statusEl.textContent = '●';
-                            statusEl.className = 'tracker-status tracker-ok';
-                            statusEl.title = 'Tracker switched to: ' + url;
-                        }
-                    }
-                }
-
-                sel.addEventListener('change', function () {
-                    applyTracker(sel.value);
-                });
-
-                // Apply once peerWeb is ready
-                document.addEventListener('peerweb:ready', function () {
-                    applyTracker(sel.value);
                 });
             })();
         </script>

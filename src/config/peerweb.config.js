@@ -1,12 +1,5 @@
 // @ts-check
 
-/** Default WebSocket trackers used across all torrent operations. */
-export const PEERWEB_TRACKERS = [
-    'wss://tracker.webtorrent.dev',
-    'wss://tracker.openwebtorrent.com',
-    'wss://tracker.files.fm:7073/announce'
-];
-
 export const LOG_LEVELS = {
     DEBUG: 0,
     INFO: 1,

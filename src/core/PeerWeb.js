@@ -2,7 +2,6 @@
 
 import PeerWebCache from '../cache/PeerWebCache.js';
 import ToastNotification from '../ui/ToastNotification.js';
-import { PEERWEB_TRACKERS } from '../config/peerweb.config.js';
 import * as lifecycle from './bootstrap/Lifecycle.js';
 import * as navigation from './navigation/Navigation.js';
 import * as serviceWorker from './serviceworker/ServiceWorkerBridge.js';
@@ -38,22 +37,9 @@ class PeerWeb {
             Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0
                 ? window.PEERWEB_TRACKERS
                 : null;
-        this.trackers = overrideTrackers || PEERWEB_TRACKERS.slice();
+        this.trackers = overrideTrackers || ['wss://tracker.openwebtorrent.com/'];
 
         this.init();
-    }
-
-    /**
-     * Switch the active tracker and update all live services.
-     * @param {string} trackerUrl
-     */
-    setActiveTracker(trackerUrl) {
-        if (!trackerUrl || typeof trackerUrl !== 'string') return;
-        this.trackers = [trackerUrl];
-        if (this.channelsService) {
-            this.channelsService.trackers = this.trackers;
-        }
-        this.log(`[Tracker] Switched to: ${trackerUrl}`);
     }
 }
 
