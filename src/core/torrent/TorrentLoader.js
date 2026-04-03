@@ -2,6 +2,8 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { verifyPublishSignature } from '../../auth/SigningService.js';
+import { createBep10SignatureExtension } from '../../torrent/Bep10SignatureExtension.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -36,8 +38,9 @@ export async function loadSite(hash, _retryAttempt = 0) {
 
     // Validate hash format
     if (!this.isValidTorrentHash(sanitizedHash)) {
-        alert(
-            '❌ Invalid Hash Format\n\nThe torrent hash must be a 40-character hexadecimal string.\n\n🔧 Format Requirements:\n• Exactly 40 characters long\n• Only contains numbers 0-9 and letters A-F\n\nExample: d4f5e6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3'
+        this.toast.error(
+            'The torrent hash must be a 40-character hexadecimal string. Only numbers 0-9 and letters A-F are allowed.',
+            '❌ Invalid Hash Format'
         );
         return;
     }
@@ -103,11 +106,92 @@ export async function loadSite(hash, _retryAttempt = 0) {
                             verified: Boolean(signedMeta.verified)
                         };
                         this.log(`Verified signed metadata at load: ${this.currentSiteSignatureStatus.label}`);
+                        if (!signedMeta.verified) {
+                            console.warn('[TorrentLoader] Torrent signature failed verification (embedded metadata):', signedMeta);
+                            this.toast.warning(
+                                `Publisher signature could not be verified for this site. Proceed with caution. Publisher: ${signedMeta.publisher}`,
+                                '⚠️ Signature Unverified'
+                            );
+                        } else {
+                            this.toast.success(
+                                `Site signature verified. Publisher: ${signedMeta.publisher.slice(0, 10)}...`,
+                                '✅ Signature Verified'
+                            );
+                        }
                     }
                 }
             } catch (metadataError) {
                 this.log(`Signed metadata verification skipped: ${metadataError.message}`);
+                console.warn('[TorrentLoader] Signed metadata error:', metadataError);
             }
+
+            // Attach BEP10 signature extension to receive signatures from the seeder.
+            const Bep10SigExt = createBep10SignatureExtension(null, async (receivedMeta) => {
+                this.log(`[BEP10/sig] Received sig_announce from peer: publisher=${receivedMeta.publisher}`);
+                console.info('[BEP10/sig] sig_announce received:', receivedMeta);
+                try {
+                    if (!receivedMeta.publisher || !receivedMeta.signature || !receivedMeta.torrentHash) {
+                        console.warn('[BEP10/sig] Incomplete sig_announce payload — abandoning seeder');
+                        this.toast.error(
+                            'Received incomplete signature from peer. If this site fails to load, try a different tracker.',
+                            '❌ BEP10 Signature Incomplete'
+                        );
+                        torrent.destroy();
+                        return;
+                    }
+                    if (receivedMeta.torrentHash !== sanitizedHash) {
+                        console.warn('[BEP10/sig] sig_announce torrentHash mismatch — abandoning seeder');
+                        this.toast.error(
+                            'Signature torrent hash does not match. Abandoning this seeder.',
+                            '❌ BEP10 Signature Mismatch'
+                        );
+                        torrent.destroy();
+                        return;
+                    }
+                    // Re-verify the signature received over the wire
+                    const { buildSignedTorrentPayload } = await import('../../torrent/SignedTorrentProtocol.js');
+                    const { digestHex } = await buildSignedTorrentPayload({
+                        torrentHash: receivedMeta.torrentHash,
+                        publisher: receivedMeta.publisher,
+                        chainId: Number(receivedMeta.chainId || 1)
+                    });
+                    const verified = await verifyPublishSignature(digestHex, receivedMeta.signature, receivedMeta.publisher);
+                    if (!verified) {
+                        console.warn('[BEP10/sig] Signature verification failed — abandoning seeder');
+                        this.toast.error(
+                            `BEP10 handshake signature could not be verified. Publisher: ${receivedMeta.publisher}. Try a different tracker if the site fails to load.`,
+                            '❌ BEP10 Signature Invalid'
+                        );
+                        torrent.destroy();
+                        return;
+                    }
+                    // Signature valid — update status
+                    const sigMeta = { ...receivedMeta, verified: true };
+                    this.signedTorrentMetadata.set(sanitizedHash, sigMeta);
+                    this.currentSiteSignatureStatus = {
+                        label: `Verified publisher (BEP10): ${receivedMeta.publisher.slice(0, 10)}...`,
+                        verified: true
+                    };
+                    this.log(`[BEP10/sig] Signature verified for publisher: ${receivedMeta.publisher}`);
+                    this.toast.success(
+                        `BEP10 publisher signature verified. Publisher: ${receivedMeta.publisher.slice(0, 10)}...`,
+                        '✅ BEP10 Signature Verified'
+                    );
+                } catch (bep10Err) {
+                    console.error('[BEP10/sig] Error processing sig_announce:', bep10Err);
+                    this.toast.warning(
+                        'BEP10 signature processing encountered an error. If the site fails to load, try a different tracker.',
+                        '⚠️ BEP10 Signature Error'
+                    );
+                }
+            });
+            torrent.on('wire', (wire) => {
+                try {
+                    wire.use(Bep10SigExt);
+                } catch (wireErr) {
+                    console.warn('[BEP10/sig] Failed to attach signature extension to wire:', wireErr);
+                }
+            });
 
             this.updatePeerStats(torrent);
 
@@ -171,10 +255,10 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     }, delay);
                 } else if (!this.processingInProgress) {
                     this.hideLoadingOverlay();
-                    alert(
-                        '❌ Torrent Load Error\n\n' +
-                            error.message +
-                            '\n\n🔧 Troubleshooting:\n• Check your internet connection\n• Verify the hash is correct\n• Ensure the torrent has active seeders\n• Try again in a few moments'
+                    console.error('[TorrentLoader] Torrent load error:', error);
+                    this.toast.error(
+                        `${error.message} — Check your internet connection, verify the hash, ensure the torrent has active seeders, or try a different tracker.`,
+                        '❌ Torrent Load Error'
                     );
                 }
             });
@@ -184,6 +268,12 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 if (this.currentHash !== sanitizedHash) return;
                 if (_retryAttempt >= LOAD_RETRY_MAX) {
                     this.log(`No peers found after ${LOAD_RETRY_MAX} retries, giving up`);
+                    this.hideLoadingOverlay();
+                    console.warn('[TorrentLoader] No peers found after max retries:', sanitizedHash);
+                    this.toast.error(
+                        'No peers found after several attempts. Try switching to a different tracker using the selector above the menu.',
+                        '❌ No Peers Found'
+                    );
                     return;
                 }
                 const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
@@ -218,8 +308,10 @@ export async function loadSite(hash, _retryAttempt = 0) {
             if (!indexFile) {
                 this.log('No index.html found!');
                 this.hideLoadingOverlay();
-                alert(
-                    "❌ Missing index.html\n\nThis torrent doesn't contain an index.html file.\n\n🔧 Requirements:\n• Every PeerWeb site must have an index.html file\n• Make sure your website folder includes this file\n• Re-create the torrent with a proper website structure"
+                console.error('[TorrentLoader] No index.html in torrent:', sanitizedHash);
+                this.toast.error(
+                    "This torrent doesn't contain an index.html file. Every Web25 site must have an index.html at the root.",
+                    '❌ Missing index.html'
                 );
                 return;
             }
@@ -241,10 +333,10 @@ export async function loadSite(hash, _retryAttempt = 0) {
     } catch (error) {
         this.log(`Error adding torrent: ${error.message}`);
         this.hideLoadingOverlay();
-        alert(
-            '❌ Failed to Add Torrent\n\n' +
-                error.message +
-                "\n\n🔧 Troubleshooting:\n• Verify the hash format is correct (40 hex characters)\n• Check that seeders are available\n• Ensure your firewall isn't blocking WebRTC connections\n• Try loading the torrent again"
+        console.error('[TorrentLoader] Failed to add torrent:', error);
+        this.toast.error(
+            `${error.message} — Verify the hash format (40 hex characters), check that seeders are available, or try a different tracker.`,
+            '❌ Failed to Add Torrent'
         );
     }
 }
@@ -655,8 +747,10 @@ export function displaySite(siteData, hash, fromCache = false) {
     }
 
     if (!indexFileName) {
-        alert(
-            "❌ No index.html Found\n\nThe site data doesn't contain an index.html file.\n\n🔧 This usually means:\n• The torrent is incomplete or corrupted\n• The website wasn't structured correctly\n• The download was interrupted\n\nTry reloading the site or creating a new torrent."
+        console.error('[TorrentLoader] No index.html in processed site data:', sanitizedHash);
+        this.toast.error(
+            "The site data doesn't contain an index.html file. The torrent may be incomplete or corrupted. Try reloading the site or creating a new torrent.",
+            '❌ No index.html Found'
         );
         return;
     }

@@ -72,5 +72,5 @@ export function log(message, level = LOG_LEVELS.DEBUG) {
 
 export function showError(message) {
     console.error('[PeerWeb Error]', message);
-    alert('PeerWeb Error: ' + message);
+    this.toast.error(message, '❌ PeerWeb Error');
 }

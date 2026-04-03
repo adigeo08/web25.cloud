@@ -25,19 +25,19 @@ export function handleFileSelection(event) {
 export function createTorrent() {
     const fileInput = /** @type {HTMLInputElement} */ (document.getElementById('file-input'));
     if (!fileInput || !fileInput.files) {
-        alert('Please select files first!');
+        this.toast.warning('Please select files first.', '⚠️ No Files Selected');
         return;
     }
 
     const files = Array.from(fileInput.files);
 
     if (files.length === 0) {
-        alert('Please select files first!');
+        this.toast.warning('Please select files first.', '⚠️ No Files Selected');
         return;
     }
 
     if (!this.clientReady || !this.client) {
-        alert('WebTorrent client not ready. Please wait a moment and try again.');
+        this.toast.warning('WebTorrent client not ready. Please wait a moment and try again.', '⚠️ Client Not Ready');
         return;
     }
 
@@ -99,7 +99,7 @@ export function createTorrent() {
             createBtn.textContent = originalText;
         }
 
-        alert('Error creating torrent: ' + error.message);
+        this.toast.error('Error creating torrent: ' + error.message, '❌ Torrent Creation Failed');
     }
 }
 

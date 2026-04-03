@@ -1,6 +1,6 @@
 // @ts-check
 
-const CHAT_EXTENSION_NAME = 'web25_channels_v1';
+import { createChannelsExtension } from './Bep10ChannelExtension.js';
 
 /** Maximum number of noPeers retry attempts per joinChannel call. */
 const CHANNEL_RETRY_MAX = 4;
@@ -16,34 +16,6 @@ function calcRetryDelay(attempt, baseMs) {
     return Math.min(30000, baseMs * Math.pow(2, attempt) + Math.random() * 1000);
 }
 
-class ChannelsWireExtension {
-    constructor(service, wire) {
-        this.name = CHAT_EXTENSION_NAME;
-        this.service = service;
-        this.wire = wire;
-    }
-
-    onExtendedHandshake() {
-        this.service.onPeerConnected(this.wire);
-    }
-
-    onMessage(buffer) {
-        try {
-            const payload = JSON.parse(new TextDecoder().decode(buffer));
-            // FIX: pass false (isLocal=false) — not this.wire — so remote messages are
-            // correctly marked as non-local in handleInbound.
-            this.service.handleInbound(payload, false);
-        } catch (_) {}
-    }
-
-    send(payload) {
-        try {
-            const raw = new TextEncoder().encode(JSON.stringify(payload));
-            this.wire.extended(CHAT_EXTENSION_NAME, raw);
-        } catch (_) {}
-    }
-}
-
 export default class ChannelsService {
     constructor({ client, trackers }) {
         this.client = client;
@@ -55,6 +27,7 @@ export default class ChannelsService {
         this.currentPeerCount = 0;
         /** @type {ReturnType<typeof setTimeout> | null} */
         this._retryTimeout = null;
+        this._ExtensionConstructor = createChannelsExtension(this);
     }
 
     onUpdate(listener) {
@@ -105,9 +78,7 @@ export default class ChannelsService {
         this.currentTorrent = torrent;
 
         torrent.on('wire', (wire) => {
-            const extension = new ChannelsWireExtension(this, wire);
-            wire.use(extension);
-            wire.web25ChannelsExtension = extension;
+            wire.use(this._ExtensionConstructor);
             this.currentPeerCount = torrent.numPeers || 0;
             this.emit({ type: 'peer-count', count: this.currentPeerCount });
         });
