@@ -1893,3 +1893,73 @@ body {
 .channels-message-body {
     word-break: break-word;
 }
+
+/* ── Deploy Wizard (scoped to #tab-publish only) ── */
+
+#tab-publish .step-chip.step-active {
+    background: #002200;
+    color: #fff;
+    border-color: #6ce26c;
+    font-weight: 700;
+    box-shadow: 0 0 6px rgba(108, 226, 108, 0.45);
+}
+
+#tab-publish .step-chip.step-done {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+#tab-publish .step-chip.step-locked {
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+#tab-publish .deploy-wizard-next {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 0.82rem;
+    color: #6ce26c;
+    opacity: 0.9;
+    font-style: italic;
+    letter-spacing: 0.01em;
+}
+
+#tab-publish .deploy-help-details,
+#tab-publish .deploy-advanced-details {
+    border: 1px solid #333;
+    border-radius: 0px;
+    padding: 0.5rem 1rem;
+    margin-bottom: 0.75rem;
+    background: #000;
+    color: #6ce26c;
+}
+
+#tab-publish .deploy-help-details > summary,
+#tab-publish .deploy-advanced-details > summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #6ce26c;
+    padding: 0.25rem 0;
+    list-style: none;
+    user-select: none;
+}
+
+#tab-publish .deploy-help-details > summary::before,
+#tab-publish .deploy-advanced-details > summary::before {
+    content: '▶ ';
+    font-size: 0.65rem;
+    vertical-align: middle;
+    opacity: 0.75;
+}
+
+#tab-publish .deploy-help-details[open] > summary::before,
+#tab-publish .deploy-advanced-details[open] > summary::before {
+    content: '▼ ';
+}
+
+#tab-publish .deploy-help-details > section,
+#tab-publish .deploy-advanced-details > section {
+    margin-top: 0.5rem;
+    border: none;
+    padding: 0;
+    background: transparent;
+}

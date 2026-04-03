@@ -183,6 +183,7 @@
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
                                 <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
                             </div>
+                            <p id="deploy-wizard-next" class="deploy-wizard-next">▶ Next: Upload your website folder to stage files.</p>
                             <div class="button-group">
                                 <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Payload</button>
                                 <button id="publish-btn" class="btn btn-create" disabled>Deploy Signed Torrent</button>
@@ -196,25 +197,29 @@
                             </details>
                         </section>
 
-                        <section class="usage">
-                            <h3>📚 How to Deploy</h3>
-                            <div class="steps">
-                                <div class="step">🎨 Build a static website with HTML, CSS, JavaScript, and assets</div>
-                                <div class="step">📤 Upload your folder using the area above</div>
-                                <div class="step">🧠 Build and verify the in-memory bundle (paths normalized)</div>
-                                <div class="step">✍️ Sign the deploy payload with your local identity</div>
-                                <div class="step">🔗 Copy and share your unique Web25 link</div>
-                                <div class="step">☁️ Keep this tab open while you seed the site</div>
-                            </div>
-                        </section>
+                        <details class="deploy-help-details">
+                            <summary>📚 How to Deploy</summary>
+                            <section class="usage">
+                                <div class="steps">
+                                    <div class="step">🎨 Build a static website with HTML, CSS, JavaScript, and assets</div>
+                                    <div class="step">📤 Upload your folder using the area above</div>
+                                    <div class="step">🧠 Build and verify the in-memory bundle (paths normalized)</div>
+                                    <div class="step">✍️ Sign the deploy payload with your local identity</div>
+                                    <div class="step">🔗 Copy and share your unique Web25 link</div>
+                                    <div class="step">☁️ Keep this tab open while you seed the site</div>
+                                </div>
+                            </section>
+                        </details>
 
-                        <section class="controls">
-                            <h3>🛠️ Advanced Tools</h3>
-                            <div class="button-group">
-                                <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
-                                <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
-                            </div>
-                        </section>
+                        <details class="deploy-advanced-details">
+                            <summary>🛠️ Advanced Tools</summary>
+                            <section class="controls">
+                                <div class="button-group">
+                                    <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
+                                    <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
+                                </div>
+                            </section>
+                        </details>
                     </div>
                 </div>
 
