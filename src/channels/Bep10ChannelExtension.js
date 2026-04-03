@@ -26,7 +26,10 @@ export function createChannelsExtension(service) {
     }
 
     ChannelsBep10Extension.prototype.onExtendedHandshake = function (remoteHandshake) {
-        if (remoteHandshake?.m?.[CHANNELS_EXT_NAME] === undefined) return;
+        if (remoteHandshake?.m?.[CHANNELS_EXT_NAME] === undefined) {
+            console.debug('[BEP10/channels] Remote peer does not support channels extension — skipping presence');
+            return;
+        }
         service.onPeerConnected(this._wire);
     };
 

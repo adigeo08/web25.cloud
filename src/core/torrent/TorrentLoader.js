@@ -186,7 +186,11 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 }
             });
             torrent.on('wire', (wire) => {
-                try { wire.use(Bep10SigExt); } catch (_) {}
+                try {
+                    wire.use(Bep10SigExt);
+                } catch (wireErr) {
+                    console.warn('[BEP10/sig] Failed to attach signature extension to wire:', wireErr);
+                }
             });
 
             this.updatePeerStats(torrent);

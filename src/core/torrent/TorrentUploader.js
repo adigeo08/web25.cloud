@@ -767,7 +767,11 @@ export function attachSignatureExtensionToTorrent(torrent, signedMeta) {
     // Apply to already-connected wires (if torrent is already seeding)
     if (Array.isArray(torrent.wires)) {
         torrent.wires.forEach((wire) => {
-            try { wire.use(SignatureExt); peersSupportingBep10++; totalPeers++; } catch (_) {}
+            try {
+                wire.use(SignatureExt);
+                peersSupportingBep10++;
+                totalPeers++;
+            } catch (_) {}
         });
     }
 
