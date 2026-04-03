@@ -66,7 +66,7 @@ Private key is **not stored in plaintext**:
 
 ---
 
-### 3) Deterministic publish signing payload + signed torrent metadata
+### 3) Deterministic publish signing payload + signed site verification
 
 Torrent publish signature payload is deterministic and serialized predictably.
 
@@ -80,28 +80,87 @@ Fields used:
 - `contentRoot`
 - `chainId`
 
-Signing flow:
+Signing/publish flow:
 
 1. User drops/selects site files
 2. App builds an in-memory normalized bundle (browser memory only)
-3. App creates torrent from that memory bundle and keeps publish candidate (hash + site metadata)
-4. User signs payload with active local identity
-5. Signed publish output is generated in-browser
-6. Signed metadata is attached directly inside the `.torrent` artifact (`publisher`, `signature`, `signature_algorithm`, `signed_at`, `chain_id`)
+3. App creates a torrent from that memory bundle and keeps a publish candidate (hash + site metadata)
+4. App generates a signed manifest (`.torrentchain`) and prompts wallet signing
+5. User signs payload with active local identity
+6. `.torrentchain` is included at the root of the seeded bundle
 
-At load time (hash browse flow), the client verifies signature metadata from the torrent root and mirrors it into `manifest.web25.json` for runtime introspection and consistency checks.
+#### `.torrentchain` protocol (recommended verification path)
 
-Supported signed torrent flow now includes:
+Published sites include a small root file named **`.torrentchain`** which contains:
 
-- deterministic payload build (`TorrentSignaturePayload`)
-- signer digest generation + local wallet message signing
-- signature embedding into bencoded torrent metadata
-- signature verification when loading artifacts
-- publisher badge/status rendering in runtime UI
+- a signed publisher payload (publisher address, chain id, timestamps, etc.)
+- optional bundle metadata (`bundle.name`, `bundle.sha256`, `bundle.contentEncoding`, `bundle.schema`) when gzip bundle mode is enabled
+- file listing semantics metadata (`filesSemantics`) to disambiguate whether file hashes describe torrent entries or bundle contents
+
+At load time (Browse/Load by hash), the client:
+
+- reads `.torrentchain` first (when present)
+- verifies the publisher signature before rendering
+- enforces a minimal integrity gate (pre-render)
+
+#### Verification policy / backward compatibility
+
+Verification behavior is controlled by config:
+
+- **Permissive (default)**: `REQUIRE_TORRENTCHAIN = false`
+  - if `.torrentchain` is missing, the site is still allowed to load, but is flagged as **Orphan** (signature not verifiable)
+- **Strict**: `REQUIRE_TORRENTCHAIN = true`
+  - if `.torrentchain` is missing or invalid, the site load is blocked
 
 ---
 
-### 4) Signed deploy session persistence (refresh-safe)
+### 4) Site bundle modes (multi-file vs gzip single-file)
+
+By default, published torrents may include many individual files. An optional “single-file bundle” mode is also available to avoid partial/fragmented caching issues for large sites.
+
+Bundle mode is controlled by:
+
+- `PEERWEB_CONFIG.SITE_BUNDLE_MODE = 'files' | 'gzip'` (default: `'files'`)
+
+#### `SITE_BUNDLE_MODE = 'files'` (default)
+
+- Seeds the site as multiple files in the torrent.
+- Best-effort early processing may render before 100% download.
+- Cache may store partial site data in early-processing scenarios.
+
+#### `SITE_BUNDLE_MODE = 'gzip'` (optional)
+
+- Seeds the payload as a **single** gzip bundle file:
+  - `site.bundle.json.gz` (atomic site payload)
+  - plus `.torrentchain` (small, separate, prioritized)
+
+Loader flow (gzip mode):
+
+1. verify `.torrentchain` signature (when present)
+2. download `site.bundle.json.gz`
+3. decompress and compute SHA-256 of canonical decompressed bytes
+4. compare to `.torrentchain.payload.bundle.sha256`
+5. reconstruct full `siteData` in memory
+6. cache and render
+
+Notes:
+
+- Gzip mode requires browser support for `CompressionStream` / `DecompressionStream`.
+- If gzip mode is requested but streams are unavailable, the app falls back to `'files'` mode and warns the user.
+- In permissive mode, if `.torrentchain` is missing, gzip loads are treated as **Orphan gzip bundle** (bundle hash not verifiable).
+
+---
+
+### 5) Signature state persistence (cache stability)
+
+To prevent verified sites from regressing back to “pending” after reload, the cache stores `signatureState` alongside the cached `siteData`.
+
+- On cache hit, the loader reapplies `signatureState` so the UI badge remains stable.
+- The stored state is versioned (`verificationVersion`). If the version changes, the loader may mark the cached state as stale and recommend revalidation.
+
+---
+
+### 6) Signed deploy session persistence (refresh-safe)
 
 - Signed deploy artifacts are persisted in `localStorage` under `web25.deploy.session.v1`
 - On refresh, Web25.Cloud restores signing/deploy UI state and re-adds the signed torrent to WebTorrent
@@ -111,7 +170,7 @@ Supported signed torrent flow now includes:
 
 ---
 
-### 5) Channels over WebTorrent peer wires
+### 7) Channels over WebTorrent peer wires
 
 Channels are implemented as deterministic swarms derived from channel names:
 
@@ -120,6 +179,7 @@ Channels are implemented as deterministic swarms derived from channel names:
 - chat payloads are exchanged through a custom extension (`web25_channels_v1`)
 - UI renders message timeline, local-vs-remote message markers, and live peer count
 - identity address (when available) is included in message metadata
+- system payloads are supported (e.g. signature verification abort notifications)
 
 ---
 
@@ -137,8 +197,17 @@ src/
 │   ├── SecureKeyStore.js
 │   └── SigningService.js
 │
+├── cache/
+│   └── PeerWebCache.js
+│
 ├── channels/
 │   └── ChannelsService.js
+│
+├── core/
+│   ├── cache/
+│   │   └── SignatureStateVersion.js
+│   └── torrent/
+│       └── TorrentLoader.js
 │
 ├── ui/
 │   ├── auth/
@@ -156,10 +225,13 @@ src/
 │   └── channels/
 │       └── ChannelsPanel.js
 │
-├── torrent/
-│   ├── TorrentPublishService.js
-│   ├── TorrentSignaturePayload.js
-│   └── SignedTorrentProtocol.js
+└── torrent/
+    ├── RenderGate.js
+    ├── SiteBundleCodec.js
+    ├── TorrentChainProtocol.js
+    ├── TorrentPublishService.js
+    ├── TorrentSignaturePayload.js
+    └── SignedTorrentProtocol.js
 ```
 
 ---
@@ -173,7 +245,9 @@ src/
 - Local encrypted wallet persistence (WebCrypto + IndexedDB)
 - Deterministic publish payload + signing flow
 - Publish-to-identity linkage in browser
-- Signed torrent protocol (metadata embed + verification)
+- `.torrentchain` protocol (signed manifest + verification gate before render)
+- Optional gzip single-file site bundle mode (`site.bundle.json.gz`)
+- Signature-state persistence in cache (stable verified badge on reload)
 - Channels tab + swarm chat transport via WebTorrent wire extension
 
 ### Non-goals (still not implemented)
@@ -209,6 +283,19 @@ Build entrypoint:
 ```bash
 npm run build
 ```
+
+---
+
+## Configuration flags
+
+The main behavior toggles live in `src/config/peerweb.config.js`:
+
+- `REQUIRE_TORRENTCHAIN`:
+  - `false` (default): permissive legacy/orphan support
+  - `true`: block loads without valid `.torrentchain`
+- `SITE_BUNDLE_MODE`:
+  - `'files'` (default): multi-file torrents
+  - `'gzip'`: seed `site.bundle.json.gz` + `.torrentchain` and validate bundle hash pre-render
 
 ---
 
