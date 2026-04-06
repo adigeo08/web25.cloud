@@ -5,11 +5,11 @@ export function renderIdentityBadge(state) {
     if (!node) return;
 
     if (!state.address) {
-        node.textContent = 'Identity: anonymous';
+        node.textContent = 'Anonymous profile';
         return;
     }
 
     const short = `${state.address.slice(0, 6)}...${state.address.slice(-4)}`;
     const passkeyIcon = state.passkeyProtected ? ' 🔐' : '';
-    node.textContent = `Identity: ${state.identityType} (${short})${passkeyIcon}`;
+    node.textContent = `${state.identityType} profile · ${short}${passkeyIcon}`;
 }

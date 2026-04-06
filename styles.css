@@ -702,6 +702,47 @@ footer {
     margin-bottom: 2rem;
 }
 
+.identity-profile-card {
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+    padding: 1.25rem;
+    border: 1px solid #6ce26c;
+    background: linear-gradient(180deg, rgba(108, 226, 108, 0.08), rgba(0, 0, 0, 0.65));
+    box-shadow: 0 0 12px rgba(0, 255, 0, 0.15);
+}
+
+.identity-profile-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.identity-avatar {
+    width: 3rem;
+    height: 3rem;
+    display: grid;
+    place-items: center;
+    border: 1px solid #6ce26c;
+    background: #111;
+    font-size: 1.3rem;
+}
+
+.identity-profile-main p,
+.identity-profile-details p {
+    margin: 0;
+}
+
+.identity-profile-name {
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.identity-profile-status,
+.identity-profile-detail {
+    opacity: 0.9;
+}
+
 .drop-zone {
     border: 3px dashed #6ce26c;
     border-radius: 0px;
