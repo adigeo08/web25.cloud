@@ -43,6 +43,14 @@
         />
 
         <link rel="stylesheet" href="./styles.css" />
+        <script type="importmap">
+        {
+            "imports": {
+                "@noble/curves/secp256k1": "https://esm.sh/@noble/curves@1.4.2/secp256k1",
+                "@noble/hashes/sha3": "https://esm.sh/@noble/hashes@1.4.0/sha3.js"
+            }
+        }
+        </script>
     </head>
     <body>
         <!-- Toast Notification Container -->
@@ -369,12 +377,13 @@
 
                     <section class="features">
                         <h3>💬 P2P Direct Messenger</h3>
-                        <p>Create offer/answer signaling codes, exchange them manually, then chat directly over WebRTC data channels.</p>
+                        <p>Exchange offer/answer signaling codes manually, then chat directly over WebRTC data channels with end-to-end asymmetric encryption tied to your EVM identity.</p>
                         <div class="feature-grid">
-                            <div class="feature">🧭 Manual Signaling UX — Host offer + guest answer exchange</div>
+                            <div class="feature">🔐 ECIES secp256k1 Encryption — Each message encrypted with recipient's secp256k1 public key (EVM curve)</div>
+                            <div class="feature">✍️ Per-message Signatures — Every message signed with sender's private key and verified on receipt</div>
+                            <div class="feature">🪪 Built-in Identity Verification — Public key → keccak256 → address verified at connect time</div>
+                            <div class="feature">🧭 Manual Signaling UX — Host offer + guest answer exchange with identity embedded</div>
                             <div class="feature">🧊 STUN Discovery — Uses Google's public STUN for ICE candidates</div>
-                            <div class="feature">👥 Live Peer Status — Connected peers update in real time</div>
-                            <div class="feature">🪪 Identity Context — Messages include your active local identity metadata</div>
                             <div class="feature">🛰️ Pure P2P Transport — No centralized chat backend required</div>
                         </div>
                         <br /><br />

@@ -36,17 +36,18 @@
         "node": ">=14.0.0"
     },
     "devDependencies": {
-        "http-server": "^14.1.1",
-        "terser": "^5.24.0",
+        "@noble/curves": "^1.4.2",
+        "@noble/hashes": "^1.4.0",
         "eslint": "^8.55.0",
-        "prettier": "^3.1.1",
+        "http-server": "^14.1.1",
         "nodemon": "^3.0.2",
+        "prettier": "^3.1.1",
+        "terser": "^5.24.0",
         "typescript": "^5.3.3"
     },
-    "dependencies": {},
     "peerDependencies": {
-        "webtorrent": "^2.0.0",
-        "dompurify": "^2.4.7"
+        "dompurify": "^2.4.7",
+        "webtorrent": "^2.0.0"
     },
     "browserslist": [
         "last 2 Chrome versions",

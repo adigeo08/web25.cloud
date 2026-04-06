@@ -1,21 +1,32 @@
 // @ts-check
 
-import { encryptMessage, decryptMessage } from './crypto.js';
+import { eciesEncrypt, eciesDecrypt, signMessage, verifySignature, evmAddressFromPublicKey, getPublicKeyFromPrivateKey } from './ecies.js';
+import { getUnlockedPrivateKey } from '../auth/LocalWalletService.js';
 
 const DEFAULT_RTC_CONFIG = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
-function encodeSignal(description) {
-    const raw = JSON.stringify(description);
-    const descriptionB64 = toBase64(raw);
-    const encryptionKey = generateHexKey(32);
+/**
+ * Encode a WebRTC description + peer identity info into a shareable signal code.
+ * @param {RTCSessionDescriptionInit} description
+ * @param {string|null} evmAddress
+ * @param {string|null} publicKey  — uncompressed secp256k1 "04..." hex
+ * @returns {string}
+ */
+function encodeSignal(description, evmAddress, publicKey) {
     return JSON.stringify({
-        description: descriptionB64,
-        encryptionKey
+        description: toBase64(JSON.stringify(description)),
+        evmAddress: evmAddress || null,
+        publicKey: publicKey || null
     });
 }
 
+/**
+ * Decode a signal code into its parts.
+ * @param {string} rawCode
+ * @returns {{ description: RTCSessionDescriptionInit, evmAddress: string|null, publicKey: string|null }}
+ */
 function decodeSignal(rawCode) {
     const clean = `${rawCode || ''}`.trim();
     if (!clean) throw new Error('Signal code is required.');
@@ -23,20 +34,15 @@ function decodeSignal(rawCode) {
     try {
         const parsed = JSON.parse(clean);
         if (parsed?.description) {
-            const decoded = fromBase64(parsed.description);
             return {
-                description: JSON.parse(decoded),
-                encryptionKey: `${parsed.encryptionKey || ''}`
+                description: JSON.parse(fromBase64(parsed.description)),
+                evmAddress: parsed.evmAddress || null,
+                publicKey: parsed.publicKey || null
             };
         }
     } catch (_) {}
 
-    // backward-compatible decode for older base64-only signaling codes
-    const fallback = fromBase64(clean);
-    return {
-        description: JSON.parse(fallback),
-        encryptionKey: ''
-    };
+    throw new Error('Invalid signal code format.');
 }
 
 function toBase64(value) {
@@ -51,14 +57,17 @@ function fromBase64(value) {
     throw new Error('Base64 decoder unavailable in this environment.');
 }
 
-function generateHexKey(byteLength = 32) {
+function generateHexKey(byteLength = 8) {
     const bytes = new Uint8Array(byteLength);
     crypto.getRandomValues(bytes);
     return [...bytes].map((item) => item.toString(16).padStart(2, '0')).join('');
 }
 
 export default class ChannelsService {
-    constructor({ rtcConfig = DEFAULT_RTC_CONFIG } = {}) {
+    /**
+     * @param {{ rtcConfig?: RTCConfiguration, getPrivateKey?: (() => string|null) }} [options]
+     */
+    constructor({ rtcConfig = DEFAULT_RTC_CONFIG, getPrivateKey = null } = {}) {
         this.rtcConfig = rtcConfig;
         this.peerConnection = null;
         this.dataChannel = null;
@@ -68,9 +77,12 @@ export default class ChannelsService {
         this.listeners = new Set();
         this.identityAddress = 'anonymous';
         this.role = '';
-        this.sessionEncryptionKey = '';
+        this.peerPublicKey = '';
+        this.peerAddress = '';
         this._fileBuffers = {};
         this._fileInfos = {};
+        /** @type {() => string|null} */
+        this._getPrivateKey = getPrivateKey || getUnlockedPrivateKey;
     }
 
     onUpdate(listener) {
@@ -90,7 +102,12 @@ export default class ChannelsService {
         this.currentChannel = normalized;
         this.role = 'host';
         this.identityAddress = identity?.address || 'anonymous';
+        this.peerPublicKey = '';
+        this.peerAddress = '';
         this.messageIds.clear();
+
+        const privKey = this._getPrivateKey();
+        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
 
         const peer = this.createPeerConnection();
         const channel = peer.createDataChannel('web25-direct-messenger');
@@ -101,8 +118,7 @@ export default class ChannelsService {
         await peer.setLocalDescription(offer);
         await this.waitForIceGathering(peer);
 
-        const code = encodeSignal(peer.localDescription);
-        this.sessionEncryptionKey = decodeSignal(code).encryptionKey;
+        const code = encodeSignal(peer.localDescription, identity?.address || null, ownPublicKey);
         this.emit({ type: 'local-offer', code, channel: normalized });
         this.emit({ type: 'connecting', channel: normalized });
         return code;
@@ -115,12 +131,24 @@ export default class ChannelsService {
         const offer = offerSignal.description;
         if (offer?.type !== 'offer') throw new Error('Offer code is invalid.');
 
+        // Verify peer identity embedded in the offer signal
+        if (offerSignal.publicKey && offerSignal.evmAddress) {
+            const derivedAddress = evmAddressFromPublicKey(offerSignal.publicKey);
+            if (derivedAddress.toLowerCase() !== offerSignal.evmAddress.toLowerCase()) {
+                throw new Error('Peer identity verification failed: public key does not match claimed address.');
+            }
+        }
+
         await this.leaveChannel();
         this.currentChannel = normalized;
         this.role = 'guest';
         this.identityAddress = identity?.address || 'anonymous';
-        this.sessionEncryptionKey = offerSignal.encryptionKey || '';
+        this.peerPublicKey = offerSignal.publicKey || '';
+        this.peerAddress = offerSignal.evmAddress || '';
         this.messageIds.clear();
+
+        const privKey = this._getPrivateKey();
+        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
 
         const peer = this.createPeerConnection();
         await peer.setRemoteDescription(offer);
@@ -128,12 +156,13 @@ export default class ChannelsService {
         await peer.setLocalDescription(answer);
         await this.waitForIceGathering(peer);
 
-        const code = encodeSignal(peer.localDescription);
-        if (!this.sessionEncryptionKey) {
-            this.sessionEncryptionKey = decodeSignal(code).encryptionKey;
-        }
+        const code = encodeSignal(peer.localDescription, identity?.address || null, ownPublicKey);
         this.emit({ type: 'local-answer', code, channel: normalized });
         this.emit({ type: 'connecting', channel: normalized });
+
+        if (this.peerAddress) {
+            this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        }
         return code;
     }
 
@@ -142,9 +171,23 @@ export default class ChannelsService {
         const answerSignal = decodeSignal(answerCode);
         const answer = answerSignal.description;
         if (answer?.type !== 'answer') throw new Error('Answer code is invalid.');
-        if (answerSignal.encryptionKey) {
-            this.sessionEncryptionKey = answerSignal.encryptionKey;
+
+        // Verify peer identity embedded in the answer signal
+        if (answerSignal.publicKey && answerSignal.evmAddress) {
+            const derivedAddress = evmAddressFromPublicKey(answerSignal.publicKey);
+            if (derivedAddress.toLowerCase() !== answerSignal.evmAddress.toLowerCase()) {
+                this.emit({ type: 'error', error: new Error('Peer identity verification failed: public key does not match claimed address.') });
+                throw new Error('Peer identity verification failed: public key does not match claimed address.');
+            }
         }
+
+        this.peerPublicKey = answerSignal.publicKey || '';
+        this.peerAddress = answerSignal.evmAddress || '';
+
+        if (this.peerAddress) {
+            this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        }
+
         await this.peerConnection.setRemoteDescription(answer);
     }
 
@@ -169,7 +212,8 @@ export default class ChannelsService {
         this.currentChannel = '';
         this.currentPeerCount = 0;
         this.role = '';
-        this.sessionEncryptionKey = '';
+        this.peerPublicKey = '';
+        this.peerAddress = '';
         this.messageIds.clear();
 
         this.emit({ type: 'peer-count', count: 0 });
@@ -254,9 +298,27 @@ export default class ChannelsService {
         channel.onmessage = async (event) => {
             try {
                 const raw = `${event?.data || ''}`;
-                const plaintext = this.sessionEncryptionKey
-                    ? await decryptMessage(raw, this.sessionEncryptionKey)
-                    : raw;
+                let plaintext;
+
+                if (this.peerPublicKey) {
+                    const ownPrivKey = this._getPrivateKey();
+                    if (!ownPrivKey) {
+                        this.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
+                        return;
+                    }
+                    const envelope = await eciesDecrypt(raw, ownPrivKey);
+                    const { plaintext: pt, signature } = JSON.parse(envelope);
+
+                    const valid = await verifySignature(pt, signature, this.peerPublicKey);
+                    if (!valid) {
+                        this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
+                        return;
+                    }
+                    plaintext = pt;
+                } else {
+                    plaintext = raw;
+                }
+
                 const payload = JSON.parse(plaintext);
                 this.handleInbound(payload, false);
             } catch (_) {}
@@ -267,9 +329,21 @@ export default class ChannelsService {
         try {
             if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
             const plaintext = JSON.stringify(payload);
-            const wire = this.sessionEncryptionKey
-                ? await encryptMessage(plaintext, this.sessionEncryptionKey)
-                : plaintext;
+
+            let wire;
+            if (this.peerPublicKey) {
+                const ownPrivKey = this._getPrivateKey();
+                if (!ownPrivKey) {
+                    this.emit({ type: 'error', error: new Error('Cannot send message: wallet is locked.') });
+                    return;
+                }
+                const signature = await signMessage(plaintext, ownPrivKey);
+                const envelope = JSON.stringify({ plaintext, signature });
+                wire = await eciesEncrypt(envelope, this.peerPublicKey);
+            } else {
+                wire = plaintext;
+            }
+
             this.dataChannel.send(wire);
         } catch (_) {}
     }
@@ -309,7 +383,7 @@ export default class ChannelsService {
     }
 
     /**
-     * Send a File object over the DataChannel in chunks, encrypted.
+     * Send a File object over the DataChannel in chunks.
      * @param {File} file
      * @param {{ address?: string } | null} identity
      */
