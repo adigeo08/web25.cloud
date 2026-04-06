@@ -168,7 +168,6 @@ export async function createPasskey({ username, displayName } = {}) {
     const { encPK, encSK } = await deriveKeysFromSeed(seed);
 
     storeAccount(credentialId, {
-        seed: b64(seed),
         encPK: b64(encPK),
         credentialIds: [credentialId]
     });
@@ -193,9 +192,9 @@ export async function unlockPasskey(credentialId) {
     }
 
     const result = await webauthnGet(credentialId);
-    const seed = result.userHandle || unb64(account.seed);
-    if (seed.length !== 32) {
-        throw new Error('Invalid passkey user handle length.');
+    const seed = result.userHandle;
+    if (!seed || seed.length !== 32) {
+        throw new Error('Please recover your wallet from seed phrase.');
     }
 
     const { encSK } = await deriveKeysFromSeed(seed);
@@ -209,7 +208,12 @@ export async function addPasskey(credentialId) {
         throw new Error('Primary passkey identity not found.');
     }
 
-    const seed = unb64(account.seed);
+    const existing = await webauthnGet(credentialId);
+    const seed = existing.userHandle;
+    if (!seed || seed.length !== 32) {
+        throw new Error('Please recover your wallet from seed phrase.');
+    }
+
     const credential = await webauthnCreate(seed, 'web25-alternate', 'Web25 Alternate Passkey');
     const newCredentialId = readCredentialId(credential.rawId);
     const ids = new Set([...(account.credentialIds || []), newCredentialId]);
