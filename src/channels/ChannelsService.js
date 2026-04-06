@@ -69,6 +69,8 @@ export default class ChannelsService {
         this.identityAddress = 'anonymous';
         this.role = '';
         this.sessionEncryptionKey = '';
+        this._fileBuffers = {};
+        this._fileInfos = {};
     }
 
     onUpdate(listener) {
