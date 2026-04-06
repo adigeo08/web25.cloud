@@ -2,7 +2,7 @@
 
 **Decentralized web platform for peer-to-peer static-site hosting + local EVM identity + signed torrent publishing + P2P direct messaging, fully in browser.**
 
-Web25.Cloud is a PeerWeb fork with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, and direct encrypted peer messaging.
+Web25.Cloud is a [PeerWeb fork (`Omodaka9375/peerweb`)](https://github.com/Omodaka9375/peerweb) with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, and direct encrypted peer messaging.
 
 ---
 
@@ -238,7 +238,23 @@ src/
 
 ## Upstream credits and how Web25 integrates them
 
-### 1) [`mylofi/local-data-lock`](https://github.com/mylofi/local-data-lock)
+### 1) [`Omodaka9375/peerweb`](https://github.com/Omodaka9375/peerweb)
+
+What it provides:
+
+- the upstream PeerWeb browser-native architecture;
+- hash-based browse/load workflow;
+- foundational torrent publishing and rendering model.
+
+How Web25 builds on this fork base:
+
+- preserves the original PeerWeb flow for loading by hash;
+- extends publishing with signed `.torrentchain` provenance and integrity checks;
+- adds local EVM identity and direct peer messaging while keeping the upstream spirit.
+
+In short: Web25.Cloud is built on top of the upstream `Omodaka9375/peerweb` fork and extends it with identity-bound signing/messaging capabilities.
+
+### 2) [`mylofi/local-data-lock`](https://github.com/mylofi/local-data-lock)
 
 What it demonstrates:
 
@@ -254,7 +270,7 @@ How Web25 integrates this into the EVM process:
 
 In short: we adopted the local-data-lock *security posture* and mapped it onto EVM identity/signing workflows.
 
-### 2) [`michal-wrzosek/p2p-chat`](https://github.com/michal-wrzosek/p2p-chat)
+### 3) [`michal-wrzosek/p2p-chat`](https://github.com/michal-wrzosek/p2p-chat)
 
 What it demonstrates:
 
