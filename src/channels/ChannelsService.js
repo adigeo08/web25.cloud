@@ -81,11 +81,25 @@ export default class ChannelsService {
      * @param {string} magnetURI
      */
     _addChannelTorrent(magnetURI) {
-        const torrent = this.client.add(magnetURI, { announce: this.trackers, destroyStoreOnDestroy: true });
+        const torrent = this._createTorrent(magnetURI);
         if (!torrent) return null;
 
         this.currentTorrent = torrent;
+        this._bindTorrentEvents(torrent);
+        return torrent;
+    }
 
+    /**
+     * @param {string} magnetURI
+     */
+    _createTorrent(magnetURI) {
+        return this.client.add(magnetURI, { destroyStoreOnDestroy: true });
+    }
+
+    /**
+     * @param {*} torrent
+     */
+    _bindTorrentEvents(torrent) {
         torrent.on('wire', (wire) => {
             const extension = new ChannelsWireExtension(this, wire);
             wire.use(extension);
@@ -98,8 +112,6 @@ export default class ChannelsService {
             this.currentPeerCount = torrent.numPeers || 0;
             this.emit({ type: 'peer-count', count: this.currentPeerCount });
         });
-
-        return torrent;
     }
 
     async leaveChannel() {

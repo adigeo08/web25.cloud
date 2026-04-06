@@ -39,8 +39,31 @@ test('ChannelsService joins with existing trackers and emits joined state', asyn
     assert.equal(service.currentChannel, 'builders');
     assert.match(addArgs.magnet, /magnet:\?xt=urn:btih:[a-f0-9]{40}/);
     assert.match(addArgs.magnet, /&tr=wss%3A%2F%2Fexisting-tracker\.test/);
-    assert.deepEqual(addArgs.opts.announce, ['wss://existing-tracker.test']);
+    assert.deepEqual(addArgs.opts, { destroyStoreOnDestroy: true });
     assert.equal(events.some((event) => event.type === 'joined'), true);
+});
+
+test('ChannelsService _addChannelTorrent composes create + bind responsibilities', async () => {
+    const mockTorrent = createMockTorrent();
+    const client = { add() { return mockTorrent; } };
+    const service = new ChannelsService({ client, trackers: [] });
+
+    const createCalls = [];
+    const bindCalls = [];
+    service._createTorrent = (magnetURI) => {
+        createCalls.push(magnetURI);
+        return mockTorrent;
+    };
+    service._bindTorrentEvents = (torrent) => {
+        bindCalls.push(torrent);
+    };
+
+    const torrent = service._addChannelTorrent('magnet:?xt=urn:btih:abc');
+
+    assert.equal(torrent, mockTorrent);
+    assert.deepEqual(createCalls, ['magnet:?xt=urn:btih:abc']);
+    assert.deepEqual(bindCalls, [mockTorrent]);
+    assert.equal(service.currentTorrent, mockTorrent);
 });
 
 test('ChannelsService deduplicates repeated inbound messages', async () => {
