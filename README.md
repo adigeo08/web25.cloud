@@ -1,6 +1,6 @@
 # ☁️ Web25.Cloud
 
-**Decentralized web platform for peer-to-peer static site hosting + local in-browser signing + signed torrent publishing + P2P channels, fully in-browser.**
+**Decentralized web platform for peer-to-peer static site hosting + local in-browser signing + signed torrent publishing + P2P direct messaging, fully in-browser.**
 
 Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware publishing flow.
 
@@ -8,7 +8,7 @@ Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware pu
 
 ## What is implemented now
 
-### 1) Clear UI split (Identity / Publish / Channels / Browse)
+### 1) Clear UI split (Identity / Publish / Direct Messenger / Browse)
 
 The application UI is now separated into:
 
@@ -27,11 +27,12 @@ The application UI is now separated into:
   - Publish output (signed metadata)
 - **Browse / Load**
   - Existing torrent-hash loading flow remains available
-- **Channels (P2P chat over torrent swarm extension)**
-  - Join/leave named channels
+- **P2P Direct Messenger (WebRTC data channels)**
+  - Host/guest offer-answer workflow (manual signaling codes)
+  - ICE discovery via public STUN (`stun:stun.l.google.com:19302`)
   - Peer count updates in real time
-  - Send/receive signed identity-tagged messages over WebTorrent wires
-  - Per-session chat stream in dedicated Channels tab
+  - Send/receive signed identity-tagged messages over direct data channel
+  - Per-session chat stream in dedicated Direct Messenger tab
 
 ### 2) Local browser wallet (viem + WebCrypto + IndexedDB)
 
@@ -170,13 +171,14 @@ To prevent verified sites from regressing back to “pending” after reload, th
 
 ---
 
-### 7) Channels over WebTorrent peer wires
+### 7) P2P Direct Messenger over WebRTC
 
-Channels are implemented as deterministic swarms derived from channel names:
+Direct Messenger follows a manual offer/answer handshake flow:
 
-- channel names are normalized and hashed into stable info hashes
-- each channel is joined as a lightweight magnet swarm
-- chat payloads are exchanged through a custom extension (`web25_channels_v1`)
+- host generates an offer code and shares it out-of-band
+- guest pastes offer code and generates answer code
+- host pastes answer code to finalize WebRTC data channel
+- STUN server (`stun:stun.l.google.com:19302`) is used for ICE candidate discovery
 - UI renders message timeline, local-vs-remote message markers, and live peer count
 - identity address (when available) is included in message metadata
 - system payloads are supported (e.g. signature verification abort notifications)
@@ -248,7 +250,7 @@ src/
 - `.torrentchain` protocol (signed manifest + verification gate before render)
 - Optional gzip single-file site bundle mode (`site.bundle.json.gz`)
 - Signature-state persistence in cache (stable verified badge on reload)
-- Channels tab + swarm chat transport via WebTorrent wire extension
+- Direct Messenger tab + direct WebRTC data channel transport
 
 ### Non-goals (still not implemented)
 
@@ -257,7 +259,7 @@ src/
 - Token gating
 - Multi-wallet management for signing
 - Hardware wallet integration
-- Cross-channel history persistence
+- Cross-room history persistence
 
 ---
 
