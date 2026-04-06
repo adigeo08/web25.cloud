@@ -1,5 +1,48 @@
 // @ts-check
 
+const DM_STEPS = ['dm-choose-role', 'dm-host-signaling', 'dm-guest-waiting', 'dm-chat-active'];
+
+export function showDmStep(step) {
+    DM_STEPS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (id === step) {
+            el.classList.remove('hidden');
+        } else {
+            el.classList.add('hidden');
+        }
+    });
+}
+
+function setDmError(elementId, message) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (message) {
+        el.textContent = message;
+        el.classList.remove('hidden');
+    } else {
+        el.textContent = '';
+        el.classList.add('hidden');
+    }
+}
+
+async function copyToClipboard(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (err) {
+        console.warn('Clipboard API failed, falling back to execCommand:', err);
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        // execCommand is deprecated but used here for legacy browser support
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    }
+}
+
 function shortAddress(address) {
     if (!address) return 'anonymous';
     if (address.length < 14) return address;
@@ -12,25 +55,75 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     const applyAnswerBtn = document.getElementById('channels-apply-answer-btn');
     const leaveBtn = document.getElementById('channels-leave-btn');
     const sendBtn = document.getElementById('channels-send-btn');
+    const hostBackBtn = document.getElementById('dm-host-back-btn');
+    const guestBackBtn = document.getElementById('dm-guest-back-btn');
+    const copyOfferBtn = document.getElementById('dm-copy-offer-btn');
+    const copyAnswerBtn = document.getElementById('dm-copy-answer-btn');
 
     const roomKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-name-input'));
     const remoteOfferInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-offer-input'));
     const remoteAnswerInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-answer-input'));
+    const localOfferOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
+    const localAnswerOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-answer-output'));
     const messageInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
 
-    createOfferBtn?.addEventListener('click', () =>
-        onCreateOffer({
-            roomKey: roomKeyInput?.value || ''
-        })
-    );
-    createAnswerBtn?.addEventListener('click', () =>
-        onCreateAnswer({
-            roomKey: roomKeyInput?.value || '',
-            offerCode: remoteOfferInput?.value || ''
-        })
-    );
-    applyAnswerBtn?.addEventListener('click', () => onApplyAnswer(remoteAnswerInput?.value || ''));
-    leaveBtn?.addEventListener('click', () => onLeave());
+    createOfferBtn?.addEventListener('click', async () => {
+        setDmError('dm-choose-role-error', '');
+        try {
+            await onCreateOffer({ roomKey: roomKeyInput?.value || '' });
+            showDmStep('dm-host-signaling');
+        } catch (err) {
+            setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
+        }
+    });
+
+    createAnswerBtn?.addEventListener('click', async () => {
+        setDmError('dm-choose-role-error', '');
+        try {
+            await onCreateAnswer({
+                roomKey: roomKeyInput?.value || '',
+                offerCode: remoteOfferInput?.value || ''
+            });
+            showDmStep('dm-guest-waiting');
+        } catch (err) {
+            setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
+        }
+    });
+
+    applyAnswerBtn?.addEventListener('click', async () => {
+        setDmError('dm-apply-answer-error', '');
+        try {
+            await onApplyAnswer(remoteAnswerInput?.value || '');
+        } catch (err) {
+            setDmError('dm-apply-answer-error', err instanceof Error ? err.message : String(err));
+        }
+    });
+
+    hostBackBtn?.addEventListener('click', () => {
+        onLeave();
+        showDmStep('dm-choose-role');
+    });
+
+    guestBackBtn?.addEventListener('click', () => {
+        onLeave();
+        showDmStep('dm-choose-role');
+    });
+
+    leaveBtn?.addEventListener('click', () => {
+        onLeave();
+        showDmStep('dm-choose-role');
+    });
+
+    copyOfferBtn?.addEventListener('click', () => {
+        const code = localOfferOutput?.value || '';
+        if (code) copyToClipboard(code);
+    });
+
+    copyAnswerBtn?.addEventListener('click', () => {
+        const code = localAnswerOutput?.value || '';
+        if (code) copyToClipboard(code);
+    });
+
     sendBtn?.addEventListener('click', () => onSend(messageInput?.value || ''));
     messageInput?.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') onSend(messageInput.value || '');
@@ -42,13 +135,18 @@ export function renderChannelsStatus({ channel = '', peers = 0, connected = fals
     if (!status) return;
     if (!connected) {
         status.textContent = 'Disconnected';
+        status.className = 'status-chip status-pending';
+        showDmStep('dm-choose-role');
         return;
     }
     if (connected && peers < 1) {
         status.textContent = `Connecting to room "${channel}"...`;
+        status.className = 'status-chip status-pending';
         return;
     }
     status.textContent = `Connected to room "${channel}" · peers: ${peers}`;
+    status.className = 'status-chip status-success';
+    showDmStep('dm-chat-active');
 }
 
 export function setLocalOfferCode(code) {
