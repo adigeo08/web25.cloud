@@ -1,44 +1,72 @@
 // @ts-check
 
-const CHAT_EXTENSION_NAME = 'web25_channels_v1';
+const DEFAULT_RTC_CONFIG = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+};
 
-class ChannelsWireExtension {
-    constructor(service, wire) {
-        this.name = CHAT_EXTENSION_NAME;
-        this.service = service;
-        this.wire = wire;
-    }
+function encodeSignal(description) {
+    const raw = JSON.stringify(description);
+    const descriptionB64 = toBase64(raw);
+    const encryptionKey = generateHexKey(32);
+    return JSON.stringify({
+        description: descriptionB64,
+        encryptionKey
+    });
+}
 
-    onExtendedHandshake() {
-        this.service.onPeerConnected(this.wire);
-    }
+function decodeSignal(rawCode) {
+    const clean = `${rawCode || ''}`.trim();
+    if (!clean) throw new Error('Signal code is required.');
 
-    onMessage(buffer) {
-        try {
-            const payload = JSON.parse(new TextDecoder().decode(buffer));
-            // FIX: pass false (isLocal=false) — not this.wire — so remote messages are
-            // correctly marked as non-local in handleInbound.
-            this.service.handleInbound(payload, false);
-        } catch (_) {}
-    }
+    try {
+        const parsed = JSON.parse(clean);
+        if (parsed?.description) {
+            const decoded = fromBase64(parsed.description);
+            return {
+                description: JSON.parse(decoded),
+                encryptionKey: `${parsed.encryptionKey || ''}`
+            };
+        }
+    } catch (_) {}
 
-    send(payload) {
-        try {
-            const raw = new TextEncoder().encode(JSON.stringify(payload));
-            this.wire.extended(CHAT_EXTENSION_NAME, raw);
-        } catch (_) {}
-    }
+    // backward-compatible decode for older base64-only signaling codes
+    const fallback = fromBase64(clean);
+    return {
+        description: JSON.parse(fallback),
+        encryptionKey: ''
+    };
+}
+
+function toBase64(value) {
+    if (typeof btoa === 'function') return btoa(value);
+    if (typeof Buffer !== 'undefined') return Buffer.from(value, 'utf8').toString('base64');
+    throw new Error('Base64 encoder unavailable in this environment.');
+}
+
+function fromBase64(value) {
+    if (typeof atob === 'function') return atob(value);
+    if (typeof Buffer !== 'undefined') return Buffer.from(value, 'base64').toString('utf8');
+    throw new Error('Base64 decoder unavailable in this environment.');
+}
+
+function generateHexKey(byteLength = 32) {
+    const bytes = new Uint8Array(byteLength);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((item) => item.toString(16).padStart(2, '0')).join('');
 }
 
 export default class ChannelsService {
-    constructor({ client, trackers }) {
-        this.client = client;
-        this.trackers = trackers;
-        this.currentTorrent = null;
+    constructor({ rtcConfig = DEFAULT_RTC_CONFIG } = {}) {
+        this.rtcConfig = rtcConfig;
+        this.peerConnection = null;
+        this.dataChannel = null;
         this.currentChannel = '';
+        this.currentPeerCount = 0;
         this.messageIds = new Set();
         this.listeners = new Set();
-        this.currentPeerCount = 0;
+        this.identityAddress = 'anonymous';
+        this.role = '';
+        this.sessionEncryptionKey = '';
     }
 
     onUpdate(listener) {
@@ -50,87 +78,102 @@ export default class ChannelsService {
         this.listeners.forEach((listener) => listener(event));
     }
 
-    async joinChannel(channelName, identity) {
-        const normalized = this.normalizeChannel(channelName);
-        if (!normalized) throw new Error('Channel name is required.');
+    async createHostOffer(roomKey, identity) {
+        const normalized = this.normalizeChannel(roomKey);
+        if (!normalized) throw new Error('Room key is required.');
 
         await this.leaveChannel();
-        this.messageIds.clear();
-        this.currentPeerCount = 0;
         this.currentChannel = normalized;
+        this.role = 'host';
+        this.identityAddress = identity?.address || 'anonymous';
+        this.messageIds.clear();
 
-        const infoHash = await this.sha1Hex(`web25:${normalized}`);
-        const trackerParams = (this.trackers || [])
-            .map((tracker) => `${tracker || ''}`.trim())
-            .filter(Boolean)
-            .map((tracker) => `tr=${encodeURIComponent(tracker)}`)
-            .join('&');
-        const magnetURI = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(`web25-channel-${normalized}`)}${
-            trackerParams ? `&${trackerParams}` : ''
-        }`;
+        const peer = this.createPeerConnection();
+        const channel = peer.createDataChannel('web25-direct-messenger');
+        this.bindDataChannel(channel);
+        this.dataChannel = channel;
 
-        const torrent = this._addChannelTorrent(magnetURI);
-        if (!torrent) throw new Error('Could not open channel swarm.');
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        await this.waitForIceGathering(peer);
 
-        this.emit({ type: 'joined', channel: normalized, infoHash });
-        this.pushLocalSystemMessage(`Connected to #${normalized}.`, identity?.address);
+        const code = encodeSignal(peer.localDescription);
+        this.sessionEncryptionKey = decodeSignal(code).encryptionKey;
+        this.emit({ type: 'local-offer', code, channel: normalized });
+        this.emit({ type: 'connecting', channel: normalized });
+        return code;
     }
 
-    /**
-     * Internal: add a channel torrent and wire up listeners.
-     * @param {string} magnetURI
-     */
-    _addChannelTorrent(magnetURI) {
-        const torrent = this._createTorrent(magnetURI);
-        if (!torrent) return null;
+    async createAnswerFromOffer(roomKey, offerCode, identity) {
+        const normalized = this.normalizeChannel(roomKey);
+        if (!normalized) throw new Error('Room key is required.');
+        const offerSignal = decodeSignal(offerCode);
+        const offer = offerSignal.description;
+        if (offer?.type !== 'offer') throw new Error('Offer code is invalid.');
 
-        this.currentTorrent = torrent;
-        this._bindTorrentEvents(torrent);
-        return torrent;
+        await this.leaveChannel();
+        this.currentChannel = normalized;
+        this.role = 'guest';
+        this.identityAddress = identity?.address || 'anonymous';
+        this.sessionEncryptionKey = offerSignal.encryptionKey || '';
+        this.messageIds.clear();
+
+        const peer = this.createPeerConnection();
+        await peer.setRemoteDescription(offer);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        await this.waitForIceGathering(peer);
+
+        const code = encodeSignal(peer.localDescription);
+        if (!this.sessionEncryptionKey) {
+            this.sessionEncryptionKey = decodeSignal(code).encryptionKey;
+        }
+        this.emit({ type: 'local-answer', code, channel: normalized });
+        this.emit({ type: 'connecting', channel: normalized });
+        return code;
     }
 
-    /**
-     * @param {string} magnetURI
-     */
-    _createTorrent(magnetURI) {
-        return this.client.add(magnetURI, { destroyStoreOnDestroy: true });
-    }
-
-    /**
-     * @param {*} torrent
-     */
-    _bindTorrentEvents(torrent) {
-        torrent.on('wire', (wire) => {
-            const extension = new ChannelsWireExtension(this, wire);
-            wire.use(extension);
-            wire.web25ChannelsExtension = extension;
-            this.currentPeerCount = torrent.numPeers || 0;
-            this.emit({ type: 'peer-count', count: this.currentPeerCount });
-        });
-
-        torrent.on('noPeers', () => {
-            this.currentPeerCount = torrent.numPeers || 0;
-            this.emit({ type: 'peer-count', count: this.currentPeerCount });
-        });
+    async applyAnswer(answerCode) {
+        if (!this.peerConnection || this.role !== 'host') throw new Error('Create an offer first.');
+        const answerSignal = decodeSignal(answerCode);
+        const answer = answerSignal.description;
+        if (answer?.type !== 'answer') throw new Error('Answer code is invalid.');
+        if (answerSignal.encryptionKey) {
+            this.sessionEncryptionKey = answerSignal.encryptionKey;
+        }
+        await this.peerConnection.setRemoteDescription(answer);
     }
 
     async leaveChannel() {
-        if (!this.currentTorrent) return;
-        await new Promise((resolve) => {
-            try {
-                this.currentTorrent.destroy({ destroyStore: true }, () => resolve());
-            } catch (_) {
-                resolve();
+        try {
+            if (this.dataChannel) {
+                this.dataChannel.onopen = null;
+                this.dataChannel.onclose = null;
+                this.dataChannel.onmessage = null;
+                if (this.dataChannel.readyState !== 'closed') this.dataChannel.close();
             }
-        });
-        this.currentTorrent = null;
+            if (this.peerConnection) {
+                this.peerConnection.ondatachannel = null;
+                this.peerConnection.oniceconnectionstatechange = null;
+                this.peerConnection.onconnectionstatechange = null;
+                this.peerConnection.close();
+            }
+        } catch (_) {}
+
+        this.peerConnection = null;
+        this.dataChannel = null;
         this.currentChannel = '';
         this.currentPeerCount = 0;
+        this.role = '';
+        this.sessionEncryptionKey = '';
+        this.messageIds.clear();
+
+        this.emit({ type: 'peer-count', count: 0 });
         this.emit({ type: 'left' });
     }
 
     sendChatMessage(text, identity) {
-        if (!this.currentTorrent || !this.currentChannel) throw new Error('Join a channel first.');
+        if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Connection is not ready yet.');
         const clean = `${text || ''}`.trim();
         if (!clean) return;
 
@@ -139,81 +182,130 @@ export default class ChannelsService {
             id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
             text: clean,
             channel: this.currentChannel,
-            from: identity?.address || 'anonymous',
+            from: identity?.address || this.identityAddress || 'anonymous',
             timestamp: new Date().toISOString()
         };
 
         this.handleInbound(payload, true);
-        this.broadcast(payload);
+        this.transmit(payload);
     }
 
     sendSystemMessage(kind, data, identity = null) {
-        if (!this.currentTorrent || !this.currentChannel) return;
+        if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
         const payload = {
             type: 'system',
-            id: `sig-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            id: `sys-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             channel: this.currentChannel,
-            from: identity?.address || 'system',
+            from: identity?.address || this.identityAddress || 'system',
             timestamp: new Date().toISOString(),
-            data: {
-                kind,
-                ...data
+            data: { kind, ...data }
+        };
+        this.transmit(payload);
+    }
+
+    createPeerConnection() {
+        if (typeof RTCPeerConnection !== 'function') {
+            throw new Error('WebRTC is not available in this browser.');
+        }
+
+        const peer = new RTCPeerConnection(this.rtcConfig);
+        this.peerConnection = peer;
+
+        peer.ondatachannel = (event) => {
+            this.dataChannel = event.channel;
+            this.bindDataChannel(event.channel);
+        };
+
+        const syncConnectionState = () => {
+            const state = `${peer.connectionState || peer.iceConnectionState || ''}`.toLowerCase();
+            if (state === 'connected' || state === 'completed') {
+                this.currentPeerCount = 1;
+                this.emit({ type: 'peer-count', count: 1 });
+                this.emit({ type: 'connected', channel: this.currentChannel });
+            } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                this.currentPeerCount = 0;
+                this.emit({ type: 'peer-count', count: 0 });
             }
         };
-        this.broadcast(payload);
+
+        peer.oniceconnectionstatechange = syncConnectionState;
+        peer.onconnectionstatechange = syncConnectionState;
+        return peer;
     }
 
-    onPeerConnected(wire) {
-        wire.web25ChannelsExtension?.send({
-            type: 'presence',
-            id: `hello-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            channel: this.currentChannel,
-            from: 'peer',
-            timestamp: new Date().toISOString()
-        });
+    bindDataChannel(channel) {
+        channel.onopen = () => {
+            this.currentPeerCount = 1;
+            this.emit({ type: 'peer-count', count: 1 });
+            this.emit({ type: 'connected', channel: this.currentChannel });
+            this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);
+        };
+
+        channel.onclose = () => {
+            this.currentPeerCount = 0;
+            this.emit({ type: 'peer-count', count: 0 });
+            this.emit({ type: 'disconnected' });
+        };
+
+        channel.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(`${event?.data || ''}`);
+                this.handleInbound(payload, false);
+            } catch (_) {}
+        };
     }
 
-    broadcast(payload) {
-        if (!this.currentTorrent?.wires) return;
-        this.currentTorrent.wires.forEach((wire) => wire.web25ChannelsExtension?.send(payload));
+    transmit(payload) {
+        try {
+            if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
+            this.dataChannel.send(JSON.stringify(payload));
+        } catch (_) {}
     }
 
     handleInbound(payload, isLocal = false) {
         if (!payload || payload.channel !== this.currentChannel) return;
         if (payload.id && this.messageIds.has(payload.id)) return;
         if (payload.id) this.messageIds.add(payload.id);
+
         if (payload.type === 'chat') this.emit({ type: 'message', message: payload, local: isLocal });
         if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal });
-        if (payload.type === 'presence') {
-            // Emit a presence event so the UI can react to peer announcements.
-            this.emit({ type: 'presence', from: payload.from, timestamp: payload.timestamp });
-            // Also refresh the peer count whenever a presence is received.
-            this.currentPeerCount = this.currentTorrent?.numPeers || 0;
-            this.emit({ type: 'peer-count', count: this.currentPeerCount });
-        }
     }
 
-    pushLocalSystemMessage(text, address = null) {
+    pushLocalSystemMessage(text) {
         this.handleInbound(
             {
                 type: 'chat',
                 id: `system-${Date.now()}`,
                 text,
                 channel: this.currentChannel,
-                from: address || 'system',
+                from: 'system',
                 timestamp: new Date().toISOString()
             },
             true
         );
     }
 
-    normalizeChannel(value) {
-        return `${value || ''}`.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 40);
+    waitForIceGathering(peer) {
+        if (peer.iceGatheringState === 'complete') return Promise.resolve();
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                peer.removeEventListener?.('icegatheringstatechange', onStateChange);
+                resolve();
+            }, 4000);
+
+            const onStateChange = () => {
+                if (peer.iceGatheringState === 'complete') {
+                    clearTimeout(timeout);
+                    peer.removeEventListener?.('icegatheringstatechange', onStateChange);
+                    resolve();
+                }
+            };
+
+            peer.addEventListener?.('icegatheringstatechange', onStateChange);
+        });
     }
 
-    async sha1Hex(input) {
-        const bytes = new TextEncoder().encode(input);
-        const digest = await crypto.subtle.digest('SHA-1', bytes);
-        return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join('');
+    normalizeChannel(value) {
+        return `${value || ''}`.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 40);
     }
 }

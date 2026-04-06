@@ -68,7 +68,7 @@
                     🪪 Identity
                 </button>
                 <button class="tab-btn" data-tab="channels" role="tab" aria-selected="false" style="display: none">
-                    💬 Channels
+                    💬 Direct Messenger
                 </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
@@ -223,21 +223,72 @@
                     </div>
                 </div>
 
-                <!-- ── CHANNELS TAB ── -->
+                <!-- ── DIRECT MESSENGER TAB ── -->
                 <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload">
-                        <h3>💬 Channels</h3>
-                        <p>P2P real-time chat over the same WebTorrent tracker mesh used by Web25.Cloud.</p>
+                        <h3>💬 P2P Direct Messenger</h3>
+                        <p>WebRTC direct flow with manual signaling, inspired by p2p-chat style UX.</p>
+                        <p><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
                         <div class="hash-input-group">
                             <input
                                 type="text"
                                 id="channels-name-input"
-                                placeholder="channel name (ex: builders)"
+                                placeholder="private room key (ex: maria-ioan-1)"
                                 class="hash-input"
                                 maxlength="40"
                             />
-                            <button id="channels-join-btn" class="btn btn-primary">Join</button>
-                            <button id="channels-leave-btn" class="btn btn-secondary">Leave</button>
+                            <button id="channels-leave-btn" class="btn btn-secondary">Disconnect</button>
+                        </div>
+                        <div class="hash-input-group" style="align-items: stretch">
+                            <div style="flex: 1; min-width: 260px">
+                                <p><strong>Host</strong> — generate and share offer code</p>
+                                <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem">
+                                    Generate Offer
+                                </button>
+                                <textarea
+                                    id="channels-local-offer-output"
+                                    class="hash-input"
+                                    rows="4"
+                                    readonly
+                                    placeholder="Offer code appears here (copy/share)"
+                                ></textarea>
+                            </div>
+                            <div style="flex: 1; min-width: 260px">
+                                <p><strong>Guest</strong> — paste host offer, generate answer</p>
+                                <textarea
+                                    id="channels-remote-offer-input"
+                                    class="hash-input"
+                                    rows="4"
+                                    placeholder="Paste host offer code"
+                                ></textarea>
+                                <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">
+                                    Generate Answer
+                                </button>
+                            </div>
+                        </div>
+                        <div class="hash-input-group" style="align-items: stretch; margin-top: 0.5rem">
+                            <div style="flex: 1; min-width: 260px">
+                                <p><strong>Guest output</strong> — send answer back to host</p>
+                                <textarea
+                                    id="channels-local-answer-output"
+                                    class="hash-input"
+                                    rows="4"
+                                    readonly
+                                    placeholder="Answer code appears here (copy/share)"
+                                ></textarea>
+                            </div>
+                            <div style="flex: 1; min-width: 260px">
+                                <p><strong>Host final step</strong> — paste answer and connect</p>
+                                <textarea
+                                    id="channels-remote-answer-input"
+                                    class="hash-input"
+                                    rows="4"
+                                    placeholder="Paste answer code from guest"
+                                ></textarea>
+                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">
+                                    Apply Answer
+                                </button>
+                            </div>
                         </div>
                         <p id="channels-status" class="status-chip status-pending">Disconnected</p>
                         <div id="channels-messages" class="channels-messages"></div>
@@ -282,16 +333,17 @@
                             Web25.Cloud is a decentralized web platform built on top of
                             <a href="https://peerweb.lol" target="_blank">PeerWeb</a>. It extends peer-to-peer website
                             hosting with a <strong>local in-browser signing wallet</strong>,
-                            <strong>signed torrent deployments</strong>, <strong>P2P channels</strong>, and browser-native
+                            <strong>signed torrent deployments</strong>, <strong>P2P direct messaging</strong>, and browser-native
                             distribution without a central server.
                         </p>
                     </section>
 
                     <section class="features">
-                        <h3>💬 Channels (P2P chat)</h3>
-                        <p>Join a named channel and exchange messages directly over WebTorrent peer wires.</p>
+                        <h3>💬 P2P Direct Messenger</h3>
+                        <p>Create offer/answer signaling codes, exchange them manually, then chat directly over WebRTC data channels.</p>
                         <div class="feature-grid">
-                            <div class="feature">🧭 Deterministic Swarms — Channel names map to predictable info hashes</div>
+                            <div class="feature">🧭 Manual Signaling UX — Host offer + guest answer exchange</div>
+                            <div class="feature">🧊 STUN Discovery — Uses Google's public STUN for ICE candidates</div>
                             <div class="feature">👥 Live Peer Status — Connected peers update in real time</div>
                             <div class="feature">🪪 Identity Context — Messages include your active local identity metadata</div>
                             <div class="feature">🛰️ Pure P2P Transport — No centralized chat backend required</div>

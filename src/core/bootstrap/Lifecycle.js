@@ -16,7 +16,9 @@ import {
     bindChannelsPanel,
     clearChannelsComposer,
     clearChannelsMessages,
-    renderChannelsStatus
+    renderChannelsStatus,
+    setLocalAnswerCode,
+    setLocalOfferCode
 } from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
@@ -62,28 +64,54 @@ export async function initAuth() {
 }
 
 export function setupChannels() {
-    this.channelsService = new ChannelsService({
-        client: this.client,
-        trackers: this.trackers
-    });
+    this.channelsService = new ChannelsService();
 
     bindChannelsPanel({
-        onJoin: async (channelName) => {
+        onCreateOffer: async ({ roomKey }) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
-                this.toast.warning('Authenticate first to use Channels.', 'Authentication required');
+                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
                 return;
             }
 
             try {
                 clearChannelsMessages();
-                await this.channelsService.joinChannel(channelName, identity);
+                setLocalAnswerCode('');
+                const code = await this.channelsService.createHostOffer(roomKey, identity);
+                setLocalOfferCode(code);
+                this.toast.success('Share the offer code with your peer.', 'Offer generated');
             } catch (error) {
-                this.toast.error(error.message, 'Channels');
+                this.toast.error(error.message, 'Direct Messenger');
+            }
+        },
+        onCreateAnswer: async ({ roomKey, offerCode }) => {
+            const identity = this.authController.getActiveIdentity();
+            if (!identity?.address) {
+                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
+                return;
+            }
+
+            try {
+                clearChannelsMessages();
+                const code = await this.channelsService.createAnswerFromOffer(roomKey, offerCode, identity);
+                setLocalAnswerCode(code);
+                this.toast.success('Send the answer code back to the host.', 'Answer generated');
+            } catch (error) {
+                this.toast.error(error.message, 'Direct Messenger');
+            }
+        },
+        onApplyAnswer: async (answerCode) => {
+            try {
+                await this.channelsService.applyAnswer(answerCode);
+                this.toast.success('Answer accepted. Waiting for data channel open...', 'Direct Messenger');
+            } catch (error) {
+                this.toast.error(error.message, 'Direct Messenger');
             }
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
+            setLocalOfferCode('');
+            setLocalAnswerCode('');
         },
         onSend: (text) => {
             try {
@@ -91,17 +119,29 @@ export function setupChannels() {
                 this.channelsService.sendChatMessage(text, identity);
                 clearChannelsComposer();
             } catch (error) {
-                this.toast.error(error.message, 'Channels');
+                this.toast.error(error.message, 'Direct Messenger');
             }
         }
     });
 
     this.channelsService.onUpdate((event) => {
-        if (event.type === 'joined') {
+        if (event.type === 'connecting') {
             renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
+        } else if (event.type === 'local-offer') {
+            setLocalOfferCode(event.code || '');
+        } else if (event.type === 'local-answer') {
+            setLocalAnswerCode(event.code || '');
+        } else if (event.type === 'connected') {
+            renderChannelsStatus({
+                connected: true,
+                channel: this.channelsService.currentChannel,
+                peers: this.channelsService.currentPeerCount || 1
+            });
         } else if (event.type === 'left') {
             renderChannelsStatus({ connected: false });
             clearChannelsMessages();
+        } else if (event.type === 'disconnected') {
+            renderChannelsStatus({ connected: false });
         } else if (event.type === 'peer-count') {
             renderChannelsStatus({
                 connected: Boolean(this.channelsService.currentChannel),
@@ -112,7 +152,7 @@ export function setupChannels() {
             const identity = this.authController.getActiveIdentity();
             appendChannelsMessage(event.message, Boolean(identity?.address && event.message.from === identity.address));
         } else if (event.type === 'error') {
-            this.toast.error(event.error?.message || 'Unexpected channels error', 'Channels');
+            this.toast.error(event.error?.message || 'Unexpected direct messenger error', 'Direct Messenger');
         }
     });
 }

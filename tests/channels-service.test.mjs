@@ -2,243 +2,205 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import ChannelsService from '../src/channels/ChannelsService.js';
 
-function createMockTorrent() {
-    const handlers = new Map();
-    return {
-        numPeers: 0,
-        wires: [],
-        on(event, cb) {
-            handlers.set(event, cb);
-        },
-        emit(event, value) {
-            const cb = handlers.get(event);
-            if (cb) cb(value);
-        },
-        destroy(_opts, done) {
-            done?.();
-        }
-    };
+class MockDataChannel {
+    constructor() {
+        this.readyState = 'connecting';
+        this.sent = [];
+        this.onopen = null;
+        this.onclose = null;
+        this.onmessage = null;
+    }
+
+    send(payload) {
+        this.sent.push(payload);
+    }
+
+    close() {
+        this.readyState = 'closed';
+        this.onclose?.();
+    }
 }
 
-test('ChannelsService joins with existing trackers and emits joined state', async () => {
-    const mockTorrent = createMockTorrent();
-    let addArgs = null;
-    const client = {
-        add(magnet, opts) {
-            addArgs = { magnet, opts };
-            return mockTorrent;
-        }
-    };
+class MockRTCPeerConnection {
+    constructor(config) {
+        this.config = config;
+        this.localDescription = null;
+        this.remoteDescription = null;
+        this.iceGatheringState = 'complete';
+        this.connectionState = 'new';
+        this.iceConnectionState = 'new';
+        this.ondatachannel = null;
+        this.onconnectionstatechange = null;
+        this.oniceconnectionstatechange = null;
+        this.listeners = new Map();
+        this.channel = null;
+    }
 
-    const service = new ChannelsService({ client, trackers: ['wss://existing-tracker.test'] });
+    createDataChannel() {
+        this.channel = new MockDataChannel();
+        return this.channel;
+    }
+
+    async createOffer() {
+        return { type: 'offer', sdp: 'offer-sdp' };
+    }
+
+    async createAnswer() {
+        return { type: 'answer', sdp: 'answer-sdp' };
+    }
+
+    async setLocalDescription(desc) {
+        this.localDescription = desc;
+    }
+
+    async setRemoteDescription(desc) {
+        this.remoteDescription = desc;
+    }
+
+    addEventListener(event, cb) {
+        this.listeners.set(event, cb);
+    }
+
+    removeEventListener(event) {
+        this.listeners.delete(event);
+    }
+
+    close() {
+        this.connectionState = 'closed';
+    }
+}
+
+const OriginalRTCPeerConnection = globalThis.RTCPeerConnection;
+
+test.beforeEach(() => {
+    globalThis.RTCPeerConnection = MockRTCPeerConnection;
+});
+
+test.afterEach(() => {
+    globalThis.RTCPeerConnection = OriginalRTCPeerConnection;
+});
+
+test('createHostOffer generates envelope {description,encryptionKey} with default Google STUN config', async () => {
+    const service = new ChannelsService();
     const events = [];
     service.onUpdate((event) => events.push(event));
 
-    await service.joinChannel('Builders', { address: '0xabc' });
+    const offerCode = await service.createHostOffer('Builders', { address: '0xabc' });
+    const envelope = JSON.parse(offerCode);
+    const decoded = JSON.parse(Buffer.from(envelope.description, 'base64').toString('utf8'));
 
+    assert.equal(decoded.type, 'offer');
+    assert.match(envelope.encryptionKey, /^[a-f0-9]{64}$/);
     assert.equal(service.currentChannel, 'builders');
-    assert.match(addArgs.magnet, /magnet:\?xt=urn:btih:[a-f0-9]{40}/);
-    assert.match(addArgs.magnet, /&tr=wss%3A%2F%2Fexisting-tracker\.test/);
-    assert.deepEqual(addArgs.opts, { destroyStoreOnDestroy: true });
-    assert.equal(events.some((event) => event.type === 'joined'), true);
+    assert.equal(service.role, 'host');
+    assert.match(service.sessionEncryptionKey, /^[a-f0-9]{64}$/);
+    assert.equal(service.peerConnection.config.iceServers[0].urls, 'stun:stun.l.google.com:19302');
+    assert.equal(events.some((event) => event.type === 'local-offer'), true);
+    assert.equal(events.some((event) => event.type === 'connecting'), true);
 });
 
-test('ChannelsService _addChannelTorrent composes create + bind responsibilities', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
-    const createCalls = [];
-    const bindCalls = [];
-    service._createTorrent = (magnetURI) => {
-        createCalls.push(magnetURI);
-        return mockTorrent;
-    };
-    service._bindTorrentEvents = (torrent) => {
-        bindCalls.push(torrent);
-    };
-
-    const torrent = service._addChannelTorrent('magnet:?xt=urn:btih:abc');
-
-    assert.equal(torrent, mockTorrent);
-    assert.deepEqual(createCalls, ['magnet:?xt=urn:btih:abc']);
-    assert.deepEqual(bindCalls, [mockTorrent]);
-    assert.equal(service.currentTorrent, mockTorrent);
-});
-
-test('ChannelsService keeps same torrent instance after noPeers (no re-add loop)', async () => {
-    const mockTorrent = createMockTorrent();
-    let addCalls = 0;
-    const client = {
-        add() {
-            addCalls += 1;
-            return mockTorrent;
-        }
-    };
-    const service = new ChannelsService({ client, trackers: ['wss://existing-tracker.test'] });
-
-    await service.joinChannel('builders', { address: '0xabc' });
-    mockTorrent.emit('noPeers');
-
-    assert.equal(addCalls, 1, 'noPeers must not recreate the channel torrent');
-    assert.equal(service.currentTorrent, mockTorrent, 'current torrent should remain active for discovery');
-});
-
-test('ChannelsService emits the same event contract used by Channels tab', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-    const events = [];
-    service.onUpdate((event) => events.push(event));
-
-    await service.joinChannel('Builders', { address: '0xabc' });
-    mockTorrent.emit('noPeers');
-    await service.leaveChannel();
-
-    assert.equal(events.some((event) => event.type === 'joined' && event.channel === 'builders'), true);
-    assert.equal(events.some((event) => event.type === 'peer-count'), true);
-    assert.equal(events.some((event) => event.type === 'left'), true);
-});
-
-test('ChannelsService deduplicates repeated inbound messages', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
-    const received = [];
-    service.onUpdate((event) => {
-        if (event.type === 'message') received.push(event.message.id);
+test('createAnswerFromOffer decodes offer and returns answer code', async () => {
+    const service = new ChannelsService();
+    const offerCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64'),
+        encryptionKey: 'a'.repeat(64)
     });
 
-    await service.joinChannel('Builders', { address: '0xabc' });
+    const answerCode = await service.createAnswerFromOffer('builders', offerCode, { address: '0xdef' });
+    const envelope = JSON.parse(answerCode);
+    const decoded = JSON.parse(Buffer.from(envelope.description, 'base64').toString('utf8'));
 
-    const msg = {
+    assert.equal(decoded.type, 'answer');
+    assert.equal(service.currentChannel, 'builders');
+    assert.equal(service.role, 'guest');
+    assert.equal(service.sessionEncryptionKey, 'a'.repeat(64));
+    assert.equal(service.peerConnection.remoteDescription.type, 'offer');
+});
+
+test('applyAnswer validates host flow and sets remote description', async () => {
+    const service = new ChannelsService();
+    await service.createHostOffer('builders', { address: '0xabc' });
+    const answerCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'answer', sdp: 'xyz' }), 'utf8').toString('base64'),
+        encryptionKey: 'b'.repeat(64)
+    });
+
+    await service.applyAnswer(answerCode);
+    assert.equal(service.peerConnection.remoteDescription.type, 'answer');
+    assert.equal(service.sessionEncryptionKey, 'b'.repeat(64));
+});
+
+test('sendChatMessage requires open data channel', async () => {
+    const service = new ChannelsService();
+    await service.createHostOffer('builders', { address: '0xabc' });
+
+    assert.throws(() => service.sendChatMessage('hello', { address: '0xabc' }), /Connection is not ready yet/);
+});
+
+test('open channel emits connected + local system message', async () => {
+    const service = new ChannelsService();
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    await service.createHostOffer('builders', { address: '0xabc' });
+    service.dataChannel.readyState = 'open';
+    service.dataChannel.onopen?.();
+
+    assert.equal(events.some((event) => event.type === 'connected'), true);
+    assert.equal(events.some((event) => event.type === 'peer-count' && event.count === 1), true);
+    assert.equal(
+        events.some((event) => event.type === 'message' && event.message.text.includes('Connected to room')),
+        true
+    );
+});
+
+test('sendChatMessage emits local event and serializes outbound payload', async () => {
+    const service = new ChannelsService();
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    await service.createHostOffer('builders', { address: '0xabc' });
+    service.dataChannel.readyState = 'open';
+    service.sendChatMessage('salut', { address: '0xabc' });
+
+    const lastSent = JSON.parse(service.dataChannel.sent.at(-1));
+    assert.equal(lastSent.type, 'chat');
+    assert.equal(lastSent.text, 'salut');
+    assert.equal(events.some((event) => event.type === 'message' && event.local === true), true);
+});
+
+test('handleInbound deduplicates repeated inbound messages', async () => {
+    const service = new ChannelsService();
+    await service.createHostOffer('builders', { address: '0xabc' });
+
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    const payload = {
         type: 'chat',
         id: 'm1',
         text: 'hello',
         channel: 'builders',
-        from: '0xdef',
-        timestamp: new Date().toISOString()
-    };
-
-    service.handleInbound(msg);
-    service.handleInbound(msg);
-
-    assert.deepEqual(received.filter((id) => id === 'm1').length, 1);
-});
-
-test('ChannelsService handleInbound marks remote messages as non-local (Fix 3 bug)', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
-    const events = [];
-    service.onUpdate((event) => events.push(event));
-    await service.joinChannel('test', {});
-
-    // Simulate what ChannelsWireExtension.onMessage does after the fix:
-    // it must pass false (not the wire object) as isLocal
-    const msg = {
-        type: 'chat',
-        id: 'remote-1',
-        text: 'from remote peer',
-        channel: 'test',
         from: '0xremote',
         timestamp: new Date().toISOString()
     };
-    service.handleInbound(msg, false);
+    service.handleInbound(payload, false);
+    service.handleInbound(payload, false);
 
-    const msgEvent = events.find((e) => e.type === 'message' && e.message.id === 'remote-1');
-    assert.ok(msgEvent, 'message event should be emitted');
-    assert.equal(msgEvent.local, false, 'remote message must NOT be marked as local');
+    assert.equal(events.filter((event) => event.type === 'message').length, 1);
 });
 
-test('ChannelsService handleInbound passing a truthy wire object marks message as local (pre-fix behaviour)', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
+test('leaveChannel resets room state and emits left', async () => {
+    const service = new ChannelsService();
     const events = [];
     service.onUpdate((event) => events.push(event));
-    await service.joinChannel('test', {});
 
-    const msg = {
-        type: 'chat',
-        id: 'wire-1',
-        text: 'bug demo',
-        channel: 'test',
-        from: '0xpeer',
-        timestamp: new Date().toISOString()
-    };
-    // Passing a truthy wire object (the pre-fix behaviour) would mark it local=true
-    const fakeWire = { extended: () => {} };
-    service.handleInbound(msg, fakeWire);
-
-    const msgEvent = events.find((e) => e.type === 'message' && e.message.id === 'wire-1');
-    assert.ok(msgEvent, 'message event should be emitted');
-    // The wire object is truthy so local ends up truthy (object reference, not strictly true)
-    assert.ok(msgEvent.local, 'passing wire object results in truthy local — this was the bug');
-});
-
-test('ChannelsService emits presence event when presence message received (Fix 3)', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
-    const events = [];
-    service.onUpdate((event) => events.push(event));
-    await service.joinChannel('test', {});
-
-    const presenceMsg = {
-        type: 'presence',
-        id: 'pres-1',
-        channel: 'test',
-        from: '0xpeer42',
-        timestamp: new Date().toISOString()
-    };
-    service.handleInbound(presenceMsg, false);
-
-    const presenceEvent = events.find((e) => e.type === 'presence');
-    assert.ok(presenceEvent, 'presence event should be emitted');
-    assert.equal(presenceEvent.from, '0xpeer42');
-
-    const peerCountEvent = events.find((e) => e.type === 'peer-count');
-    assert.ok(peerCountEvent, 'peer-count event should be emitted on presence');
-});
-
-test('ChannelsService deduplicates repeated presence messages', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
-    const presenceEvents = [];
-    service.onUpdate((event) => {
-        if (event.type === 'presence') presenceEvents.push(event);
-    });
-    await service.joinChannel('test', {});
-
-    const presenceMsg = {
-        type: 'presence',
-        id: 'pres-dup',
-        channel: 'test',
-        from: '0xpeer',
-        timestamp: new Date().toISOString()
-    };
-    service.handleInbound(presenceMsg, false);
-    service.handleInbound(presenceMsg, false);
-
-    assert.equal(presenceEvents.length, 1, 'presence should be deduplicated by id');
-});
-
-test('ChannelsService leaveChannel resets channel state', async () => {
-    const mockTorrent = createMockTorrent();
-    const client = { add() { return mockTorrent; } };
-    const service = new ChannelsService({ client, trackers: [] });
-
-    await service.joinChannel('test', {});
+    await service.createHostOffer('builders', { address: '0xabc' });
     await service.leaveChannel();
 
-    assert.equal(service.currentTorrent, null);
+    assert.equal(service.peerConnection, null);
+    assert.equal(service.dataChannel, null);
     assert.equal(service.currentChannel, '');
     assert.equal(service.currentPeerCount, 0);
+    assert.equal(events.some((event) => event.type === 'left'), true);
 });
