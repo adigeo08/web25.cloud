@@ -38,8 +38,66 @@ test('ChannelsService joins with existing trackers and emits joined state', asyn
 
     assert.equal(service.currentChannel, 'builders');
     assert.match(addArgs.magnet, /magnet:\?xt=urn:btih:[a-f0-9]{40}/);
-    assert.deepEqual(addArgs.opts.announce, ['wss://existing-tracker.test']);
+    assert.match(addArgs.magnet, /&tr=wss%3A%2F%2Fexisting-tracker\.test/);
+    assert.deepEqual(addArgs.opts, { destroyStoreOnDestroy: true });
     assert.equal(events.some((event) => event.type === 'joined'), true);
+});
+
+test('ChannelsService _addChannelTorrent composes create + bind responsibilities', async () => {
+    const mockTorrent = createMockTorrent();
+    const client = { add() { return mockTorrent; } };
+    const service = new ChannelsService({ client, trackers: [] });
+
+    const createCalls = [];
+    const bindCalls = [];
+    service._createTorrent = (magnetURI) => {
+        createCalls.push(magnetURI);
+        return mockTorrent;
+    };
+    service._bindTorrentEvents = (torrent) => {
+        bindCalls.push(torrent);
+    };
+
+    const torrent = service._addChannelTorrent('magnet:?xt=urn:btih:abc');
+
+    assert.equal(torrent, mockTorrent);
+    assert.deepEqual(createCalls, ['magnet:?xt=urn:btih:abc']);
+    assert.deepEqual(bindCalls, [mockTorrent]);
+    assert.equal(service.currentTorrent, mockTorrent);
+});
+
+test('ChannelsService keeps same torrent instance after noPeers (no re-add loop)', async () => {
+    const mockTorrent = createMockTorrent();
+    let addCalls = 0;
+    const client = {
+        add() {
+            addCalls += 1;
+            return mockTorrent;
+        }
+    };
+    const service = new ChannelsService({ client, trackers: ['wss://existing-tracker.test'] });
+
+    await service.joinChannel('builders', { address: '0xabc' });
+    mockTorrent.emit('noPeers');
+
+    assert.equal(addCalls, 1, 'noPeers must not recreate the channel torrent');
+    assert.equal(service.currentTorrent, mockTorrent, 'current torrent should remain active for discovery');
+});
+
+test('ChannelsService emits the same event contract used by Channels tab', async () => {
+    const mockTorrent = createMockTorrent();
+    const client = { add() { return mockTorrent; } };
+    const service = new ChannelsService({ client, trackers: [] });
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    await service.joinChannel('Builders', { address: '0xabc' });
+    mockTorrent.emit('noPeers');
+    await service.leaveChannel();
+
+    assert.equal(events.some((event) => event.type === 'joined' && event.channel === 'builders'), true);
+    assert.equal(events.some((event) => event.type === 'peer-count'), true);
+    assert.equal(events.some((event) => event.type === 'left'), true);
 });
 
 test('ChannelsService deduplicates repeated inbound messages', async () => {
@@ -172,20 +230,15 @@ test('ChannelsService deduplicates repeated presence messages', async () => {
     assert.equal(presenceEvents.length, 1, 'presence should be deduplicated by id');
 });
 
-test('ChannelsService leaveChannel cancels any pending retry timeout', async () => {
+test('ChannelsService leaveChannel resets channel state', async () => {
     const mockTorrent = createMockTorrent();
     const client = { add() { return mockTorrent; } };
     const service = new ChannelsService({ client, trackers: [] });
 
     await service.joinChannel('test', {});
-
-    // Inject a fake timeout to verify it gets cleared
-    const fakeId = setTimeout(() => {}, 60000);
-    service._retryTimeout = fakeId;
-
     await service.leaveChannel();
 
-    // After leave, _retryTimeout must be null
-    assert.equal(service._retryTimeout, null, '_retryTimeout should be cleared on leaveChannel');
-    clearTimeout(fakeId); // clean up the fake timeout in case it wasn't cleared
+    assert.equal(service.currentTorrent, null);
+    assert.equal(service.currentChannel, '');
+    assert.equal(service.currentPeerCount, 0);
 });

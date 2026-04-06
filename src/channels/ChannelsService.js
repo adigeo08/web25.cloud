@@ -2,20 +2,6 @@
 
 const CHAT_EXTENSION_NAME = 'web25_channels_v1';
 
-/** Maximum number of noPeers retry attempts per joinChannel call. */
-const CHANNEL_RETRY_MAX = 4;
-/** Base delay (ms) for exponential-backoff retry of channel joins. */
-const CHANNEL_RETRY_BASE_MS = 3000;
-
-/**
- * Exponential backoff with jitter, capped at 30 s.
- * @param {number} attempt - zero-based attempt index
- * @param {number} baseMs
- */
-function calcRetryDelay(attempt, baseMs) {
-    return Math.min(30000, baseMs * Math.pow(2, attempt) + Math.random() * 1000);
-}
-
 class ChannelsWireExtension {
     constructor(service, wire) {
         this.name = CHAT_EXTENSION_NAME;
@@ -53,8 +39,6 @@ export default class ChannelsService {
         this.messageIds = new Set();
         this.listeners = new Set();
         this.currentPeerCount = 0;
-        /** @type {ReturnType<typeof setTimeout> | null} */
-        this._retryTimeout = null;
     }
 
     onUpdate(listener) {
@@ -70,21 +54,22 @@ export default class ChannelsService {
         const normalized = this.normalizeChannel(channelName);
         if (!normalized) throw new Error('Channel name is required.');
 
-        // Cancel any pending retry before replacing the channel.
-        if (this._retryTimeout) {
-            clearTimeout(this._retryTimeout);
-            this._retryTimeout = null;
-        }
-
         await this.leaveChannel();
         this.messageIds.clear();
         this.currentPeerCount = 0;
         this.currentChannel = normalized;
 
         const infoHash = await this.sha1Hex(`web25:${normalized}`);
-        const magnetURI = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(`web25-channel-${normalized}`)}`;
+        const trackerParams = (this.trackers || [])
+            .map((tracker) => `${tracker || ''}`.trim())
+            .filter(Boolean)
+            .map((tracker) => `tr=${encodeURIComponent(tracker)}`)
+            .join('&');
+        const magnetURI = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(`web25-channel-${normalized}`)}${
+            trackerParams ? `&${trackerParams}` : ''
+        }`;
 
-        const torrent = this._addChannelTorrent(magnetURI, normalized, identity, 0);
+        const torrent = this._addChannelTorrent(magnetURI);
         if (!torrent) throw new Error('Could not open channel swarm.');
 
         this.emit({ type: 'joined', channel: normalized, infoHash });
@@ -92,18 +77,29 @@ export default class ChannelsService {
     }
 
     /**
-     * Internal: add a channel torrent and wire up listeners with retry support.
+     * Internal: add a channel torrent and wire up listeners.
      * @param {string} magnetURI
-     * @param {string} normalized  - already-normalised channel name
-     * @param {*} identity
-     * @param {number} retryAttempt - how many noPeers retries have been performed
      */
-    _addChannelTorrent(magnetURI, normalized, identity, retryAttempt) {
-        const torrent = this.client.add(magnetURI, { announce: this.trackers, destroyStoreOnDestroy: true });
+    _addChannelTorrent(magnetURI) {
+        const torrent = this._createTorrent(magnetURI);
         if (!torrent) return null;
 
         this.currentTorrent = torrent;
+        this._bindTorrentEvents(torrent);
+        return torrent;
+    }
 
+    /**
+     * @param {string} magnetURI
+     */
+    _createTorrent(magnetURI) {
+        return this.client.add(magnetURI, { destroyStoreOnDestroy: true });
+    }
+
+    /**
+     * @param {*} torrent
+     */
+    _bindTorrentEvents(torrent) {
         torrent.on('wire', (wire) => {
             const extension = new ChannelsWireExtension(this, wire);
             wire.use(extension);
@@ -115,34 +111,10 @@ export default class ChannelsService {
         torrent.on('noPeers', () => {
             this.currentPeerCount = torrent.numPeers || 0;
             this.emit({ type: 'peer-count', count: this.currentPeerCount });
-
-            // Guard: don't retry if the user already left or re-joined a different channel.
-            if (this.currentTorrent !== torrent || this.currentChannel !== normalized) return;
-            if (retryAttempt >= CHANNEL_RETRY_MAX) return;
-
-            const nextAttempt = retryAttempt + 1;
-            const delay = calcRetryDelay(retryAttempt, CHANNEL_RETRY_BASE_MS);
-
-            if (this._retryTimeout) clearTimeout(this._retryTimeout);
-            this._retryTimeout = setTimeout(() => {
-                // Re-check guards after the delay fires.
-                if (this.currentTorrent !== torrent || this.currentChannel !== normalized) return;
-                torrent.destroy({ destroyStore: true }, () => {
-                    if (this.currentChannel !== normalized) return;
-                    this.currentTorrent = null;
-                    this._addChannelTorrent(magnetURI, normalized, identity, nextAttempt);
-                });
-            }, delay);
         });
-
-        return torrent;
     }
 
     async leaveChannel() {
-        if (this._retryTimeout) {
-            clearTimeout(this._retryTimeout);
-            this._retryTimeout = null;
-        }
         if (!this.currentTorrent) return;
         await new Promise((resolve) => {
             try {
