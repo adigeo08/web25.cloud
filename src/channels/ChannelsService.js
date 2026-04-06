@@ -1,5 +1,7 @@
 // @ts-check
 
+import { encryptMessage, decryptMessage } from './crypto.js';
+
 const DEFAULT_RTC_CONFIG = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
@@ -67,6 +69,8 @@ export default class ChannelsService {
         this.identityAddress = 'anonymous';
         this.role = '';
         this.sessionEncryptionKey = '';
+        this._fileBuffers = {};
+        this._fileInfos = {};
     }
 
     onUpdate(listener) {
@@ -187,7 +191,7 @@ export default class ChannelsService {
         };
 
         this.handleInbound(payload, true);
-        this.transmit(payload);
+        return this.transmit(payload);
     }
 
     sendSystemMessage(kind, data, identity = null) {
@@ -247,18 +251,26 @@ export default class ChannelsService {
             this.emit({ type: 'disconnected' });
         };
 
-        channel.onmessage = (event) => {
+        channel.onmessage = async (event) => {
             try {
-                const payload = JSON.parse(`${event?.data || ''}`);
+                const raw = `${event?.data || ''}`;
+                const plaintext = this.sessionEncryptionKey
+                    ? await decryptMessage(raw, this.sessionEncryptionKey)
+                    : raw;
+                const payload = JSON.parse(plaintext);
                 this.handleInbound(payload, false);
             } catch (_) {}
         };
     }
 
-    transmit(payload) {
+    async transmit(payload) {
         try {
             if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
-            this.dataChannel.send(JSON.stringify(payload));
+            const plaintext = JSON.stringify(payload);
+            const wire = this.sessionEncryptionKey
+                ? await encryptMessage(plaintext, this.sessionEncryptionKey)
+                : plaintext;
+            this.dataChannel.send(wire);
         } catch (_) {}
     }
 
@@ -269,6 +281,81 @@ export default class ChannelsService {
 
         if (payload.type === 'chat') this.emit({ type: 'message', message: payload, local: isLocal });
         if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal });
+
+        if (payload.type === 'file-info') {
+            if (!this._fileBuffers) this._fileBuffers = {};
+            if (!this._fileInfos) this._fileInfos = {};
+            this._fileInfos[payload.fileId] = { fileName: payload.fileName, fileSize: payload.fileSize };
+            this._fileBuffers[payload.fileId] = { chunks: [], receivedSize: 0 };
+            this.emit({ type: 'file-incoming', fileId: payload.fileId, fileName: payload.fileName, fileSize: payload.fileSize, local: isLocal });
+        }
+
+        if (payload.type === 'file-chunk') {
+            const buf = this._fileBuffers?.[payload.fileId];
+            const info = this._fileInfos?.[payload.fileId];
+            if (!buf || !info) return;
+            const bytes = Uint8Array.from(atob(payload.chunk), (c) => c.charCodeAt(0));
+            buf.chunks[payload.chunkIndex] = bytes;
+            buf.receivedSize += bytes.length;
+            this.emit({ type: 'file-progress', fileId: payload.fileId, received: buf.receivedSize, total: info.fileSize });
+            if (buf.receivedSize >= info.fileSize) {
+                const blob = new Blob(buf.chunks);
+                const url = URL.createObjectURL(blob);
+                this.emit({ type: 'file-ready', fileId: payload.fileId, fileName: info.fileName, url });
+                delete this._fileBuffers[payload.fileId];
+                delete this._fileInfos[payload.fileId];
+            }
+        }
+    }
+
+    /**
+     * Send a File object over the DataChannel in chunks, encrypted.
+     * @param {File} file
+     * @param {{ address?: string } | null} identity
+     */
+    async sendFile(file, identity) {
+        if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Connection is not ready yet.');
+
+        const CHUNK_SIZE = 16 * 1024;
+        const fileId = generateHexKey(8);
+        const from = identity?.address || this.identityAddress || 'anonymous';
+
+        const infoPayload = {
+            type: 'file-info',
+            id: `fi-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            channel: this.currentChannel,
+            from,
+            timestamp: new Date().toISOString(),
+            fileId,
+            fileName: file.name,
+            fileSize: file.size
+        };
+        this.handleInbound(infoPayload, true);
+        await this.transmit(infoPayload);
+
+        this.emit({ type: 'file-send-start', fileId, fileName: file.name, fileSize: file.size });
+
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+            const start = chunkIndex * CHUNK_SIZE;
+            const slice = file.slice(start, start + CHUNK_SIZE);
+            const buffer = await slice.arrayBuffer();
+            const b64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            const chunkPayload = {
+                type: 'file-chunk',
+                id: `fc-${Date.now()}-${chunkIndex}-${Math.random().toString(16).slice(2)}`,
+                channel: this.currentChannel,
+                from,
+                timestamp: new Date().toISOString(),
+                fileId,
+                chunkIndex,
+                chunk: b64
+            };
+            await this.transmit(chunkPayload);
+            this.emit({ type: 'file-send-progress', fileId, sent: Math.min((chunkIndex + 1) * CHUNK_SIZE, file.size), total: file.size });
+        }
+
+        this.emit({ type: 'file-send-done', fileId });
     }
 
     pushLocalSystemMessage(text) {

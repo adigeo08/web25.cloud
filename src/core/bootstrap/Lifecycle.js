@@ -13,7 +13,9 @@ import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWiz
 import ChannelsService from '../../channels/ChannelsService.js';
 import {
     appendChannelsMessage,
+    appendFileTransfer,
     bindChannelsPanel,
+    bindFileInput,
     clearChannelsComposer,
     clearChannelsMessages,
     renderChannelsStatus,
@@ -124,6 +126,15 @@ export function setupChannels() {
         }
     });
 
+    bindFileInput(async (file) => {
+        try {
+            const identity = this.authController.getActiveIdentity();
+            await this.channelsService.sendFile(file, identity);
+        } catch (error) {
+            this.toast.error(error.message, 'Direct Messenger');
+        }
+    });
+
     this.channelsService.onUpdate((event) => {
         if (event.type === 'connecting') {
             renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
@@ -151,6 +162,10 @@ export function setupChannels() {
         } else if (event.type === 'message') {
             const identity = this.authController.getActiveIdentity();
             appendChannelsMessage(event.message, Boolean(identity?.address && event.message.from === identity.address));
+        } else if (event.type === 'file-incoming' || event.type === 'file-progress') {
+            appendFileTransfer({ fileId: event.fileId, fileName: event.fileName, fileSize: event.fileSize || 0, received: event.received || 0 });
+        } else if (event.type === 'file-ready') {
+            appendFileTransfer({ fileId: event.fileId, fileName: event.fileName, fileSize: 0, received: 0, url: event.url });
         } else if (event.type === 'error') {
             this.toast.error(event.error?.message || 'Unexpected direct messenger error', 'Direct Messenger');
         }
