@@ -39,9 +39,9 @@ export function renderAuthPanel(state) {
         sessionIndicator.classList.toggle('hidden', !state.localWalletUnlocked);
     }
 
-    const lockBtn = document.getElementById('lock-session-btn');
-    if (lockBtn) {
-        lockBtn.classList.toggle('hidden', !state.localWalletUnlocked);
+    const lockDisconnectBtn = document.getElementById('lock-disconnect-auth-btn');
+    if (lockDisconnectBtn) {
+        lockDisconnectBtn.classList.toggle('hidden', !state.localWalletUnlocked);
     }
 
     const migrationPanel = document.getElementById('legacy-migration-panel');

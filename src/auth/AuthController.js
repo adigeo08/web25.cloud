@@ -31,8 +31,8 @@ export default class AuthController {
         bindUnlockWallet(() => this.unlockLocal());
         bindRecoverWallet((seedPhrase) => this.recoverLocal(seedPhrase));
 
-        const disconnectBtn = document.getElementById('disconnect-auth-btn');
-        if (disconnectBtn) disconnectBtn.addEventListener('click', () => this.disconnect());
+        const lockDisconnectBtn = document.getElementById('lock-disconnect-auth-btn');
+        if (lockDisconnectBtn) lockDisconnectBtn.addEventListener('click', () => this.lockAndDisconnect());
 
         const deleteBtn = document.getElementById('delete-local-wallet-btn');
         if (deleteBtn) deleteBtn.addEventListener('click', () => this.deleteLocalWallet());
@@ -42,9 +42,6 @@ export default class AuthController {
 
         const addPasskeyBtn = document.getElementById('add-passkey-btn');
         if (addPasskeyBtn) addPasskeyBtn.addEventListener('click', () => this.addAlternatePasskey());
-
-        const lockSessionBtn = document.getElementById('lock-session-btn');
-        if (lockSessionBtn) lockSessionBtn.addEventListener('click', () => this.lockSession());
 
         const migrateBtn = document.getElementById('migrate-wallet-btn');
         if (migrateBtn) migrateBtn.addEventListener('click', () => this.migrateFromLegacy());
@@ -170,20 +167,6 @@ export default class AuthController {
         }
     }
 
-    async lockSession() {
-        try {
-            clearBiometricSession();
-            await clearLocalWalletSession();
-            this.state.localWalletUnlocked = false;
-            this.state.status = this.state.localWalletExists ? AUTH_STATUS.LOCAL_REGISTERED_LOCKED : AUTH_STATUS.ANONYMOUS;
-            this.render();
-            this.notify();
-            this.toast.info('Biometric session locked.', 'Session locked');
-        } catch (err) {
-            this.toast.error(err.message, 'Session lock failed');
-        }
-    }
-
     async migrateFromLegacy() {
         const input = document.getElementById('migration-seed-input');
         if (!(input instanceof HTMLInputElement)) {
@@ -214,8 +197,9 @@ export default class AuthController {
         }
     }
 
-    async disconnect() {
+    async lockAndDisconnect() {
         try {
+            clearBiometricSession();
             await clearLocalWalletSession();
             if (this.onDisconnect) {
                 await this.onDisconnect();
@@ -224,6 +208,7 @@ export default class AuthController {
             await this.refreshLocalWalletState();
             this.render();
             this.notify();
+            this.toast.info('Local wallet locked and disconnected.', 'Disconnected');
         } catch (err) {
             this.toast.error(err.message, 'Disconnect failed');
         }
