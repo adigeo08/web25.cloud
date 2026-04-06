@@ -29,13 +29,15 @@ function setDmError(elementId, message) {
 async function copyToClipboard(text) {
     try {
         await navigator.clipboard.writeText(text);
-    } catch (_) {
+    } catch (err) {
+        console.warn('Clipboard API failed, falling back to execCommand:', err);
         const ta = document.createElement('textarea');
         ta.value = text;
         ta.style.position = 'fixed';
         ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
+        // execCommand is deprecated but used here for legacy browser support
         document.execCommand('copy');
         document.body.removeChild(ta);
     }
