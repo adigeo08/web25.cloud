@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ChannelsService from '../src/channels/ChannelsService.js';
+import { encryptMessage, decryptMessage } from '../src/channels/crypto.js';
 
 class MockDataChannel {
     constructor() {
@@ -154,18 +155,20 @@ test('open channel emits connected + local system message', async () => {
     );
 });
 
-test('sendChatMessage emits local event and serializes outbound payload', async () => {
+test('sendChatMessage emits local event and sends encrypted payload', async () => {
     const service = new ChannelsService();
     const events = [];
     service.onUpdate((event) => events.push(event));
 
     await service.createHostOffer('builders', { address: '0xabc' });
     service.dataChannel.readyState = 'open';
-    service.sendChatMessage('salut', { address: '0xabc' });
+    await service.sendChatMessage('salut', { address: '0xabc' });
 
-    const lastSent = JSON.parse(service.dataChannel.sent.at(-1));
-    assert.equal(lastSent.type, 'chat');
-    assert.equal(lastSent.text, 'salut');
+    const lastSent = service.dataChannel.sent.at(-1);
+    assert.match(lastSent, /^[a-f0-9]+:[a-f0-9]+$/, 'sent value should be ivHex:ctHex');
+    const decrypted = JSON.parse(await decryptMessage(lastSent, service.sessionEncryptionKey));
+    assert.equal(decrypted.type, 'chat');
+    assert.equal(decrypted.text, 'salut');
     assert.equal(events.some((event) => event.type === 'message' && event.local === true), true);
 });
 
@@ -203,4 +206,147 @@ test('leaveChannel resets room state and emits left', async () => {
     assert.equal(service.currentChannel, '');
     assert.equal(service.currentPeerCount, 0);
     assert.equal(events.some((event) => event.type === 'left'), true);
+});
+
+test('encryptMessage / decryptMessage round-trip returns original string', async () => {
+    const hexKey = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    const original = 'Hello, encrypted world! 🔐';
+    const encrypted = await encryptMessage(original, hexKey);
+    assert.match(encrypted, /^[a-f0-9]+:[a-f0-9]+$/, 'encrypted format should be ivHex:ctHex');
+    assert.notEqual(encrypted, original);
+    const decrypted = await decryptMessage(encrypted, hexKey);
+    assert.equal(decrypted, original);
+});
+
+test('transmit sends encrypted wire format, not plain JSON', async () => {
+    const service = new ChannelsService();
+    await service.createHostOffer('builders', { address: '0xabc' });
+    service.dataChannel.readyState = 'open';
+
+    const payload = { type: 'chat', id: 'test-1', text: 'secret', channel: 'builders', from: '0xabc', timestamp: new Date().toISOString() };
+    await service.transmit(payload);
+
+    const lastSent = service.dataChannel.sent.at(-1);
+    assert.match(lastSent, /^[a-f0-9]+:[a-f0-9]+$/, 'sent value should be ivHex:ctHex');
+    assert.throws(() => JSON.parse(lastSent), 'raw sent string should not be plain JSON');
+    const decrypted = await decryptMessage(lastSent, service.sessionEncryptionKey);
+    assert.deepEqual(JSON.parse(decrypted), payload);
+});
+
+test('onmessage decrypts incoming encrypted message and calls handleInbound', async () => {
+    const service = new ChannelsService();
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    await service.createHostOffer('builders', { address: '0xabc' });
+    service.dataChannel.readyState = 'open';
+
+    const inboundPayload = {
+        type: 'chat',
+        id: 'inbound-1',
+        text: 'hi from peer',
+        channel: 'builders',
+        from: '0xpeer',
+        timestamp: new Date().toISOString()
+    };
+    const encrypted = await encryptMessage(JSON.stringify(inboundPayload), service.sessionEncryptionKey);
+
+    await service.dataChannel.onmessage?.({ data: encrypted });
+
+    // Allow microtasks to settle
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(events.some((e) => e.type === 'message' && e.message.text === 'hi from peer'), true);
+});
+
+test('sendFile emits file-send-start and transmits file-info + file-chunk messages', async () => {
+    const service = new ChannelsService();
+    await service.createHostOffer('builders', { address: '0xabc' });
+    service.dataChannel.readyState = 'open';
+
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    // Create a small mock File (32 bytes)
+    const content = new Uint8Array(32).fill(0xab);
+    const file = new File([content], 'test.bin', { type: 'application/octet-stream' });
+
+    await service.sendFile(file, { address: '0xabc' });
+
+    const sentPayloads = await Promise.all(
+        service.dataChannel.sent.map(async (s) => {
+            const plain = await decryptMessage(s, service.sessionEncryptionKey);
+            return JSON.parse(plain);
+        })
+    );
+
+    const infoMsg = sentPayloads.find((p) => p.type === 'file-info');
+    const chunkMsgs = sentPayloads.filter((p) => p.type === 'file-chunk');
+
+    assert.ok(infoMsg, 'file-info message should be transmitted');
+    assert.equal(infoMsg.fileName, 'test.bin');
+    assert.equal(infoMsg.fileSize, 32);
+    assert.ok(chunkMsgs.length > 0, 'at least one file-chunk should be transmitted');
+    assert.ok(chunkMsgs[0].chunk, 'chunk should have base64 data');
+
+    assert.equal(events.some((e) => e.type === 'file-send-start'), true);
+    assert.equal(events.some((e) => e.type === 'file-send-done'), true);
+});
+
+test('handleInbound reassembles file-info + file-chunk into file-ready event', async () => {
+    const service = new ChannelsService();
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    await service.createHostOffer('builders', { address: '0xabc' });
+
+    // Mock URL.createObjectURL
+    const originalCreateObjectURL = globalThis.URL?.createObjectURL;
+    if (typeof URL !== 'undefined') {
+        URL.createObjectURL = () => 'blob:mock-url';
+    } else {
+        globalThis.URL = { createObjectURL: () => 'blob:mock-url' };
+    }
+
+    try {
+        const content = new Uint8Array([1, 2, 3, 4]);
+        const b64 = btoa(String.fromCharCode(...content));
+
+        const fileId = 'test-file-id';
+
+        service.handleInbound({
+            type: 'file-info',
+            id: 'fi-1',
+            channel: 'builders',
+            from: '0xpeer',
+            timestamp: new Date().toISOString(),
+            fileId,
+            fileName: 'hello.txt',
+            fileSize: 4
+        }, false);
+
+        service.handleInbound({
+            type: 'file-chunk',
+            id: 'fc-1',
+            channel: 'builders',
+            from: '0xpeer',
+            timestamp: new Date().toISOString(),
+            fileId,
+            chunkIndex: 0,
+            chunk: b64
+        }, false);
+
+        assert.equal(events.some((e) => e.type === 'file-incoming' && e.fileId === fileId), true);
+        assert.equal(events.some((e) => e.type === 'file-progress' && e.fileId === fileId), true);
+        assert.equal(events.some((e) => e.type === 'file-ready' && e.fileId === fileId && e.fileName === 'hello.txt'), true);
+    } finally {
+        if (typeof URL !== 'undefined') {
+            if (originalCreateObjectURL) {
+                URL.createObjectURL = originalCreateObjectURL;
+            } else {
+                delete URL.createObjectURL;
+            }
+        }
+    }
 });

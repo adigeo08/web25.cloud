@@ -92,3 +92,34 @@ export function clearChannelsComposer() {
     const input = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
     if (input) input.value = '';
 }
+
+export function bindFileInput(onFile) {
+    const attachBtn = document.getElementById('channels-attach-btn');
+    const fileInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-file-input'));
+    attachBtn?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', (e) => {
+        const file = /** @type {HTMLInputElement} */ (e.target).files?.[0];
+        if (file) {
+            onFile(file);
+            if (fileInput) fileInput.value = '';
+        }
+    });
+}
+
+export function appendFileTransfer({ fileId, fileName, fileSize, url = null, received = 0 }) {
+    const container = document.getElementById('channels-files');
+    if (!container) return;
+    let item = document.getElementById(`file-transfer-${fileId}`);
+    if (!item) {
+        item = document.createElement('div');
+        item.id = `file-transfer-${fileId}`;
+        item.className = 'file-transfer';
+        container.appendChild(item);
+    }
+    const progress = fileSize > 0 ? Math.round((received / fileSize) * 100) : 0;
+    if (url) {
+        item.innerHTML = `<a href="${url}" download="${fileName}" class="btn btn-secondary btn-sm">💾 ${fileName}</a>`;
+    } else {
+        item.innerHTML = `<span>📥 ${fileName} — ${progress}%</span>`;
+    }
+}
