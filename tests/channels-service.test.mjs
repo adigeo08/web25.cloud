@@ -66,6 +66,40 @@ test('ChannelsService _addChannelTorrent composes create + bind responsibilities
     assert.equal(service.currentTorrent, mockTorrent);
 });
 
+test('ChannelsService keeps same torrent instance after noPeers (no re-add loop)', async () => {
+    const mockTorrent = createMockTorrent();
+    let addCalls = 0;
+    const client = {
+        add() {
+            addCalls += 1;
+            return mockTorrent;
+        }
+    };
+    const service = new ChannelsService({ client, trackers: ['wss://existing-tracker.test'] });
+
+    await service.joinChannel('builders', { address: '0xabc' });
+    mockTorrent.emit('noPeers');
+
+    assert.equal(addCalls, 1, 'noPeers must not recreate the channel torrent');
+    assert.equal(service.currentTorrent, mockTorrent, 'current torrent should remain active for discovery');
+});
+
+test('ChannelsService emits the same event contract used by Channels tab', async () => {
+    const mockTorrent = createMockTorrent();
+    const client = { add() { return mockTorrent; } };
+    const service = new ChannelsService({ client, trackers: [] });
+    const events = [];
+    service.onUpdate((event) => events.push(event));
+
+    await service.joinChannel('Builders', { address: '0xabc' });
+    mockTorrent.emit('noPeers');
+    await service.leaveChannel();
+
+    assert.equal(events.some((event) => event.type === 'joined' && event.channel === 'builders'), true);
+    assert.equal(events.some((event) => event.type === 'peer-count'), true);
+    assert.equal(events.some((event) => event.type === 'left'), true);
+});
+
 test('ChannelsService deduplicates repeated inbound messages', async () => {
     const mockTorrent = createMockTorrent();
     const client = { add() { return mockTorrent; } };
