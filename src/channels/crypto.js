@@ -24,6 +24,7 @@ export async function encryptMessage(plaintext, hexKey) {
  */
 export async function decryptMessage(encrypted, hexKey) {
     const colonIdx = encrypted.indexOf(':');
+    if (colonIdx === -1) throw new Error('Invalid encrypted format');
     const ivHex = encrypted.slice(0, colonIdx);
     const ctHex = encrypted.slice(colonIdx + 1);
     const keyBytes = hexToBytes(hexKey);

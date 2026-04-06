@@ -118,8 +118,17 @@ export function appendFileTransfer({ fileId, fileName, fileSize, url = null, rec
     }
     const progress = fileSize > 0 ? Math.round((received / fileSize) * 100) : 0;
     if (url) {
-        item.innerHTML = `<a href="${url}" download="${fileName}" class="btn btn-secondary btn-sm">💾 ${fileName}</a>`;
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.className = 'btn btn-secondary btn-sm';
+        link.textContent = `💾 ${fileName}`;
+        item.textContent = '';
+        item.appendChild(link);
     } else {
-        item.innerHTML = `<span>📥 ${fileName} — ${progress}%</span>`;
+        const span = document.createElement('span');
+        span.textContent = `📥 ${fileName} — ${progress}%`;
+        item.textContent = '';
+        item.appendChild(span);
     }
 }
