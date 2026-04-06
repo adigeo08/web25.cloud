@@ -70,12 +70,13 @@ export async function registerLocalWallet() {
     const viemAccounts = await loadViemAccounts();
     const address = viemAccounts.privateKeyToAccount(privateKey).address;
     const lockKey = await createPasskeyLock(address);
-    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey);
+    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey.encPK);
 
     await saveLocalWallet({
         address,
         encryptedBlob,
-        localIdentityID: lockKey.localIdentity,
+        credentialId: lockKey.credentialId,
+        encPKStored: lockKey.encPKStored,
         createdAt: new Date().toISOString(),
         passkeyProtected: passkeySupported()
     });
@@ -103,12 +104,13 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
     const viemAccounts = await loadViemAccounts();
     const address = viemAccounts.privateKeyToAccount(privateKey).address;
     const lockKey = await createPasskeyLock(address);
-    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey);
+    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey.encPK);
 
     await saveLocalWallet({
         address,
         encryptedBlob,
-        localIdentityID: lockKey.localIdentity,
+        credentialId: lockKey.credentialId,
+        encPKStored: lockKey.encPKStored,
         createdAt: new Date().toISOString(),
         passkeyProtected: passkeySupported()
     });
@@ -127,7 +129,7 @@ export async function unlockLocalWallet() {
         throw new Error('Legacy wallet format detected. Please migrate from seed phrase.');
     }
 
-    unlockedPrivateKey = await decryptPrivateKey(record.encryptedBlob, record.localIdentityID);
+    unlockedPrivateKey = await decryptPrivateKey(record.encryptedBlob, record.credentialId);
     await saveLocalWallet({ ...record, lastUsedAt: new Date().toISOString() });
     resetAutoLock();
     return { address: record.address };
@@ -150,7 +152,7 @@ export async function getLocalWalletStatus() {
         address: record?.address || null,
         unlocked: Boolean(unlockedPrivateKey),
         needsMigration: false,
-        passkeyProtected: Boolean(record?.passkeyProtected ?? record?.localIdentityID)
+        passkeyProtected: Boolean(record?.passkeyProtected ?? record?.credentialId)
     };
 }
 

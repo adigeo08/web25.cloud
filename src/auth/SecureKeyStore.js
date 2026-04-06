@@ -1,20 +1,21 @@
 // @ts-check
 
 import {
-    clearLockKeyCache,
-    getLockKey,
-    isPasskeySupported,
-    lockData,
-    removeLocalAccount,
-    unlockData
-} from '../vendor/local-data-lock/ldl.js';
+    addPasskey,
+    clearBiometricSession,
+    createPasskey,
+    deletePasskey,
+    openData,
+    passkeySupported,
+    sealData,
+    unlockPasskey
+} from './PasskeyVault.js';
 
 const DB_NAME = 'web25-auth';
 const DB_VERSION = 2;
 const STORE_WALLETS = 'wallets';
 const STORE_KEYS = 'keys';
 const LOCAL_WALLET_ID = 'default-local-wallet';
-const LOCAL_IDENTITY_STORAGE_KEY = 'web25.passkey.localIdentityID';
 
 function openDb() {
     return new Promise((resolve, reject) => {
@@ -60,36 +61,19 @@ function deleteRecord(db, storeName, key) {
     });
 }
 
-function toBase64(bytes) {
-    return btoa(String.fromCharCode(...bytes));
-}
-
-function fromBase64(base64) {
-    return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-}
-
-export function getStoredLocalIdentityID() {
-    return localStorage.getItem(LOCAL_IDENTITY_STORAGE_KEY);
-}
-
 export async function getLocalWalletRecord() {
     const db = await openDb();
     return readRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
 }
 
-export async function encryptPrivateKey(privateKeyHex, lockKey) {
-    const payload = new TextEncoder().encode(privateKeyHex);
-    const encryptedBytes = await lockData(payload, lockKey);
-    return {
-        encryptedBlob: toBase64(encryptedBytes)
-    };
+export async function encryptPrivateKey(privateKeyHex, encPK) {
+    const encryptedBlob = await sealData(privateKeyHex, encPK);
+    return { encryptedBlob };
 }
 
-export async function decryptPrivateKey(encryptedBlob, localIdentityID) {
-    const encryptedBytes = fromBase64(encryptedBlob);
-    const lockKey = await getLockKey({ localIdentity: localIdentityID || getStoredLocalIdentityID() || undefined });
-    const decryptedBytes = await unlockData(encryptedBytes, lockKey);
-    return new TextDecoder().decode(decryptedBytes);
+export async function decryptPrivateKey(encryptedBlob, credentialId) {
+    const { encSK } = await unlockPasskey(credentialId);
+    return openData(encryptedBlob, encSK);
 }
 
 export async function saveLocalWallet(record) {
@@ -99,44 +83,32 @@ export async function saveLocalWallet(record) {
         walletId: LOCAL_WALLET_ID,
         lastUsedAt: new Date().toISOString()
     });
-    if (record.localIdentityID) {
-        localStorage.setItem(LOCAL_IDENTITY_STORAGE_KEY, record.localIdentityID);
-    }
 }
 
-export async function addAlternatePasskey(localIdentityID) {
-    await getLockKey({
-        localIdentity: localIdentityID || getStoredLocalIdentityID() || undefined,
-        addNewPasskey: true
-    });
+export async function addAlternatePasskey(credentialId) {
+    await addPasskey(credentialId);
 }
 
-export function clearBiometricSession() {
-    clearLockKeyCache();
-}
-
-export function passkeySupported() {
-    return isPasskeySupported();
-}
+export { clearBiometricSession, passkeySupported };
 
 export async function deleteLocalWallet() {
     const db = await openDb();
     const record = await readRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
     await deleteRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
 
-    if (record?.localIdentityID) {
-        await removeLocalAccount(record.localIdentityID);
+    if (record?.credentialId) {
+        await deletePasskey(record.credentialId);
     }
-    localStorage.removeItem(LOCAL_IDENTITY_STORAGE_KEY);
 }
 
 export async function createPasskeyLock(address) {
-    const lockKey = await getLockKey({
-        addNewPasskey: true,
+    const passkey = await createPasskey({
         username: address.slice(0, 10),
         displayName: `web25 wallet ${address.slice(0, 6)}`
     });
-
-    localStorage.setItem(LOCAL_IDENTITY_STORAGE_KEY, lockKey.localIdentity);
-    return lockKey;
+    return {
+        credentialId: passkey.credentialId,
+        encPK: passkey.encPK,
+        encPKStored: passkey.encPK
+    };
 }

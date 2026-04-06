@@ -160,10 +160,10 @@ export default class AuthController {
     async addAlternatePasskey() {
         try {
             const record = await getLocalWalletRecord();
-            if (!record?.localIdentityID) {
+            if (!record?.credentialId) {
                 throw new Error('No passkey identity found for the current wallet.');
             }
-            await addAlternatePasskey(record.localIdentityID);
+            await addAlternatePasskey(record.credentialId);
             this.toast.success('Alternate passkey added for this wallet.', 'Passkey added');
         } catch (err) {
             this.toast.error(err.message, 'Passkey setup failed');
