@@ -226,84 +226,110 @@
                 <!-- ── DIRECT MESSENGER TAB ── -->
                 <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload">
-                        <h3>💬 P2P Direct Messenger</h3>
-                        <p>WebRTC direct flow with manual signaling, inspired by p2p-chat style UX.</p>
-                        <p><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
-                        <div class="hash-input-group">
-                            <input
-                                type="text"
-                                id="channels-name-input"
-                                placeholder="private room key (ex: maria-ioan-1)"
-                                class="hash-input"
-                                maxlength="40"
-                            />
-                            <button id="channels-leave-btn" class="btn btn-secondary">Disconnect</button>
+
+                        <!-- SUB-PANEL 1: Choose Role -->
+                        <div id="dm-choose-role">
+                            <h3>💬 P2P Direct Messenger</h3>
+                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with manual signaling</p>
+                            <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
+                            <div class="hash-input-group" style="margin-bottom: 1rem">
+                                <input
+                                    type="text"
+                                    id="channels-name-input"
+                                    placeholder="private room key (ex: maria-ioan-1)"
+                                    class="hash-input"
+                                    maxlength="40"
+                                />
+                            </div>
+                            <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
+                            <div class="dm-role-cards">
+                                <div class="dm-role-card">
+                                    <p class="dm-card-title">New chat (Host)</p>
+                                    <p class="dm-instruction">Generate an offer code and share it with your buddy.</p>
+                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%">Generate Offer</button>
+                                </div>
+                                <div class="dm-or-separator">or</div>
+                                <div class="dm-role-card">
+                                    <p class="dm-card-title">Join a chat (Guest)</p>
+                                    <p class="dm-instruction">Paste the offer code you received:</p>
+                                    <textarea
+                                        id="channels-remote-offer-input"
+                                        class="hash-input"
+                                        rows="4"
+                                        placeholder="Paste host offer code here..."
+                                    ></textarea>
+                                    <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Chat</button>
+                                </div>
+                            </div>
                         </div>
-                        <div class="hash-input-group" style="align-items: stretch">
-                            <div style="flex: 1; min-width: 260px">
-                                <p><strong>Host</strong> — generate and share offer code</p>
-                                <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem">
-                                    Generate Offer
-                                </button>
+
+                        <!-- SUB-PANEL 2: Host Signaling -->
+                        <div id="dm-host-signaling" class="hidden">
+                            <h3 style="text-align:center; margin-bottom: 1.5rem">Starting a new chat</h3>
+                            <div class="dm-step-card">
+                                <div class="dm-step-indicator">1</div>
+                                <p class="dm-instruction">Send this code to your buddy:</p>
                                 <textarea
                                     id="channels-local-offer-output"
                                     class="hash-input"
-                                    rows="4"
+                                    rows="5"
                                     readonly
-                                    placeholder="Offer code appears here (copy/share)"
+                                    placeholder="Offer code appears here..."
                                 ></textarea>
+                                <button id="dm-copy-offer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
                             </div>
-                            <div style="flex: 1; min-width: 260px">
-                                <p><strong>Guest</strong> — paste host offer, generate answer</p>
-                                <textarea
-                                    id="channels-remote-offer-input"
-                                    class="hash-input"
-                                    rows="4"
-                                    placeholder="Paste host offer code"
-                                ></textarea>
-                                <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">
-                                    Generate Answer
-                                </button>
-                            </div>
-                        </div>
-                        <div class="hash-input-group" style="align-items: stretch; margin-top: 0.5rem">
-                            <div style="flex: 1; min-width: 260px">
-                                <p><strong>Guest output</strong> — send answer back to host</p>
-                                <textarea
-                                    id="channels-local-answer-output"
-                                    class="hash-input"
-                                    rows="4"
-                                    readonly
-                                    placeholder="Answer code appears here (copy/share)"
-                                ></textarea>
-                            </div>
-                            <div style="flex: 1; min-width: 260px">
-                                <p><strong>Host final step</strong> — paste answer and connect</p>
+                            <div class="dm-step-card" style="margin-top: 1rem">
+                                <div class="dm-step-indicator">2</div>
+                                <p class="dm-instruction">Paste the answer code from your buddy:</p>
                                 <textarea
                                     id="channels-remote-answer-input"
                                     class="hash-input"
-                                    rows="4"
-                                    placeholder="Paste answer code from guest"
+                                    rows="5"
+                                    placeholder="Paste answer code from your buddy..."
                                 ></textarea>
-                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">
-                                    Apply Answer
-                                </button>
+                                <p id="dm-apply-answer-error" class="dm-error-message hidden"></p>
+                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Connect</button>
                             </div>
+                            <button id="dm-host-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
                         </div>
-                        <p id="channels-status" class="status-chip status-pending">Disconnected</p>
-                        <div id="channels-messages" class="channels-messages"></div>
-                        <div class="hash-input-group" style="margin-top: 0.75rem">
-                            <input
-                                type="text"
-                                id="channels-message-input"
-                                placeholder="Write a message..."
-                                class="hash-input"
-                            />
-                            <input type="file" id="channels-file-input" style="display: none" />
-                            <button id="channels-attach-btn" class="btn btn-secondary" title="Attach file">📎</button>
-                            <button id="channels-send-btn" class="btn btn-primary">Send</button>
+
+                        <!-- SUB-PANEL 3: Guest Waiting -->
+                        <div id="dm-guest-waiting" class="hidden">
+                            <h3 style="text-align:center; margin-bottom: 1.5rem">Joining a chat</h3>
+                            <div class="dm-step-card">
+                                <p class="dm-instruction">Send back this code to your buddy:</p>
+                                <textarea
+                                    id="channels-local-answer-output"
+                                    class="hash-input"
+                                    rows="5"
+                                    readonly
+                                    placeholder="Answer code appears here..."
+                                ></textarea>
+                                <button id="dm-copy-answer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
+                                <p style="margin-top: 0.75rem; opacity: 0.75">⏳ Waiting for connection...</p>
+                            </div>
+                            <button id="dm-guest-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
                         </div>
-                        <div id="channels-files" style="margin-top: 0.5rem"></div>
+
+                        <!-- SUB-PANEL 4: Chat Active -->
+                        <div id="dm-chat-active" class="hidden">
+                            <p id="channels-status" class="status-chip status-pending" style="margin-bottom: 0.75rem">Disconnected</p>
+                            <div id="channels-messages" class="channels-messages"></div>
+                            <div class="hash-input-group" style="margin-top: 0.75rem">
+                                <input
+                                    type="text"
+                                    id="channels-message-input"
+                                    placeholder="Write a message..."
+                                    class="hash-input"
+                                />
+                                <input type="file" id="channels-file-input" style="display: none" />
+                                <button id="channels-attach-btn" class="btn btn-secondary" title="Attach file">📎</button>
+                                <button id="channels-send-btn" class="btn btn-primary">Send</button>
+                            </div>
+                            <div id="channels-files" style="margin-top: 0.5rem"></div>
+                            <button id="channels-leave-btn" class="btn btn-secondary" style="margin-top: 1rem">Disconnect</button>
+                        </div>
+
                     </section>
                 </div>
 
