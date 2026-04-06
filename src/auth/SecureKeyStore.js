@@ -1,7 +1,18 @@
 // @ts-check
 
+import {
+    addPasskey,
+    clearBiometricSession,
+    createPasskey,
+    deletePasskey,
+    openData,
+    passkeySupported,
+    sealData,
+    unlockPasskey
+} from './PasskeyVault.js';
+
 const DB_NAME = 'web25-auth';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_WALLETS = 'wallets';
 const STORE_KEYS = 'keys';
 const LOCAL_WALLET_ID = 'default-local-wallet';
@@ -14,29 +25,13 @@ function openDb() {
             if (!db.objectStoreNames.contains(STORE_WALLETS)) {
                 db.createObjectStore(STORE_WALLETS, { keyPath: 'walletId' });
             }
-            if (!db.objectStoreNames.contains(STORE_KEYS)) {
-                db.createObjectStore(STORE_KEYS, { keyPath: 'keyId' });
+            if (db.objectStoreNames.contains(STORE_KEYS)) {
+                db.deleteObjectStore(STORE_KEYS);
             }
         };
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
     });
-}
-
-async function ensureKeyRecord() {
-    const db = await openDb();
-    const existing = await readRecord(db, STORE_KEYS, LOCAL_WALLET_ID);
-    if (existing) {
-        return existing.wrappingKey;
-    }
-
-    const wrappingKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
-        'encrypt',
-        'decrypt'
-    ]);
-
-    await writeRecord(db, STORE_KEYS, { keyId: LOCAL_WALLET_ID, wrappingKey });
-    return wrappingKey;
 }
 
 function readRecord(db, storeName, key) {
@@ -57,28 +52,28 @@ function writeRecord(db, storeName, value) {
     });
 }
 
+function deleteRecord(db, storeName, key) {
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const req = tx.objectStore(storeName).delete(key);
+        req.onsuccess = () => resolve(true);
+        req.onerror = () => reject(req.error);
+    });
+}
+
 export async function getLocalWalletRecord() {
     const db = await openDb();
     return readRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
 }
 
-export async function encryptPrivateKey(privateKeyHex) {
-    const wrappingKey = await ensureKeyRecord();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const data = new TextEncoder().encode(privateKeyHex);
-    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, data);
-    return {
-        encryptedPrivateKey: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-        iv: btoa(String.fromCharCode(...iv))
-    };
+export async function encryptPrivateKey(privateKeyHex, encPK) {
+    const encryptedBlob = await sealData(privateKeyHex, encPK);
+    return { encryptedBlob };
 }
 
-export async function decryptPrivateKey(encryptedPrivateKey, ivBase64) {
-    const wrappingKey = await ensureKeyRecord();
-    const iv = Uint8Array.from(atob(ivBase64), (char) => char.charCodeAt(0));
-    const encrypted = Uint8Array.from(atob(encryptedPrivateKey), (char) => char.charCodeAt(0));
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, wrappingKey, encrypted);
-    return new TextDecoder().decode(decrypted);
+export async function decryptPrivateKey(encryptedBlob, credentialId) {
+    const { encSK } = await unlockPasskey(credentialId);
+    return openData(encryptedBlob, encSK);
 }
 
 export async function saveLocalWallet(record) {
@@ -90,20 +85,30 @@ export async function saveLocalWallet(record) {
     });
 }
 
+export async function addAlternatePasskey(credentialId) {
+    await addPasskey(credentialId);
+}
+
+export { clearBiometricSession, passkeySupported };
+
 export async function deleteLocalWallet() {
     const db = await openDb();
-    await Promise.all([
-        new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_WALLETS, 'readwrite');
-            const req = tx.objectStore(STORE_WALLETS).delete(LOCAL_WALLET_ID);
-            req.onsuccess = () => resolve(true);
-            req.onerror = () => reject(req.error);
-        }),
-        new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_KEYS, 'readwrite');
-            const req = tx.objectStore(STORE_KEYS).delete(LOCAL_WALLET_ID);
-            req.onsuccess = () => resolve(true);
-            req.onerror = () => reject(req.error);
-        })
-    ]);
+    const record = await readRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
+    await deleteRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
+
+    if (record?.credentialId) {
+        await deletePasskey(record.credentialId);
+    }
+}
+
+export async function createPasskeyLock(address) {
+    const passkey = await createPasskey({
+        username: address.slice(0, 10),
+        displayName: `web25 wallet ${address.slice(0, 6)}`
+    });
+    return {
+        credentialId: passkey.credentialId,
+        encPK: passkey.encPK,
+        encPKStored: passkey.encPK
+    };
 }

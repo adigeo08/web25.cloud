@@ -34,36 +34,41 @@ The application UI is now separated into:
   - Send/receive signed identity-tagged messages over direct data channel
   - Per-session chat stream in dedicated Direct Messenger tab
 
-### 2) Local browser wallet (viem + WebCrypto + IndexedDB)
+### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault.js + IndexedDB)
 
 Local identity supports:
 
-- Register local wallet
-- Generate and show seed phrase once
-- Auto-copy generated seed phrase to clipboard (best effort)
-- Security warning on generation: **do not use this wallet for deposits or storing funds**
-- Persist wallet metadata in IndexedDB
-- Unlock and sign publish payloads
-- Delete local wallet
+- Register local wallet with device passkey (FaceID / TouchID / PIN)
+- Generate and show seed phrase once (BIP-39, for recovery)
+- Add alternate passkeys to same wallet (e.g. FaceID + TouchID)
+- Unlock wallet via biometric prompt — no password needed
+- Lock session manually at any time
+- Delete local wallet (removes passkey + IndexedDB record)
+- Fallback to legacy AES-GCM when WebAuthn unavailable
 
-Stored wallet metadata includes:
+Stored wallet metadata in IndexedDB (`web25-auth`, v2):
 
 - `walletId`
 - `address`
-- `encryptedPrivateKey`
+- `encryptedBlob` ← libsodium-encrypted private key (replaces `encryptedPrivateKey` + `iv`)
+- `credentialId` ← passkey credential reference (non-secret)
+- `encPKStored` ← curve25519 public encryption key (non-secret)
 - `createdAt`
 - `lastUsedAt`
 
 #### Security model
 
-Private key is **not stored in plaintext**:
+Private key is protected by a hardware-backed passkey:
 
-1. A non-extractable WebCrypto `CryptoKey` (AES-GCM) is created/managed.
-2. Private key is encrypted before persistence.
-3. Encrypted key + IV are stored in IndexedDB.
-4. Private key is decrypted only temporarily in memory for signing.
+1. `PasskeyVault.js` uses WebAuthn + `@noble/curves/ed25519` to derive passkey-tied encryption keys.
+2. The private signing key is sealed with ephemeral ECDH + HKDF + AES-GCM before persistence.
+3. Only the encrypted blob plus non-secret metadata are stored in IndexedDB.
+4. Decryption requires a WebAuthn assertion (biometric / PIN) on each new session.
+5. Decrypted private key stays in JS memory only during unlock/signing windows and is cleared on lock.
 
-> Note: seed phrase is displayed at registration time and not persisted in clear text. Save it immediately.
+> **Zero-change impact on signing and messaging flows**: `signWithLocalWallet()`,
+> `eciesEncrypt()`, `eciesDecrypt()`, and `signMessage()` all consume `unlockedPrivateKey`
+> from memory — unchanged. Only how the key reaches memory has changed.
 
 ---
 
@@ -199,7 +204,8 @@ src/
 │   ├── AuthState.js
 │   ├── LocalWalletService.js
 │   ├── SeedPhraseService.js
-│   ├── SecureKeyStore.js
+│   ├── PasskeyVault.js       ← WebAuthn + curve25519 vault
+│   ├── SecureKeyStore.js     ← passkey-backed (replaces AES-GCM wrapping key)
 │   └── SigningService.js
 │
 ├── cache/
@@ -255,6 +261,10 @@ src/
 - Optional gzip single-file site bundle mode (`site.bundle.json.gz`)
 - Signature-state persistence in cache (stable verified badge on reload)
 - Direct Messenger tab + direct WebRTC data channel transport
+- WebAuthn passkey-protected wallet encryption (`PasskeyVault.js` + WebAuthn/WebCrypto)
+- Multi-passkey support (add FaceID + TouchID as alternates)
+- Biometric session cache with manual lock
+- Legacy wallet migration flow (seed phrase → passkey upgrade)
 
 ### Non-goals (still not implemented)
 
@@ -262,8 +272,9 @@ src/
 - Backend auth
 - Token gating
 - Multi-wallet management for signing
-- Hardware wallet integration
+- Hardware wallet integration (Ledger/Trezor)
 - Cross-room history persistence
+- ~~Hardware wallet integration~~ → parțial acoperit de WebAuthn passkeys
 
 ---
 
