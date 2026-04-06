@@ -389,101 +389,88 @@
                 <!-- ── ABOUT TAB ── -->
                 <div id="tab-about" class="tab-panel" role="tabpanel">
                     <section class="intro">
-                        <h3>☁️ What is Web25.Cloud?</h3>
+                        <h3>☁️ About Web25.Cloud</h3>
                         <p>
-                            Web25.Cloud is a decentralized web platform built on top of
-                            <a href="https://peerweb.lol" target="_blank">PeerWeb</a>. It extends peer-to-peer website
-                            hosting with a <strong>local in-browser signing wallet</strong>,
-                            <strong>signed torrent deployments</strong>, <strong>P2P direct messaging</strong>, and browser-native
-                            distribution without a central server.
+                            Web25.Cloud is a PeerWeb fork focused on local EVM identity, signed static-site deploys, and direct peer-to-peer messaging.
+                            Core flows are browser-native and do not require a mandatory MetaMask connection.
                         </p>
                     </section>
 
                     <section class="features">
-                        <h3>💬 P2P Direct Messenger</h3>
-                        <p>Exchange offer/answer signaling codes manually, then chat directly over WebRTC data channels with end-to-end asymmetric encryption tied to your EVM identity.</p>
-                        <div class="feature-grid">
-                            <div class="feature">🔐 ECIES secp256k1 Encryption — Each message encrypted with recipient's secp256k1 public key (EVM curve)</div>
-                            <div class="feature">✍️ Per-message Signatures — Every message signed with sender's private key and verified on receipt</div>
-                            <div class="feature">🪪 Built-in Identity Verification — Public key → keccak256 → address verified at connect time</div>
-                            <div class="feature">🧭 Manual Signaling UX — Host offer + guest answer exchange with identity embedded</div>
-                            <div class="feature">🧊 STUN Discovery — Uses Google's public STUN for ICE candidates</div>
-                            <div class="feature">🛰️ Pure P2P Transport — No centralized chat backend required</div>
-                        </div>
-                        <br /><br />
-                        <h3>🔏 Signed Torrent Publishing</h3>
-                        <p>Publish artifacts are signed in browser and embedded directly in torrent metadata.</p>
-                        <div class="feature-grid">
-                            <div class="feature">🧾 Deterministic Payload — Reproducible fields before signing</div>
-                            <div class="feature">✍️ Local Signature — Signing key never leaves your browser</div>
-                            <div class="feature">🧷 Embedded Proof — Publisher, signature, algorithm, and timestamp in .torrent</div>
-                            <div class="feature">✅ Verification on Load — Signature status shown when a site is opened by hash</div>
-                        </div>
-                        <br /><br />
-                        <h3>🪪 Local Identity + WebAuthn Passkey Protection</h3>
+                        <h3>🪪 Identity: Local EVM wallet + WebAuthn passkeys</h3>
                         <p>
-                            Your EVM signing identity lives entirely in your browser,
-                            protected by your device's biometric authenticator via the WebAuthn standard.
+                            The identity model is local-first and is inspired by
+                            <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
+                            EVM key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🔐 WebAuthn Passkey — Private key protected by FaceID / TouchID / device PIN</div>
-                            <div class="feature">🧬 Zero Server — Identity and keys never leave your device</div>
-                            <div class="feature">🪪 EVM Compatible — secp256k1 keypair, standard Ethereum address</div>
-                            <div class="feature">🌱 Seed Phrase Recovery — BIP-39 mnemonic for cross-device restore</div>
-                            <div class="feature">➕ Multi-Passkey — Add FaceID + TouchID as alternates on same wallet</div>
-                            <div class="feature">⏱️ Session Cache — Biometric session cached 30 min, auto-expires</div>
-                            <div class="feature">🔒 Manual Lock — Lock session instantly at any time</div>
-                            <div class="feature">⚙️ Legacy Fallback — AES-GCM fallback when WebAuthn unavailable</div>
+                            <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
+                            <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
+                            <div class="feature">⚙️ viem-based EVM address derivation and signing flow</div>
+                            <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
                         </div>
+
                         <br /><br />
-                        <h3>💾 Smart Caching</h3>
-                        <p>Visited sites are cached for lightning-fast repeat loads.</p>
+                        <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+                        <p>
+                            Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
+                            manifest carrying publisher identity and integrity metadata.
+                        </p>
                         <div class="feature-grid">
-                            <div class="feature">🏃‍♂️ Instant Loading — Cached sites load immediately</div>
-                            <div class="feature">💽 IndexedDB Storage — Persistent across browser sessions</div>
-                            <div class="feature">🧹 Auto Cleanup — Old cache expires after 7 days</div>
-                            <div class="feature">🔒 Secure Storage — Only cached after DOMPurify sanitization</div>
+                            <div class="feature">🗜️ Default bundle mode: gzip</div>
+                            <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
+                            <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
+                            <div class="feature">✅ Identity/integrity checks applied during load</div>
                         </div>
+
                         <br /><br />
-                        <h3>🛡️ Security Features</h3>
-                        <p>Multi-layer security with DOMPurify integration.</p>
+                        <h3>💬 Direct Messenger (p2p-chat inspired, identity-bound)</h3>
+                        <p>
+                            Messaging UX is inspired by
+                            <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
+                            (manual offer/answer), then extended with EVM identity verification and asymmetric crypto.
+                        </p>
                         <div class="feature-grid">
-                            <div class="feature">🧼 XSS Protection — All HTML sanitized with DOMPurify</div>
-                            <div class="feature">
-                                🚫 Malicious Code Removal — Dangerous tags and attributes filtered
-                            </div>
-                            <div class="feature">📦 Sandboxed Execution — Sites run in isolated iframe environment</div>
-                            <div class="feature">🔍 Content Validation — All resources validated before display</div>
+                            <div class="feature">🧭 Manual host/guest handshake (offer + answer)</div>
+                            <div class="feature">🪪 Peer verification from public key to EVM address</div>
+                            <div class="feature">🔐 Asymmetric encryption for invites/messages</div>
+                            <div class="feature">✍️ Per-message signatures verified on receive</div>
+                            <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                        </div>
+
+                        <br /><br />
+                        <h3>🛡️ Security profile</h3>
+                        <p>
+                            Web25.Cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+                            The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
+                            to support richer static websites.
+                        </p>
+                        <div class="feature-grid">
+                            <div class="feature">🧾 Signed-manifest verification before render gates</div>
+                            <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
+                            <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
+                            <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
                         </div>
                     </section>
 
                     <section class="requirements">
-                        <h3>📋 Requirements for Hosted Sites</h3>
+                        <h3>📋 What is available now</h3>
                         <div class="req-list">
-                            <div class="req">📄 Must contain an index.html file in the bundled artifact</div>
-                            <div class="req">🔗 All resources should use relative paths</div>
-                            <div class="req">⚡ Only static content (HTML, CSS, JS, images, fonts, etc.)</div>
-                            <div class="req">🔒 Files are served in a sandboxed environment for security</div>
-                            <div class="req">🧠 Deploy flow seeds from an in-memory bundle, not directly from local folder handles</div>
-                            <div class="req">✅ On load, signature metadata is verified and mirrored into <code>manifest.web25.json</code></div>
-                            <div class="req">🧷 Signed torrents include publisher + signature metadata for validation</div>
-                            <div class="req">📱 Responsive design recommended for best experience</div>
-                            <div class="req">🧹 Content is automatically sanitized for security</div>
+                            <div class="req">✅ Signed static-site deploys with publisher identity in .torrentchain</div>
+                            <div class="req">✅ Load-time verification path for identity + bundle integrity</div>
+                            <div class="req">✅ Local EVM identity protected by WebAuthn passkeys</div>
+                            <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
+                            <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
                         </div>
                     </section>
 
                     <section class="benefits">
-                        <h3>✨ Why Web25.Cloud?</h3>
+                        <h3>🛣️ Future goals</h3>
                         <div class="benefit-grid">
-                            <div class="benefit">🚫 Censorship Resistant — No central point of failure</div>
-                            <div class="benefit">💰 Cost Effective — No hosting fees ever</div>
-                            <div class="benefit">🌍 Global Distribution — Automatically distributed worldwide</div>
-                            <div class="benefit">📱 Always Available — Works as long as peers are online</div>
-                            <div class="benefit">🔐 Signed Publishing — Deployments can be verified by signer</div>
-                            <div class="benefit">🔐 Passkey Identity — Signing keys protected by biometric authenticator</div>
-                            <div class="benefit">💬 Native Channels — Coordinate with peers directly in-app</div>
-                            <div class="benefit">⚡ Fast Loading — Smart caching for instant repeat visits</div>
-                            <div class="benefit">💾 Offline Ready — Cached sites work without internet</div>
+                            <div class="benefit">🛰️ Own WebTorrent tracker</div>
+                            <div class="benefit">🧊 Own STUN/TURN infrastructure</div>
+                            <div class="benefit">🔒 Encrypted static-site content delivery</div>
+                            <div class="benefit">💱 Decryption-key unlock via atomic-swap payment flow</div>
                         </div>
                     </section>
                 </div>

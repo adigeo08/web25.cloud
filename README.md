@@ -1,82 +1,74 @@
 # ☁️ Web25.Cloud
 
-**Decentralized web platform for peer-to-peer static site hosting + local in-browser signing + signed torrent publishing + P2P direct messaging, fully in-browser.**
+**Decentralized web platform for peer-to-peer static-site hosting + local EVM identity + signed torrent publishing + P2P direct messaging, fully in browser.**
 
-Web25.Cloud extends PeerWeb with a modular architecture and an identity-aware publishing flow.
+Web25.Cloud is a PeerWeb fork with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, and direct encrypted peer messaging.
 
 ---
 
 ## What is implemented now
 
-### 1) Clear UI split (Identity / Publish / Direct Messenger / Browse)
+### 1) Clear product split (Identity / Publish / Direct Messenger / Browse)
 
-The application UI is now separated into:
+The UI is organized into:
 
 - **Identity / Auth**
-  - Register Local Wallet
-  - Unlock Local Wallet
-  - Recover Local Wallet from seed phrase
-  - Disconnect
-  - Delete Local Wallet
+  - Register local wallet
+  - Unlock local wallet
+  - Recover from seed phrase
+  - Lock/disconnect session
+  - Delete local wallet
 - **Publish**
   - Select/drop files
   - Build in-memory bundle
-  - Create torrent from memory bundle
+  - Create torrent from bundle
   - Preview signing payload
-  - Sign payload
-  - Publish output (signed metadata)
+  - Sign payload with local EVM identity
+  - Seed signed output
 - **Browse / Load**
-  - Existing torrent-hash loading flow remains available
-- **P2P Direct Messenger (WebRTC data channels)**
-  - Host/guest offer-answer workflow (manual signaling codes)
-  - ICE discovery via public STUN (`stun:stun.l.google.com:19302`)
-  - Peer count updates in real time
-  - Send/receive signed identity-tagged messages over direct data channel
-  - Per-session chat stream in dedicated Direct Messenger tab
+  - Existing torrent hash loading flow remains available
+- **Direct Messenger (WebRTC data channels)**
+  - Manual host/guest offer-answer signaling
+  - Peer count and session state updates
+  - Identity-bound encrypted/signed message exchange
 
-### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault.js + IndexedDB)
+### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault + IndexedDB)
 
 Local identity supports:
 
-- Register local wallet with device passkey (FaceID / TouchID / PIN)
-- Generate and show seed phrase once (BIP-39, for recovery)
-- Add alternate passkeys to same wallet (e.g. FaceID + TouchID)
-- Unlock wallet via biometric prompt — no password needed
-- Lock session manually at any time
-- Delete local wallet (removes passkey + IndexedDB record)
-- Fallback to legacy AES-GCM when WebAuthn unavailable
+- Register local wallet with device passkey (Face ID / Touch ID / PIN)
+- Generate and reveal seed phrase once (BIP-39 recovery)
+- Add alternate passkeys on the same wallet
+- Unlock via biometric/device authenticator (no password)
+- Manually lock session anytime
+- Delete local wallet state from browser storage
+- Legacy fallback path when WebAuthn is unavailable
 
-Stored wallet metadata in IndexedDB (`web25-auth`, v2):
+Stored metadata in IndexedDB (`web25-auth`, v2):
 
 - `walletId`
 - `address`
-- `encryptedBlob` ← libsodium-encrypted private key (replaces `encryptedPrivateKey` + `iv`)
-- `credentialId` ← passkey credential reference (non-secret)
-- `encPKStored` ← curve25519 public encryption key (non-secret)
+- `encryptedBlob`
+- `credentialId`
+- `encPKStored`
 - `createdAt`
 - `lastUsedAt`
 
 #### Security model
 
-Private key is protected by a hardware-backed passkey:
-
-1. `PasskeyVault.js` uses WebAuthn + `@noble/curves/ed25519` to derive passkey-tied encryption keys.
-2. The private signing key is sealed with ephemeral ECDH + HKDF + AES-GCM before persistence.
-3. Only the encrypted blob plus non-secret metadata are stored in IndexedDB.
-4. Decryption requires a WebAuthn assertion (biometric / PIN) on each new session.
-5. Decrypted private key stays in JS memory only during unlock/signing windows and is cleared on lock.
-
-> **Zero-change impact on signing and messaging flows**: `signWithLocalWallet()`,
-> `eciesEncrypt()`, `eciesDecrypt()`, and `signMessage()` all consume `unlockedPrivateKey`
-> from memory — unchanged. Only how the key reaches memory has changed.
+1. `PasskeyVault.js` derives passkey-bound encryption material from WebAuthn flows.
+2. Signing key material is sealed before persistence.
+3. Only encrypted key blob + non-secret metadata are persisted.
+4. Decryption requires WebAuthn assertion on new sessions.
+5. Decrypted private key is memory-resident only during unlock/sign operations.
 
 ---
 
-### 3) Deterministic publish signing payload + signed site verification
+### 3) Deterministic publish payload + `.torrentchain` verification path
 
-Torrent publish signature payload is deterministic and serialized predictably.
+Publish signing payload is deterministic and stable.
 
-Fields used:
+Fields currently used:
 
 - `torrentHash`
 - `siteName`
@@ -86,116 +78,127 @@ Fields used:
 - `contentRoot`
 - `chainId`
 
-Signing/publish flow:
+Publish flow:
 
-1. User drops/selects site files
-2. App builds an in-memory normalized bundle (browser memory only)
-3. App creates a torrent from that memory bundle and keeps a publish candidate (hash + site metadata)
-4. App generates a signed manifest (`.torrentchain`) and prompts wallet signing
-5. User signs payload with active local identity
-6. `.torrentchain` is included at the root of the seeded bundle
+1. User selects site files.
+2. App normalizes content in memory.
+3. App creates torrent publish candidate (hash + metadata).
+4. App generates `.torrentchain` and requests signature.
+5. User signs with active local identity.
+6. `.torrentchain` is included at the torrent root.
 
 #### `.torrentchain` protocol (recommended verification path)
 
-Published sites include a small root file named **`.torrentchain`** which contains:
+Published sites include root file **`.torrentchain`** containing:
 
-- a signed publisher payload (publisher address, chain id, timestamps, etc.)
-- optional bundle metadata (`bundle.name`, `bundle.sha256`, `bundle.contentEncoding`, `bundle.schema`) when gzip bundle mode is enabled
-- file listing semantics metadata (`filesSemantics`) to disambiguate whether file hashes describe torrent entries or bundle contents
+- signed publisher payload (publisher address, chain ID, timestamps, etc.)
+- optional bundle metadata (`bundle.name`, `bundle.sha256`, `bundle.contentEncoding`, `bundle.schema`) in bundled mode
+- `filesSemantics` metadata to disambiguate hash semantics for torrent entries vs bundle contents
 
-At load time (Browse/Load by hash), the client:
+At load time, the client:
 
 - reads `.torrentchain` first (when present)
-- verifies the publisher signature before rendering
-- enforces a minimal integrity gate (pre-render)
+- verifies signature before render
+- applies integrity gate checks prior to rendering
 
 #### Verification policy / backward compatibility
 
-Verification behavior is controlled by config:
-
-- **Permissive (default)**: `REQUIRE_TORRENTCHAIN = false`
-  - if `.torrentchain` is missing, the site is still allowed to load, but is flagged as **Orphan** (signature not verifiable)
-- **Strict**: `REQUIRE_TORRENTCHAIN = true`
-  - if `.torrentchain` is missing or invalid, the site load is blocked
+- **Permissive (default):** `REQUIRE_TORRENTCHAIN = false`
+  - missing `.torrentchain` can still load, flagged as **Orphan**
+- **Strict:** `REQUIRE_TORRENTCHAIN = true`
+  - missing/invalid `.torrentchain` blocks load
 
 ---
 
 ### 4) Site bundle modes (multi-file vs gzip single-file)
 
-By default, published torrents may include many individual files. An optional “single-file bundle” mode is also available to avoid partial/fragmented caching issues for large sites.
-
 Bundle mode is controlled by:
 
-- `PEERWEB_CONFIG.SITE_BUNDLE_MODE = 'files' | 'gzip'` (default: `'files'`)
+- `PEERWEB_CONFIG.SITE_BUNDLE_MODE = 'files' | 'gzip'`
+- **Current default in this fork:** `'gzip'`
 
-#### `SITE_BUNDLE_MODE = 'files'` (default)
+#### `SITE_BUNDLE_MODE = 'files'`
 
-- Seeds the site as multiple files in the torrent.
-- Best-effort early processing may render before 100% download.
-- Cache may store partial site data in early-processing scenarios.
+- Seeds many files directly in torrent
+- May render with early processing before full completion
+- Cache behavior can reflect partial early-processing states
 
-#### `SITE_BUNDLE_MODE = 'gzip'` (optional)
+#### `SITE_BUNDLE_MODE = 'gzip'` (default)
 
-- Seeds the payload as a **single** gzip bundle file:
-  - `site.bundle.json.gz` (atomic site payload)
-  - plus `.torrentchain` (small, separate, prioritized)
+- Seeds single payload file:
+  - `site.bundle.json.gz`
+  - plus `.torrentchain`
 
-Loader flow (gzip mode):
+Loader flow in gzip mode:
 
-1. verify `.torrentchain` signature (when present)
-2. download `site.bundle.json.gz`
-3. decompress and compute SHA-256 of canonical decompressed bytes
-4. compare to `.torrentchain.payload.bundle.sha256`
-5. reconstruct full `siteData` in memory
-6. cache and render
+1. Verify `.torrentchain` signature (if present)
+2. Download `site.bundle.json.gz`
+3. Decompress and compute SHA-256 of canonical bytes
+4. Compare with `.torrentchain.payload.bundle.sha256`
+5. Reconstruct `siteData` in memory
+6. Cache + render
 
 Notes:
 
-- Gzip mode requires browser support for `CompressionStream` / `DecompressionStream`.
-- If gzip mode is requested but streams are unavailable, the app falls back to `'files'` mode and warns the user.
-- In permissive mode, if `.torrentchain` is missing, gzip loads are treated as **Orphan gzip bundle** (bundle hash not verifiable).
+- Gzip flow needs `CompressionStream` / `DecompressionStream` browser support
+- If unsupported, app can fallback to files mode
+- In permissive mode, missing `.torrentchain` is marked as orphan gzip bundle
 
 ---
 
-### 5) Signature state persistence (cache stability)
+### 5) Signature-state persistence (cache stability)
 
-To prevent verified sites from regressing back to “pending” after reload, the cache stores `signatureState` alongside the cached `siteData`.
+To avoid regressions from verified → pending after refresh:
 
-- On cache hit, the loader reapplies `signatureState` so the UI badge remains stable.
-- The stored state is versioned (`verificationVersion`). If the version changes, the loader may mark the cached state as stale and recommend revalidation.
+- cache stores `signatureState` together with `siteData`
+- loader reapplies cached `signatureState` on cache hit
+- state includes `verificationVersion` for stale-state detection/revalidation
 
 ---
 
 ### 6) Signed deploy session persistence (refresh-safe)
 
-- Signed deploy artifacts are persisted in `localStorage` under `web25.deploy.session.v1`
-- On refresh, Web25.Cloud restores signing/deploy UI state and re-adds the signed torrent to WebTorrent
-- This enables continuing seeding/redeploy flows without repeating sign steps in normal scenarios
-- WebTorrent runtime script is loaded from:
-  - `https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js`
+- Signed deploy artifacts are persisted in `localStorage` (`web25.deploy.session.v1`)
+- On refresh, UI/deploy state can be restored and reseeded
+- Helps continue normal seeding/deploy flow without repeating steps
 
 ---
 
-### 7) P2P Direct Messenger over WebRTC
+### 7) P2P Direct Messenger over WebRTC (identity-bound)
 
-Direct Messenger follows a manual offer/answer handshake flow with **ECIES asymmetric encryption** on secp256k1 (the EVM curve):
+Direct Messenger follows manual offer/answer signaling with asymmetric crypto on secp256k1:
 
-- host generates an offer code containing their EVM address + secp256k1 public key and shares it out-of-band
-- guest verifies the host's identity (`publicKey → keccak256 → address`) before accepting
-- guest generates an answer code with their own EVM address + public key
-- host applies the answer, verifies guest identity, and the WebRTC data channel opens
-- STUN server (`stun:stun.l.google.com:19302`) is used for ICE candidate discovery
-- every outbound message is **encrypted with the recipient's secp256k1 public key** (ECIES) and **signed with the sender's private key** (ECDSA)
-- every inbound message is **decrypted with own private key** then **signature-verified** against the peer's public key; invalid signatures are rejected with an error event
-- identity is verified **built-in at connect time**: `🪪 Peer verified: 0xABC...1234` system message appears for both sides
-- no shared symmetric key — each peer only needs their own private key and the peer's public key
-- UI renders message timeline, local-vs-remote message markers, and live peer count
+- host creates offer with EVM address + public key
+- guest verifies host identity (`publicKey → keccak256 → address`)
+- guest replies with answer carrying own identity
+- host verifies guest identity and opens data channel
+- STUN used for ICE discovery: `stun:stun.l.google.com:19302`
+- outbound messages are encrypted for recipient + signed by sender
+- inbound messages are decrypted locally + signature-verified
+- invalid signatures are rejected
 
 ---
 
-## Architecture (modular, no new monolith)
+## Security profile (current)
 
-Implemented modules:
+### HTML sanitization (DOMPurify)
+
+Rendered HTML is sanitized with DOMPurify at load time, using a compatibility-oriented profile:
+
+- allows additional tags: `link`, `style`, `script`
+- allows extended attrs: `srcset`, `integrity`, `crossorigin`, etc.
+- allows broader protocols: `magnet`, `ipfs`, `ipns`, `blob`, `data`, etc.
+
+This is an explicit trade-off: better static-site compatibility vs stricter sanitization defaults.
+
+### Identity + signature gates
+
+- Publisher signature checks run before render when `.torrentchain` is present
+- In strict mode, invalid/missing `.torrentchain` blocks site load
+
+---
+
+## Architecture (modular)
 
 ```text
 src/
@@ -204,39 +207,23 @@ src/
 │   ├── AuthState.js
 │   ├── LocalWalletService.js
 │   ├── SeedPhraseService.js
-│   ├── PasskeyVault.js       ← WebAuthn + curve25519 vault
-│   ├── SecureKeyStore.js     ← passkey-backed (replaces AES-GCM wrapping key)
+│   ├── PasskeyVault.js
+│   ├── SecureKeyStore.js
 │   └── SigningService.js
-│
 ├── cache/
 │   └── PeerWebCache.js
-│
 ├── channels/
 │   ├── ChannelsService.js
 │   └── ecies.js
-│
 ├── core/
 │   ├── cache/
 │   │   └── SignatureStateVersion.js
 │   └── torrent/
 │       └── TorrentLoader.js
-│
 ├── ui/
 │   ├── auth/
-│   │   ├── AuthPanel.js
-│   │   ├── RegisterWalletModal.js
-│   │   ├── SeedPhraseScreen.js
-│   │   ├── UnlockWalletModal.js
-│   │   └── IdentityBadge.js
-│   │
 │   ├── publish/
-│   │   ├── PublishPanel.js
-│   │   ├── PublishReviewModal.js
-│   │   └── SignatureStatus.js
-│   │
 │   └── channels/
-│       └── ChannelsPanel.js
-│
 └── torrent/
     ├── RenderGate.js
     ├── SiteBundleCodec.js
@@ -248,33 +235,56 @@ src/
 
 ---
 
-## Current status
 
-### Implemented
+## Upstream credits and how Web25 integrates them
 
-- Modularized peer web core
-- Identity/Auth panel and flows
-- Local encrypted wallet persistence (WebCrypto + IndexedDB)
-- Deterministic publish payload + signing flow
-- Publish-to-identity linkage in browser
-- `.torrentchain` protocol (signed manifest + verification gate before render)
-- Optional gzip single-file site bundle mode (`site.bundle.json.gz`)
-- Signature-state persistence in cache (stable verified badge on reload)
-- Direct Messenger tab + direct WebRTC data channel transport
-- WebAuthn passkey-protected wallet encryption (`PasskeyVault.js` + WebAuthn/WebCrypto)
-- Multi-passkey support (add FaceID + TouchID as alternates)
-- Biometric session cache with manual lock
-- Legacy wallet migration flow (seed phrase → passkey upgrade)
+### 1) [`mylofi/local-data-lock`](https://github.com/mylofi/local-data-lock)
 
-### Non-goals (still not implemented)
+What it demonstrates:
 
-- Smart contracts
-- Backend auth
-- Token gating
-- Multi-wallet management for signing
-- Hardware wallet integration (Ledger/Trezor)
-- Cross-room history persistence
-- ~~Hardware wallet integration~~ → parțial acoperit de WebAuthn passkeys
+- local-first key custody model;
+- WebAuthn/passkey-gated key unlock flow;
+- no requirement to expose private keys outside the local environment.
+
+How Web25 integrates this into the EVM process:
+
+- we keep EVM private-key custody fully local;
+- WebAuthn passkeys gate unlock/signing sessions;
+- once unlocked, the key is used by our EVM signing/encryption paths (publish signatures, channel signing) and then cleared from active session memory.
+
+In short: we adopted the local-data-lock *security posture* and mapped it onto EVM identity/signing workflows.
+
+### 2) [`michal-wrzosek/p2p-chat`](https://github.com/michal-wrzosek/p2p-chat)
+
+What it demonstrates:
+
+- simple manual offer/answer WebRTC signaling UX;
+- direct browser-to-browser chat transport;
+- minimal coordination flow without centralized chat backend.
+
+How Web25 integrates and extends this for EVM:
+
+- we kept the manual P2P signaling ergonomics;
+- we bind peers to EVM identity and verify identity from public key to address;
+- we use asymmetric encryption/signature flows around EVM-compatible key material, so private keys are never publicly disclosed.
+
+In short: we borrowed the direct-messaging interaction model and upgraded it to identity-bound EVM cryptography.
+
+---
+
+## Public infrastructure currently used
+
+- WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
+- STUN: `stun:stun.l.google.com:19302`
+
+---
+
+## Future goals (not implemented yet)
+
+1. Own WebTorrent tracker
+2. Own STUN/TURN infra
+3. Encrypted static-site content
+4. Decryption-key unlock via atomic-swap payment flow
 
 ---
 
@@ -295,33 +305,11 @@ Type check:
 npm run check
 ```
 
-Build entrypoint:
+Build:
 
 ```bash
 npm run build
 ```
-
----
-
-## Configuration flags
-
-The main behavior toggles live in `src/config/peerweb.config.js`:
-
-- `REQUIRE_TORRENTCHAIN`:
-  - `false` (default): permissive legacy/orphan support
-  - `true`: block loads without valid `.torrentchain`
-- `SITE_BUNDLE_MODE`:
-  - `'files'` (default): multi-file torrents
-  - `'gzip'`: seed `site.bundle.json.gz` + `.torrentchain` and validate bundle hash pre-render
-
----
-
-## Legacy P2P hosting behavior (still available)
-
-- Drag/drop static website folder
-- Generate torrent hash + shareable URL from an in-memory deploy bundle
-- Keep tab open to continue seeding
-- Load any site by hash using Browse/Load tab
 
 ---
 
@@ -332,3 +320,9 @@ Append `debug=true` to URL:
 ```text
 https://web25.cloud?orc=HASH&debug=true
 ```
+
+---
+
+## License
+
+Apache-2.0.
