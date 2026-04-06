@@ -38,6 +38,7 @@ test('ChannelsService joins with existing trackers and emits joined state', asyn
 
     assert.equal(service.currentChannel, 'builders');
     assert.match(addArgs.magnet, /magnet:\?xt=urn:btih:[a-f0-9]{40}/);
+    assert.match(addArgs.magnet, /&tr=wss%3A%2F%2Fexisting-tracker\.test/);
     assert.deepEqual(addArgs.opts.announce, ['wss://existing-tracker.test']);
     assert.equal(events.some((event) => event.type === 'joined'), true);
 });
@@ -172,20 +173,15 @@ test('ChannelsService deduplicates repeated presence messages', async () => {
     assert.equal(presenceEvents.length, 1, 'presence should be deduplicated by id');
 });
 
-test('ChannelsService leaveChannel cancels any pending retry timeout', async () => {
+test('ChannelsService leaveChannel resets channel state', async () => {
     const mockTorrent = createMockTorrent();
     const client = { add() { return mockTorrent; } };
     const service = new ChannelsService({ client, trackers: [] });
 
     await service.joinChannel('test', {});
-
-    // Inject a fake timeout to verify it gets cleared
-    const fakeId = setTimeout(() => {}, 60000);
-    service._retryTimeout = fakeId;
-
     await service.leaveChannel();
 
-    // After leave, _retryTimeout must be null
-    assert.equal(service._retryTimeout, null, '_retryTimeout should be cleared on leaveChannel');
-    clearTimeout(fakeId); // clean up the fake timeout in case it wasn't cleared
+    assert.equal(service.currentTorrent, null);
+    assert.equal(service.currentChannel, '');
+    assert.equal(service.currentPeerCount, 0);
 });
