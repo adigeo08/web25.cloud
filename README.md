@@ -173,15 +173,18 @@ To prevent verified sites from regressing back to “pending” after reload, th
 
 ### 7) P2P Direct Messenger over WebRTC
 
-Direct Messenger follows a manual offer/answer handshake flow:
+Direct Messenger follows a manual offer/answer handshake flow with **ECIES asymmetric encryption** on secp256k1 (the EVM curve):
 
-- host generates an offer code and shares it out-of-band
-- guest pastes offer code and generates answer code
-- host pastes answer code to finalize WebRTC data channel
+- host generates an offer code containing their EVM address + secp256k1 public key and shares it out-of-band
+- guest verifies the host's identity (`publicKey → keccak256 → address`) before accepting
+- guest generates an answer code with their own EVM address + public key
+- host applies the answer, verifies guest identity, and the WebRTC data channel opens
 - STUN server (`stun:stun.l.google.com:19302`) is used for ICE candidate discovery
+- every outbound message is **encrypted with the recipient's secp256k1 public key** (ECIES) and **signed with the sender's private key** (ECDSA)
+- every inbound message is **decrypted with own private key** then **signature-verified** against the peer's public key; invalid signatures are rejected with an error event
+- identity is verified **built-in at connect time**: `🪪 Peer verified: 0xABC...1234` system message appears for both sides
+- no shared symmetric key — each peer only needs their own private key and the peer's public key
 - UI renders message timeline, local-vs-remote message markers, and live peer count
-- identity address (when available) is included in message metadata
-- system payloads are supported (e.g. signature verification abort notifications)
 
 ---
 
@@ -203,7 +206,8 @@ src/
 │   └── PeerWebCache.js
 │
 ├── channels/
-│   └── ChannelsService.js
+│   ├── ChannelsService.js
+│   └── ecies.js
 │
 ├── core/
 │   ├── cache/

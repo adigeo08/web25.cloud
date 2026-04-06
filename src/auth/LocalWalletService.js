@@ -194,3 +194,11 @@ export async function removeLocalWallet() {
     clearInMemorySession();
     await deleteLocalWallet();
 }
+
+/**
+ * Returns the current in-memory unlocked private key, or null if locked.
+ * @returns {string | null}
+ */
+export function getUnlockedPrivateKey() {
+    return unlockedPrivateKey;
+}

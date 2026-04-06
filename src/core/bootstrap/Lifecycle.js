@@ -160,8 +160,7 @@ export function setupChannels() {
                 peers: event.count || this.channelsService.currentPeerCount || 0
             });
         } else if (event.type === 'message') {
-            const identity = this.authController.getActiveIdentity();
-            appendChannelsMessage(event.message, Boolean(identity?.address && event.message.from === identity.address));
+            appendChannelsMessage(event.message, event.local === true);
         } else if (event.type === 'file-incoming' || event.type === 'file-progress') {
             appendFileTransfer({ fileId: event.fileId, fileName: event.fileName, fileSize: event.fileSize || 0, received: event.received || 0 });
         } else if (event.type === 'file-ready') {
