@@ -10,5 +10,6 @@ export function renderIdentityBadge(state) {
     }
 
     const short = `${state.address.slice(0, 6)}...${state.address.slice(-4)}`;
-    node.textContent = `Identity: ${state.identityType} (${short})`;
+    const passkeyIcon = state.passkeyProtected ? ' 🔐' : '';
+    node.textContent = `Identity: ${state.identityType} (${short})${passkeyIcon}`;
 }

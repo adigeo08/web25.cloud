@@ -7,7 +7,7 @@
         <title>Web25.Cloud - Decentralized Web Platform</title>
         <meta
             name="description"
-            content="Web25.Cloud delivers peer-to-peer static site hosting with local wallet signing, signed torrent deployments, and resilient browser-to-browser seeding."
+            content="Web25.Cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
         />
 
         <!-- Facebook Meta Tags -->
@@ -16,7 +16,7 @@
         <meta property="og:title" content="Web25.Cloud - Decentralized Web Platform" />
         <meta
             property="og:description"
-            content="Web25.Cloud delivers peer-to-peer static site hosting with local wallet signing, signed torrent deployments, and resilient browser-to-browser seeding."
+            content="Web25.Cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
         />
 
         <!-- Twitter Meta Tags -->
@@ -26,7 +26,7 @@
         <meta name="twitter:title" content="Web25.Cloud - Decentralized Web Platform" />
         <meta
             name="twitter:description"
-            content="Web25.Cloud delivers peer-to-peer static site hosting with local wallet signing, signed torrent deployments, and resilient browser-to-browser seeding."
+            content="Web25.Cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
         />
 
         <!-- PWA Meta Tags -->
@@ -47,7 +47,8 @@
         {
             "imports": {
                 "@noble/curves/secp256k1": "https://esm.sh/@noble/curves@1.4.2/secp256k1",
-                "@noble/hashes/sha3": "https://esm.sh/@noble/hashes@1.4.0/sha3.js"
+                "@noble/hashes/sha3": "https://esm.sh/@noble/hashes@1.4.0/sha3.js",
+                "@lo-fi/local-data-lock": "./src/vendor/local-data-lock/ldl.js"
             }
         }
         </script>
@@ -90,6 +91,21 @@
                         <p id="identity-badge">Identity: anonymous</p>
                         <p id="auth-status">Status: anonymous</p>
                         <p id="local-wallet-meta">Local wallet: not registered</p>
+                        <div id="passkey-protection-badge" class="upload-result hidden">🔐 Protected by device passkey (WebAuthn)</div>
+                        <div id="passkey-unsupported-warning" class="upload-result hidden">
+                            ⚠️ Your browser/device does not support WebAuthn passkeys. The wallet will use legacy AES-GCM protection (less secure).
+                        </div>
+                        <button id="add-passkey-btn" class="btn btn-secondary hidden">➕ Add alternate passkey (FaceID / TouchID / PIN)</button>
+                        <div id="biometric-session-indicator" class="upload-result hidden">
+                            🟢 Biometric session active · expires in <span id="session-countdown">30:00</span>
+                        </div>
+                        <button id="lock-session-btn" class="btn btn-clear hidden">🔒 Lock session now</button>
+                        <div id="legacy-migration-panel" class="upload-result hidden" style="margin-top: 1rem">
+                            <h4>🔄 Wallet upgrade required</h4>
+                            <p>Your existing wallet uses legacy encryption. Enter your seed phrase to upgrade to passkey protection.</p>
+                            <input type="password" id="migration-seed-input" placeholder="Enter your 12-word seed phrase" class="hash-input" />
+                            <button id="migrate-wallet-btn" class="btn btn-primary">Upgrade to Passkey</button>
+                        </div>
                         <div class="button-group">
                             <button id="disconnect-auth-btn" class="btn btn-clear">Disconnect</button>
                             <button id="delete-local-wallet-btn" class="btn btn-clear">Delete Local Wallet</button>
@@ -396,6 +412,22 @@
                             <div class="feature">✅ Verification on Load — Signature status shown when a site is opened by hash</div>
                         </div>
                         <br /><br />
+                        <h3>🪪 Local Identity + WebAuthn Passkey Protection</h3>
+                        <p>
+                            Your EVM signing identity lives entirely in your browser,
+                            protected by your device's biometric authenticator via the WebAuthn standard.
+                        </p>
+                        <div class="feature-grid">
+                            <div class="feature">🔐 WebAuthn Passkey — Private key protected by FaceID / TouchID / device PIN</div>
+                            <div class="feature">🧬 Zero Server — Identity and keys never leave your device</div>
+                            <div class="feature">🪪 EVM Compatible — secp256k1 keypair, standard Ethereum address</div>
+                            <div class="feature">🌱 Seed Phrase Recovery — BIP-39 mnemonic for cross-device restore</div>
+                            <div class="feature">➕ Multi-Passkey — Add FaceID + TouchID as alternates on same wallet</div>
+                            <div class="feature">⏱️ Session Cache — Biometric session cached 30 min, auto-expires</div>
+                            <div class="feature">🔒 Manual Lock — Lock session instantly at any time</div>
+                            <div class="feature">⚙️ Legacy Fallback — AES-GCM fallback when WebAuthn unavailable</div>
+                        </div>
+                        <br /><br />
                         <h3>💾 Smart Caching</h3>
                         <p>Visited sites are cached for lightning-fast repeat loads.</p>
                         <div class="feature-grid">
@@ -440,7 +472,7 @@
                             <div class="benefit">🌍 Global Distribution — Automatically distributed worldwide</div>
                             <div class="benefit">📱 Always Available — Works as long as peers are online</div>
                             <div class="benefit">🔐 Signed Publishing — Deployments can be verified by signer</div>
-                            <div class="benefit">🪪 Local-Only Identity — Signing keys stay in your browser</div>
+                            <div class="benefit">🔐 Passkey Identity — Signing keys protected by biometric authenticator</div>
                             <div class="benefit">💬 Native Channels — Coordinate with peers directly in-app</div>
                             <div class="benefit">⚡ Fast Loading — Smart caching for instant repeat visits</div>
                             <div class="benefit">💾 Offline Ready — Cached sites work without internet</div>

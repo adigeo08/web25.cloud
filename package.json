@@ -64,5 +64,8 @@
         "README.md",
         "WARP.md",
         "src"
-    ]
+    ],
+    "dependencies": {
+        "@lo-fi/local-data-lock": "^1.0.0"
+    }
 }

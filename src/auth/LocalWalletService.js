@@ -3,10 +3,12 @@
 import { loadViemAccounts } from '../web3/viemClients.js';
 import { generateBip39Mnemonic, mnemonicToSeedBytes, validateBip39Mnemonic } from './SeedPhraseService.js';
 import {
+    createPasskeyLock,
     decryptPrivateKey,
     deleteLocalWallet,
     encryptPrivateKey,
     getLocalWalletRecord,
+    passkeySupported,
     saveLocalWallet
 } from './SecureKeyStore.js';
 
@@ -17,17 +19,6 @@ const AUTO_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
 let unlockedPrivateKey = null;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let autoLockTimer = null;
-let visibilityListenerAdded = false;
-
-function getSessionExpiryIso() {
-    return new Date(Date.now() + AUTO_LOCK_TIMEOUT_MS).toISOString();
-}
-
-async function persistSessionExpiry(sessionExpiresAt) {
-    const record = await getLocalWalletRecord();
-    if (!record) return;
-    await saveLocalWallet({ ...record, sessionExpiresAt });
-}
 
 /** Clears the auto-lock timer and wipes the private key from memory. */
 export function lockLocalWallet() {
@@ -44,7 +35,6 @@ function clearInMemorySession() {
 
 export async function clearLocalWalletSession() {
     clearInMemorySession();
-    await persistSessionExpiry(null);
 }
 
 /** Resets the inactivity timer every time the key is used. */
@@ -53,24 +43,6 @@ function resetAutoLock() {
         clearTimeout(autoLockTimer);
     }
     autoLockTimer = setTimeout(lockLocalWallet, AUTO_LOCK_TIMEOUT_MS);
-    void persistSessionExpiry(getSessionExpiryIso());
-}
-
-function setAutoLockForRemainingMs(remainingMs) {
-    if (autoLockTimer !== null) {
-        clearTimeout(autoLockTimer);
-    }
-    autoLockTimer = setTimeout(lockLocalWallet, remainingMs);
-}
-
-/** Sets up the auto-lock timer and the visibility-change listener (idempotent). */
-function setupAutoLock() {
-    // Do not lock on visibility changes (file-picker, tab-switch, refresh lifecycle),
-    // otherwise active sessions can be unexpectedly dropped while users are still working.
-    visibilityListenerAdded = true;
-    if (autoLockTimer === null) {
-        resetAutoLock();
-    }
 }
 
 /**
@@ -97,17 +69,18 @@ export async function registerLocalWallet() {
     const privateKey = await derivePrivateKeyFromMnemonic(mnemonic);
     const viemAccounts = await loadViemAccounts();
     const address = viemAccounts.privateKeyToAccount(privateKey).address;
-    const encrypted = await encryptPrivateKey(privateKey);
+    const lockKey = await createPasskeyLock(address);
+    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey);
 
     await saveLocalWallet({
         address,
-        encryptedPrivateKey: encrypted.encryptedPrivateKey,
-        iv: encrypted.iv,
-        createdAt: new Date().toISOString()
+        encryptedBlob,
+        localIdentityID: lockKey.localIdentity,
+        createdAt: new Date().toISOString(),
+        passkeyProtected: passkeySupported()
     });
 
     unlockedPrivateKey = privateKey;
-    setupAutoLock();
     resetAutoLock();
 
     return { address, seedPhrase: mnemonic };
@@ -129,54 +102,55 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
     const privateKey = await derivePrivateKeyFromMnemonic(normalized);
     const viemAccounts = await loadViemAccounts();
     const address = viemAccounts.privateKeyToAccount(privateKey).address;
-    const encrypted = await encryptPrivateKey(privateKey);
+    const lockKey = await createPasskeyLock(address);
+    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey);
 
     await saveLocalWallet({
         address,
-        encryptedPrivateKey: encrypted.encryptedPrivateKey,
-        iv: encrypted.iv,
-        createdAt: new Date().toISOString()
+        encryptedBlob,
+        localIdentityID: lockKey.localIdentity,
+        createdAt: new Date().toISOString(),
+        passkeyProtected: passkeySupported()
     });
 
     unlockedPrivateKey = privateKey;
-    setupAutoLock();
     resetAutoLock();
     return { address };
 }
+
 export async function unlockLocalWallet() {
     const record = await getLocalWalletRecord();
     if (!record) {
         throw new Error('No local wallet registered');
     }
+    if (!record.encryptedBlob) {
+        throw new Error('Legacy wallet format detected. Please migrate from seed phrase.');
+    }
 
-    unlockedPrivateKey = await decryptPrivateKey(record.encryptedPrivateKey, record.iv);
+    unlockedPrivateKey = await decryptPrivateKey(record.encryptedBlob, record.localIdentityID);
     await saveLocalWallet({ ...record, lastUsedAt: new Date().toISOString() });
-    setupAutoLock();
     resetAutoLock();
     return { address: record.address };
 }
 
 export async function getLocalWalletStatus() {
     const record = await getLocalWalletRecord();
-    if (record && !unlockedPrivateKey && record.sessionExpiresAt) {
-        const expiresAtMs = new Date(record.sessionExpiresAt).getTime();
-        if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) {
-            try {
-                unlockedPrivateKey = await decryptPrivateKey(record.encryptedPrivateKey, record.iv);
-                setupAutoLock();
-                setAutoLockForRemainingMs(expiresAtMs - Date.now());
-            } catch (_) {
-                unlockedPrivateKey = null;
-                await saveLocalWallet({ ...record, sessionExpiresAt: null });
-            }
-        } else {
-            await saveLocalWallet({ ...record, sessionExpiresAt: null });
-        }
+    if (record && record.encryptedPrivateKey && !record.encryptedBlob) {
+        return {
+            exists: true,
+            address: record.address,
+            unlocked: false,
+            needsMigration: true,
+            passkeyProtected: false
+        };
     }
+
     return {
         exists: Boolean(record),
         address: record?.address || null,
-        unlocked: Boolean(unlockedPrivateKey)
+        unlocked: Boolean(unlockedPrivateKey),
+        needsMigration: false,
+        passkeyProtected: Boolean(record?.passkeyProtected ?? record?.localIdentityID)
     };
 }
 
