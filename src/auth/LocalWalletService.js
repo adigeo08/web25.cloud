@@ -202,18 +202,3 @@ export async function removeLocalWallet() {
 export function getUnlockedPrivateKey() {
     return unlockedPrivateKey;
 }
-
-/**
- * Derives the secp256k1 uncompressed public key ("04...") from a private key
- * using viem's privateKeyToAccount under the hood.
- * @param {string} privateKeyHex  — 0x-prefixed hex string
- * @returns {Promise<string>}  — "04..." 130-char hex, no "0x" prefix
- */
-export async function getPublicKeyFromPrivateKey(privateKeyHex) {
-    const viemAccounts = await loadViemAccounts();
-    const account = viemAccounts.privateKeyToAccount(
-        /** @type {`0x${string}`} */ (privateKeyHex.startsWith('0x') ? privateKeyHex : `0x${privateKeyHex}`)
-    );
-    // account.publicKey is "0x04..." for the uncompressed secp256k1 public key
-    return account.publicKey.startsWith('0x') ? account.publicKey.slice(2) : account.publicKey;
-}

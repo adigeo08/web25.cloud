@@ -231,6 +231,73 @@ test('applyAnswer rejects mismatched publicKey/evmAddress', async () => {
     await assert.rejects(() => service.applyAnswer(badAnswerCode), /Peer identity verification failed/);
 });
 
+test('createAnswerFromOffer rejects offer with publicKey but no evmAddress (partial identity)', async () => {
+    const partialOfferCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64'),
+        publicKey: HOST_PUB_KEY,
+        evmAddress: null
+    });
+    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    await assert.rejects(
+        () => service.createAnswerFromOffer('builders', partialOfferCode, { address: GUEST_ADDRESS }),
+        /Malformed peer identity/
+    );
+});
+
+test('createAnswerFromOffer rejects offer with evmAddress but no publicKey (partial identity)', async () => {
+    const partialOfferCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64'),
+        publicKey: null,
+        evmAddress: HOST_ADDRESS
+    });
+    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    await assert.rejects(
+        () => service.createAnswerFromOffer('builders', partialOfferCode, { address: GUEST_ADDRESS }),
+        /Malformed peer identity/
+    );
+});
+
+test('applyAnswer rejects answer with publicKey but no evmAddress (partial identity)', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    await service.createHostOffer('builders', { address: HOST_ADDRESS });
+
+    const partialAnswerCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'answer', sdp: 'xyz' }), 'utf8').toString('base64'),
+        publicKey: GUEST_PUB_KEY,
+        evmAddress: null
+    });
+    await assert.rejects(() => service.applyAnswer(partialAnswerCode), /Malformed peer identity/);
+});
+
+test('applyAnswer rejects answer with evmAddress but no publicKey (partial identity)', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    await service.createHostOffer('builders', { address: HOST_ADDRESS });
+
+    const partialAnswerCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'answer', sdp: 'xyz' }), 'utf8').toString('base64'),
+        publicKey: null,
+        evmAddress: GUEST_ADDRESS
+    });
+    await assert.rejects(() => service.applyAnswer(partialAnswerCode), /Malformed peer identity/);
+});
+
+test('onmessage emits error event for garbled ciphertext instead of silently dropping it', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const events = [];
+    service.onUpdate((e) => events.push(e));
+
+    await service.createHostOffer('builders', { address: HOST_ADDRESS });
+    service.peerPublicKey = GUEST_PUB_KEY; // set after createHostOffer (leaveChannel resets it)
+    service.dataChannel.readyState = 'open';
+
+    // Send completely garbled (non-ECIES) data
+    await service.dataChannel.onmessage?.({ data: 'notvalidhex!!!!' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(events.some((e) => e.type === 'error'), true, 'garbled input should emit error event');
+    assert.equal(events.some((e) => e.type === 'message'), false, 'garbled input should not emit message');
+});
+
 // ─── ChannelsService — messaging ─────────────────────────────────────────
 
 test('sendChatMessage requires open data channel', async () => {

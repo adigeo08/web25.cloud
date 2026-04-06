@@ -132,7 +132,10 @@ export default class ChannelsService {
         if (offer?.type !== 'offer') throw new Error('Offer code is invalid.');
 
         // Verify peer identity embedded in the offer signal
-        if (offerSignal.publicKey && offerSignal.evmAddress) {
+        if (offerSignal.publicKey || offerSignal.evmAddress) {
+            if (!offerSignal.publicKey || !offerSignal.evmAddress) {
+                throw new Error('Malformed peer identity: offer must contain both publicKey and evmAddress.');
+            }
             const derivedAddress = evmAddressFromPublicKey(offerSignal.publicKey);
             if (derivedAddress.toLowerCase() !== offerSignal.evmAddress.toLowerCase()) {
                 throw new Error('Peer identity verification failed: public key does not match claimed address.');
@@ -173,7 +176,12 @@ export default class ChannelsService {
         if (answer?.type !== 'answer') throw new Error('Answer code is invalid.');
 
         // Verify peer identity embedded in the answer signal
-        if (answerSignal.publicKey && answerSignal.evmAddress) {
+        if (answerSignal.publicKey || answerSignal.evmAddress) {
+            if (!answerSignal.publicKey || !answerSignal.evmAddress) {
+                const err = new Error('Malformed peer identity: answer must contain both publicKey and evmAddress.');
+                this.emit({ type: 'error', error: err });
+                throw err;
+            }
             const derivedAddress = evmAddressFromPublicKey(answerSignal.publicKey);
             if (derivedAddress.toLowerCase() !== answerSignal.evmAddress.toLowerCase()) {
                 this.emit({ type: 'error', error: new Error('Peer identity verification failed: public key does not match claimed address.') });
@@ -321,7 +329,9 @@ export default class ChannelsService {
 
                 const payload = JSON.parse(plaintext);
                 this.handleInbound(payload, false);
-            } catch (_) {}
+            } catch (err) {
+                this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+            }
         };
     }
 
@@ -345,7 +355,9 @@ export default class ChannelsService {
             }
 
             this.dataChannel.send(wire);
-        } catch (_) {}
+        } catch (err) {
+            this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        }
     }
 
     handleInbound(payload, isLocal = false) {
