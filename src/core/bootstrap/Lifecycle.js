@@ -24,6 +24,7 @@ import {
 } from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
+const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
 export async function init() {
@@ -46,7 +47,7 @@ export async function init() {
 export async function initAuth() {
     this.authController = new AuthController(this.toast, {
         onDisconnect: async () => {
-            await this.clearCache({ includeMemoryState: true, resetDeploySession: true });
+            await this.clearCache({ includeMemoryState: true, resetDeploySession: false });
         }
     });
     await this.authController.init();
@@ -448,14 +449,26 @@ export function setupAuthAwareUi(state) {
         channelsTabPanel.style.display = hasIdentity ? '' : 'none';
     }
 
+    const deployTabBtn = document.querySelector('[data-tab="publish"]');
+    if (deployTabBtn) {
+        deployTabBtn.textContent = isAuthenticated ? '🚀 Deploy' : '🔐 Sign in';
+    }
+
+    const unlockBtn = document.getElementById('unlock-wallet-btn');
+    const registerBtn = document.getElementById('register-wallet-btn');
+    if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
+    if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
+
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
         const activeName = activeTab?.getAttribute('data-tab');
         if (activeName === 'auth' || activeName === 'channels') {
-            const browseTab = document.querySelector('[data-tab=\"browse\"]');
+            const browseTab = document.querySelector('[data-tab="browse"]');
             if (browseTab instanceof HTMLElement) browseTab.click();
         }
-        this.channelsService?.leaveChannel?.();
+        if (this.channelsService?.currentChannel) {
+            this.channelsService.leaveChannel();
+        }
         return;
     }
 
@@ -785,7 +798,8 @@ export function persistDeploySession() {
             signedTorrentBase64: this.bytesToBase64(this.lastPublishCandidate.signedTorrentFile),
             deployed: Boolean(this.lastDeployResult),
             deployResult: this.lastDeployResult || null,
-            signedBy
+            signedBy,
+            savedAt: Date.now()
         };
         localStorage.setItem(DEPLOY_SESSION_STORAGE_KEY, JSON.stringify(payload));
         this.log(`Deploy session saved for ${payload.hash}`);
@@ -815,6 +829,12 @@ export async function restoreDeploySession() {
     }
 
     if (!savedSession?.hash || !savedSession?.signature || !savedSession?.signedTorrentBase64) {
+        this.clearDeploySession();
+        return;
+    }
+
+    if (savedSession.savedAt && Date.now() - savedSession.savedAt > DEPLOY_SESSION_MAX_AGE_MS) {
+        this.log('Deploy session expired, clearing.');
         this.clearDeploySession();
         return;
     }
@@ -878,6 +898,14 @@ export async function restoreDeploySession() {
         });
 
         this.refreshDeployUiState();
+
+        if (this.lastPublishCandidate) {
+            const deployWall = document.getElementById('deploy-auth-wall');
+            const deployPanel = document.getElementById('deploy-panel');
+            if (deployWall) deployWall.classList.add('hidden');
+            if (deployPanel) deployPanel.classList.remove('hidden');
+        }
+
         this.toast.info('Signed torrent session restored after refresh.', 'Session restored');
         this.log(`Deploy session restored for ${savedSession.hash}`);
     } catch (error) {
