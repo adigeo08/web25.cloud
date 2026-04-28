@@ -7,7 +7,8 @@ import {
     registerLocalWallet,
     removeLocalWallet,
     unlockLocalWallet,
-    registerLocalWalletFromSeed
+    registerLocalWalletFromSeed,
+    restoreSessionFromSW
 } from './LocalWalletService.js';
 import { addAlternatePasskey, clearBiometricSession, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
 import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
@@ -25,6 +26,7 @@ export default class AuthController {
     }
 
     async init() {
+        await restoreSessionFromSW();
         await this.refreshLocalWalletState();
 
         bindRegisterWallet(() => this.registerLocal());
