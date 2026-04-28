@@ -28,6 +28,13 @@ const mediaCache = new Map(); // Cache for media files
 const MEDIA_CACHE_MAX_BYTES = 300 * 1024 * 1024;
 let mediaCacheTotalBytes = 0;
 
+/**
+ * In-memory session state.  Persists across page refreshes (as long as the
+ * service worker process is alive) but is never written to disk.
+ * @type {{ privateKey: string, expiresAt: number } | null}
+ */
+let sessionState = null;
+
 // Listen for messages from main thread
 self.addEventListener('message', (event) => {
     const { type, ...data } = event.data;
@@ -74,6 +81,35 @@ self.addEventListener('message', (event) => {
 
         case 'MEDIA_CHUNK_RESPONSE':
             handleMediaChunkResponse(data);
+            break;
+
+        case 'SESSION_STORE':
+            if (data.privateKey) {
+                sessionState = {
+                    privateKey: data.privateKey,
+                    expiresAt: Date.now() + (data.ttlMs || 15 * 60 * 1000)
+                };
+            }
+            break;
+
+        case 'SESSION_EXTEND':
+            if (sessionState && sessionState.expiresAt > Date.now()) {
+                sessionState.expiresAt = Date.now() + (data.ttlMs || 15 * 60 * 1000);
+            }
+            break;
+
+        case 'SESSION_QUERY':
+            if (sessionState && sessionState.expiresAt > Date.now()) {
+                event.source.postMessage({ type: 'SESSION_RESPONSE', privateKey: sessionState.privateKey });
+            } else {
+                sessionState = null;
+                event.source.postMessage({ type: 'SESSION_RESPONSE', privateKey: null });
+            }
+            break;
+
+        case 'SESSION_CLEAR':
+            sessionState = null;
+            console.log('[PeerWeb SW] Session cleared');
             break;
     }
 

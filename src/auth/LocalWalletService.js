@@ -20,6 +20,94 @@ let unlockedPrivateKey = null;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let autoLockTimer = null;
 
+// ---------------------------------------------------------------------------
+// Service-worker session persistence
+// The SW keeps the private key in its own (non-disk) memory so the session
+// survives a page refresh within the AUTO_LOCK_TIMEOUT_MS window.
+// ---------------------------------------------------------------------------
+
+/** Milliseconds to wait for a SW query response before giving up. */
+const SESSION_QUERY_TIMEOUT_MS = 3000;
+
+/** Wait up to `maxWaitMs` for a SW controller to be available. */
+function waitForSWController(maxWaitMs = 2000) {
+    if (navigator.serviceWorker.controller) return Promise.resolve(true);
+    return new Promise((resolve) => {
+        const deadline = Date.now() + maxWaitMs;
+        const tick = () => {
+            if (navigator.serviceWorker.controller) return resolve(true);
+            if (Date.now() >= deadline) return resolve(false);
+            setTimeout(tick, 100);
+        };
+        tick();
+    });
+}
+
+/** Send the current private key to the SW so it survives a page refresh. */
+async function storeSessionInSW() {
+    if (!('serviceWorker' in navigator) || !unlockedPrivateKey) return;
+    const ready = await waitForSWController();
+    if (!ready || !navigator.serviceWorker.controller) return;
+    navigator.serviceWorker.controller.postMessage({
+        type: 'SESSION_STORE',
+        privateKey: unlockedPrivateKey,
+        ttlMs: AUTO_LOCK_TIMEOUT_MS
+    });
+}
+
+/** Extend the TTL of the SW session (called on every key use). */
+function extendSessionInSW() {
+    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
+    navigator.serviceWorker.controller.postMessage({
+        type: 'SESSION_EXTEND',
+        ttlMs: AUTO_LOCK_TIMEOUT_MS
+    });
+}
+
+/** Tell the SW to forget the session (called on explicit lock). */
+function clearSessionInSW() {
+    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
+    navigator.serviceWorker.controller.postMessage({ type: 'SESSION_CLEAR' });
+}
+
+/**
+ * On page load, asks the SW whether a valid session is still alive.
+ * If so, restores `unlockedPrivateKey` so the user stays logged in.
+ * @returns {Promise<boolean>} true if session was restored
+ */
+export async function restoreSessionFromSW() {
+    if (!('serviceWorker' in navigator)) return false;
+
+    const ready = await waitForSWController(SESSION_QUERY_TIMEOUT_MS);
+    if (!ready || !navigator.serviceWorker.controller) return false;
+
+    return new Promise((resolve) => {
+        /** @type {ReturnType<typeof setTimeout>} */
+        let timeoutId;
+        const handler = (/** @type {MessageEvent} */ event) => {
+            if (event.data?.type !== 'SESSION_RESPONSE') return;
+            navigator.serviceWorker.removeEventListener('message', handler);
+            clearTimeout(timeoutId);
+            const key = event.data.privateKey;
+            if (key) {
+                unlockedPrivateKey = key;
+                resetAutoLock();
+                resolve(true);
+            } else {
+                resolve(false);
+            }
+        };
+        navigator.serviceWorker.addEventListener('message', handler);
+        timeoutId = setTimeout(() => {
+            navigator.serviceWorker.removeEventListener('message', handler);
+            resolve(false);
+        }, SESSION_QUERY_TIMEOUT_MS);
+        navigator.serviceWorker.controller.postMessage({ type: 'SESSION_QUERY' });
+    });
+}
+
+// ---------------------------------------------------------------------------
+
 /** Clears the auto-lock timer and wipes the private key from memory. */
 export function lockLocalWallet() {
     void clearLocalWalletSession();
@@ -34,6 +122,7 @@ function clearInMemorySession() {
 }
 
 export async function clearLocalWalletSession() {
+    clearSessionInSW();
     clearInMemorySession();
 }
 
@@ -83,6 +172,7 @@ export async function registerLocalWallet() {
 
     unlockedPrivateKey = privateKey;
     resetAutoLock();
+    void storeSessionInSW();
 
     return { address, seedPhrase: mnemonic };
 }
@@ -117,6 +207,7 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
 
     unlockedPrivateKey = privateKey;
     resetAutoLock();
+    void storeSessionInSW();
     return { address };
 }
 
@@ -132,6 +223,7 @@ export async function unlockLocalWallet() {
     unlockedPrivateKey = await decryptPrivateKey(record.encryptedBlob, record.credentialId);
     await saveLocalWallet({ ...record, lastUsedAt: new Date().toISOString() });
     resetAutoLock();
+    void storeSessionInSW();
     return { address: record.address };
 }
 
@@ -161,6 +253,7 @@ export async function signWithLocalWallet(message) {
         throw new Error('Local wallet is locked');
     }
     resetAutoLock();
+    extendSessionInSW();
     const viemAccounts = await loadViemAccounts();
     const account = viemAccounts.privateKeyToAccount(unlockedPrivateKey);
     return account.signMessage({ message });
