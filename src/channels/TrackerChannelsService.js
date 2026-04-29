@@ -112,9 +112,9 @@ export default class TrackerChannelsService {
         this._peerConn = wire;
         const conn = wire._conn;
 
-        if (!conn) {
+        if (!conn || typeof conn.send !== 'function' || typeof conn.on !== 'function') {
             this._peerConn = null;
-            this.emit({ type: 'error', error: new Error('WebRTC SimplePeer connection not available on wire.') });
+            this.emit({ type: 'error', error: new Error('WebRTC SimplePeer connection not available on wire (unexpected WebTorrent version or API).') });
             return;
         }
 
@@ -128,16 +128,24 @@ export default class TrackerChannelsService {
      */
     async _setupConnection(conn) {
         const privKey = this._getPrivateKey();
-        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
+        if (!privKey) {
+            this.emit({ type: 'error', error: new Error('Cannot start Direct Messenger handshake: wallet is locked.') });
+            try { conn.destroy(); } catch (_) {}
+            this._peerConn = null;
+            this._dc = null;
+            return;
+        }
+
+        const ownPublicKey = getPublicKeyFromPrivateKey(privKey);
         const nonce = generateHexKey(16);
-        const signature = privKey ? await signMessage(nonce, privKey) : null;
+        const signature = await signMessage(nonce, privKey);
 
         const hello = {
             type: 'web25-dm-hello',
             evmAddress: this.identityAddress,
-            publicKey: ownPublicKey || '',
+            publicKey: ownPublicKey,
             nonce,
-            signature: signature || ''
+            signature
         };
 
         try {
@@ -225,16 +233,23 @@ export default class TrackerChannelsService {
             return;
         }
 
-        if (msg.signature && msg.nonce) {
-            const valid = await verifySignature(msg.nonce, msg.signature, msg.publicKey);
-            if (!valid) {
-                const err = new Error('Peer hello signature verification failed.');
-                this.emit({ type: 'error', error: err });
-                try { conn.destroy(); } catch (_) {}
-                this._peerConn = null;
-                this._dc = null;
-                return;
-            }
+        if (!msg.signature || !msg.nonce) {
+            const err = new Error('Peer hello missing signature or nonce: identity cannot be verified.');
+            this.emit({ type: 'error', error: err });
+            try { conn.destroy(); } catch (_) {}
+            this._peerConn = null;
+            this._dc = null;
+            return;
+        }
+
+        const valid = await verifySignature(msg.nonce, msg.signature, msg.publicKey);
+        if (!valid) {
+            const err = new Error('Peer hello signature verification failed.');
+            this.emit({ type: 'error', error: err });
+            try { conn.destroy(); } catch (_) {}
+            this._peerConn = null;
+            this._dc = null;
+            return;
         }
 
         this.peerPublicKey = msg.publicKey;

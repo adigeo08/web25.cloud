@@ -69,8 +69,8 @@ export function bindChannelsPanel({ onJoinRoom, onLeave, onSend }) {
         }
     });
 
-    // Bind all leave/cancel buttons (appears in both dm-connecting and dm-chat-active)
-    document.querySelectorAll('#channels-leave-btn').forEach((btn) => {
+    // Bind all leave/cancel buttons (appear in both dm-connecting and dm-chat-active)
+    document.querySelectorAll('.channels-leave-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
             onLeave();
             showDmStep('dm-join');
