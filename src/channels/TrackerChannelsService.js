@@ -54,8 +54,8 @@ export default class TrackerChannelsService {
 
         // State specific to TrackerChannelsService
         this._torrent = null;
-        this._peerConn = null; // SimplePeer connection (wire._conn)
-        this._dc = null;       // Active connection used for send/receive
+        this._peerConn = null; // Active bittorrent wire
+        this._dc = null;       // Active wire transport used for send/receive
         this._handshakeDone = false;
     }
 
@@ -94,6 +94,8 @@ export default class TrackerChannelsService {
 
         this._torrent = this.wtClient.add(magnetURI);
         this._torrent.on('wire', (wire) => this._onWire(wire));
+        this._torrent.on('warning', (warning) => this.emit({ type: 'warning', warning }));
+        this._torrent.on('error', (error) => this.emit({ type: 'error', error }));
 
         this.emit({ type: 'connecting', channel: this.currentChannel });
     }
@@ -109,28 +111,27 @@ export default class TrackerChannelsService {
             return;
         }
 
+        this.emit({ type: 'debug', message: 'wire created' });
         this._peerConn = wire;
-        const conn = wire._conn;
-
-        if (!conn || typeof conn.send !== 'function' || typeof conn.on !== 'function') {
+        if (!wire || typeof wire.write !== 'function' || typeof wire.on !== 'function') {
             this._peerConn = null;
-            this.emit({ type: 'error', error: new Error('WebRTC SimplePeer connection not available on wire (unexpected WebTorrent version or API).') });
+            this.emit({ type: 'error', error: new Error('Wire transport is not usable (missing write/on API).') });
             return;
         }
 
-        this._dc = conn;
-        this._setupConnection(conn);
+        this._dc = wire;
+        this._setupConnection(wire);
     }
 
     /**
-     * Set up data listeners and send the EVM identity hello on the SimplePeer connection.
-     * @param {any} conn — SimplePeer instance from wire._conn
+     * Set up data listeners and send the EVM identity hello on the active wire transport.
+     * @param {any} wire
      */
-    async _setupConnection(conn) {
+    async _setupConnection(wire) {
         const privKey = this._getPrivateKey();
         if (!privKey) {
             this.emit({ type: 'error', error: new Error('Cannot start Direct Messenger handshake: wallet is locked.') });
-            try { conn.destroy(); } catch (_) {}
+            try { wire.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this._dc = null;
             return;
@@ -148,15 +149,17 @@ export default class TrackerChannelsService {
             signature
         };
 
-        try {
-            conn.send(MSG_PREFIX + JSON.stringify(hello));
-        } catch (err) {
-            this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
-            return;
-        }
-
-        conn.on('data', async (rawData) => {
-            const raw = typeof rawData === 'string' ? rawData : new TextDecoder().decode(rawData);
+        wire.on('data', async (rawData) => {
+            let raw = '';
+            if (typeof rawData === 'string') {
+                raw = rawData;
+            } else if (rawData instanceof ArrayBuffer) {
+                raw = new TextDecoder().decode(new Uint8Array(rawData));
+            } else if (ArrayBuffer.isView(rawData)) {
+                raw = new TextDecoder().decode(rawData);
+            } else {
+                raw = new TextDecoder().decode(new Uint8Array(rawData || []));
+            }
             if (!raw.startsWith(MSG_PREFIX)) return;
             const jsonString = raw.slice(MSG_PREFIX.length);
 
@@ -164,7 +167,8 @@ export default class TrackerChannelsService {
                 if (!this._handshakeDone) {
                     const msg = JSON.parse(jsonString);
                     if (msg.type === 'web25-dm-hello') {
-                        await this._handleHello(msg, conn);
+                        this.emit({ type: 'debug', message: 'hello received' });
+                        await this._handleHello(msg, wire);
                     }
                     return;
                 }
@@ -196,13 +200,25 @@ export default class TrackerChannelsService {
             }
         });
 
-        conn.on('close', () => {
+        wire.on('close', () => {
             this.currentPeerCount = 0;
             this.emit({ type: 'peer-count', count: 0 });
             this.emit({ type: 'disconnected' });
+            this._handshakeDone = false;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._dc = null;
+            this._peerConn = null;
         });
 
-        conn.on('error', (err) => {
+        try {
+            wire.write(MSG_PREFIX + JSON.stringify(hello));
+            this.emit({ type: 'debug', message: 'hello sent' });
+        } catch (err) {
+            this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        }
+
+        wire.on('error', (err) => {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
         });
     }
@@ -211,13 +227,13 @@ export default class TrackerChannelsService {
      * Handle the EVM identity hello from the remote peer.
      * Verifies publicKey ↔ evmAddress and signature possession.
      * @param {{ type: string, evmAddress: string, publicKey: string, nonce: string, signature: string }} msg
-     * @param {any} conn
+     * @param {any} wire
      */
-    async _handleHello(msg, conn) {
+    async _handleHello(msg, wire) {
         if (!msg.publicKey || !msg.evmAddress) {
             const err = new Error('Peer hello missing publicKey or evmAddress.');
             this.emit({ type: 'error', error: err });
-            try { conn.destroy(); } catch (_) {}
+            try { wire.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this._dc = null;
             return;
@@ -227,7 +243,7 @@ export default class TrackerChannelsService {
         if (derivedAddress.toLowerCase() !== msg.evmAddress.toLowerCase()) {
             const err = new Error('Peer identity verification failed: public key does not match claimed address.');
             this.emit({ type: 'error', error: err });
-            try { conn.destroy(); } catch (_) {}
+            try { wire.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this._dc = null;
             return;
@@ -236,7 +252,7 @@ export default class TrackerChannelsService {
         if (!msg.signature || !msg.nonce) {
             const err = new Error('Peer hello missing signature or nonce: identity cannot be verified.');
             this.emit({ type: 'error', error: err });
-            try { conn.destroy(); } catch (_) {}
+            try { wire.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this._dc = null;
             return;
@@ -246,7 +262,7 @@ export default class TrackerChannelsService {
         if (!valid) {
             const err = new Error('Peer hello signature verification failed.');
             this.emit({ type: 'error', error: err });
-            try { conn.destroy(); } catch (_) {}
+            try { wire.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this._dc = null;
             return;
@@ -259,6 +275,7 @@ export default class TrackerChannelsService {
 
         this.emit({ type: 'peer-count', count: 1 });
         this.emit({ type: 'connected', channel: this.currentChannel });
+        this.emit({ type: 'debug', message: 'peer verified' });
         this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);
 
         if (this.peerAddress) {
@@ -333,7 +350,7 @@ export default class TrackerChannelsService {
                 wire = plaintext;
             }
 
-            this._dc.send(MSG_PREFIX + wire);
+            this._dc.write(MSG_PREFIX + wire);
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
         }
