@@ -259,93 +259,40 @@
                 <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload">
 
-                        <!-- SUB-PANEL 1: Choose Role -->
-                        <div id="dm-choose-role">
+                        <!-- SUB-PANEL 1: Join Room -->
+                        <div id="dm-join">
                             <h3>💬 P2P Direct Messenger</h3>
-                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with manual signaling</p>
-                            <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
+                            <p style="text-align:center; margin-bottom: 1.25rem">
+                                Enter a shared room key to connect directly with another peer.<br/>
+                                Connection is <strong>1-to-1</strong> and <strong>end-to-end encrypted</strong>.
+                            </p>
                             <div class="hash-input-group" style="margin-bottom: 1rem">
                                 <input
                                     type="text"
                                     id="channels-name-input"
-                                    placeholder="private room key (ex: private-key-98765)"
+                                    placeholder="Shared room key (e.g. my-secret-room-42)"
                                     class="hash-input"
                                     maxlength="40"
                                 />
+                                <button id="channels-join-room-btn" class="btn btn-primary">Join Room</button>
                             </div>
-                            <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
-                            <div class="dm-role-cards">
-                                <div class="dm-role-card">
-                                    <p class="dm-card-title">New chat (Host)</p>
-                                    <p class="dm-instruction">Generate an offer code and share it with your buddy.</p>
-                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%">Generate Offer</button>
-                                </div>
-                                <div class="dm-or-separator">or</div>
-                                <div class="dm-role-card">
-                                    <p class="dm-card-title">Join a chat (Guest)</p>
-                                    <p class="dm-instruction">Paste the offer code you received:</p>
-                                    <textarea
-                                        id="channels-remote-offer-input"
-                                        class="hash-input"
-                                        rows="4"
-                                        placeholder="Paste host offer code here..."
-                                    ></textarea>
-                                    <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Chat</button>
-                                </div>
-                            </div>
+                            <p id="dm-join-error" class="dm-error-message hidden"></p>
+                            <p style="text-align:center; opacity: 0.6; font-size: 0.85rem; margin-top: 0.5rem">
+                                🔐 Both peers must enter the same room key. The first two peers to join are connected. ECIES E2E encryption using EVM identity keys.
+                            </p>
                         </div>
 
-                        <!-- SUB-PANEL 2: Host Signaling -->
-                        <div id="dm-host-signaling" class="hidden">
-                            <h3 style="text-align:center; margin-bottom: 1.5rem">Starting a new chat</h3>
-                            <div class="dm-step-card">
-                                <div class="dm-step-indicator">1</div>
-                                <p class="dm-instruction">Send this code to your buddy:</p>
-                                <textarea
-                                    id="channels-local-offer-output"
-                                    class="hash-input"
-                                    rows="5"
-                                    readonly
-                                    placeholder="Offer code appears here..."
-                                ></textarea>
-                                <button id="dm-copy-offer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
-                            </div>
-                            <div class="dm-step-card" style="margin-top: 1rem">
-                                <div class="dm-step-indicator">2</div>
-                                <p class="dm-instruction">Paste the answer code from your buddy:</p>
-                                <textarea
-                                    id="channels-remote-answer-input"
-                                    class="hash-input"
-                                    rows="5"
-                                    placeholder="Paste answer code from your buddy..."
-                                ></textarea>
-                                <p id="dm-apply-answer-error" class="dm-error-message hidden"></p>
-                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Connect</button>
-                            </div>
-                            <button id="dm-host-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
+                        <!-- SUB-PANEL 2: Connecting -->
+                        <div id="dm-connecting" class="hidden">
+                            <h3 style="text-align:center">⏳ Looking for peer...</h3>
+                            <p style="text-align:center; opacity: 0.75">Waiting for the other peer to join the same room key via tracker.</p>
+                            <p class="channels-status status-chip status-pending" style="margin: 1rem auto; display: block; width: fit-content">Connecting...</p>
+                            <button class="channels-leave-btn btn btn-secondary" style="margin-top: 1rem">Cancel</button>
                         </div>
 
-                        <!-- SUB-PANEL 3: Guest Waiting -->
-                        <div id="dm-guest-waiting" class="hidden">
-                            <h3 style="text-align:center; margin-bottom: 1.5rem">Joining a chat</h3>
-                            <div class="dm-step-card">
-                                <p class="dm-instruction">Send back this code to your buddy:</p>
-                                <textarea
-                                    id="channels-local-answer-output"
-                                    class="hash-input"
-                                    rows="5"
-                                    readonly
-                                    placeholder="Answer code appears here..."
-                                ></textarea>
-                                <button id="dm-copy-answer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
-                                <p style="margin-top: 0.75rem; opacity: 0.75">⏳ Waiting for connection...</p>
-                            </div>
-                            <button id="dm-guest-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
-                        </div>
-
-                        <!-- SUB-PANEL 4: Chat Active -->
+                        <!-- SUB-PANEL 3: Chat Active -->
                         <div id="dm-chat-active" class="hidden">
-                            <p id="channels-status" class="status-chip status-pending" style="margin-bottom: 0.75rem">Disconnected</p>
+                            <p class="channels-status status-chip status-pending" style="margin-bottom: 0.75rem">Disconnected</p>
                             <div id="channels-messages" class="channels-messages"></div>
                             <div class="hash-input-group" style="margin-top: 0.75rem">
                                 <input
@@ -359,7 +306,7 @@
                                 <button id="channels-send-btn" class="btn btn-primary">Send</button>
                             </div>
                             <div id="channels-files" style="margin-top: 0.5rem"></div>
-                            <button id="channels-leave-btn" class="btn btn-secondary" style="margin-top: 1rem">Disconnect</button>
+                            <button class="channels-leave-btn btn btn-secondary" style="margin-top: 1rem">Disconnect</button>
                         </div>
 
                     </section>
@@ -426,18 +373,17 @@
                         </div>
 
                         <br /><br />
-                        <h3>💬 Direct Messenger (p2p-chat inspired, identity-bound)</h3>
+                        <h3>💬 Direct Messenger (tracker-based, identity-bound)</h3>
                         <p>
-                            Messaging UX is inspired by
-                            <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                            (manual offer/answer), then extended with EVM identity verification and asymmetric crypto.
+                            Messaging uses automatic peer discovery via the same WSS tracker as site loading.
+                            Both peers enter a shared room key — signaling is fully automatic, no copy-paste required.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🧭 Manual host/guest handshake (offer + answer)</div>
+                            <div class="feature">🌐 Automatic signaling via WebTorrent WSS tracker</div>
                             <div class="feature">🪪 Peer verification from public key to EVM address</div>
-                            <div class="feature">🔐 Asymmetric encryption for invites/messages</div>
+                            <div class="feature">🔐 ECIES E2E encryption using EVM identity keys</div>
                             <div class="feature">✍️ Per-message signatures verified on receive</div>
-                            <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                            <div class="feature">1️⃣ Strictly 1-to-1: second peer is rejected immediately</div>
                         </div>
 
                         <br /><br />

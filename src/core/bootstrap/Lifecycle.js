@@ -10,7 +10,7 @@ import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.j
 import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
-import ChannelsService from '../../channels/ChannelsService.js';
+import TrackerChannelsService from '../../channels/TrackerChannelsService.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -18,9 +18,7 @@ import {
     bindFileInput,
     clearChannelsComposer,
     clearChannelsMessages,
-    renderChannelsStatus,
-    setLocalAnswerCode,
-    setLocalOfferCode
+    renderChannelsStatus
 } from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
@@ -67,54 +65,27 @@ export async function initAuth() {
 }
 
 export function setupChannels() {
-    this.channelsService = new ChannelsService();
+    this.channelsService = new TrackerChannelsService({
+        wtClient: this.client,
+        trackers: this.trackers
+    });
 
     bindChannelsPanel({
-        onCreateOffer: async ({ roomKey }) => {
+        onJoinRoom: async ({ roomKey }) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
                 return;
             }
-
             try {
                 clearChannelsMessages();
-                setLocalAnswerCode('');
-                const code = await this.channelsService.createHostOffer(roomKey, identity);
-                setLocalOfferCode(code);
-                this.toast.success('Share the offer code with your peer.', 'Offer generated');
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
-            }
-        },
-        onCreateAnswer: async ({ roomKey, offerCode }) => {
-            const identity = this.authController.getActiveIdentity();
-            if (!identity?.address) {
-                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                return;
-            }
-
-            try {
-                clearChannelsMessages();
-                const code = await this.channelsService.createAnswerFromOffer(roomKey, offerCode, identity);
-                setLocalAnswerCode(code);
-                this.toast.success('Send the answer code back to the host.', 'Answer generated');
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
-            }
-        },
-        onApplyAnswer: async (answerCode) => {
-            try {
-                await this.channelsService.applyAnswer(answerCode);
-                this.toast.success('Answer accepted. Waiting for data channel open...', 'Direct Messenger');
+                await this.channelsService.joinRoom(roomKey, identity);
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');
             }
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
-            setLocalOfferCode('');
-            setLocalAnswerCode('');
         },
         onSend: (text) => {
             try {
@@ -139,10 +110,6 @@ export function setupChannels() {
     this.channelsService.onUpdate((event) => {
         if (event.type === 'connecting') {
             renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
-        } else if (event.type === 'local-offer') {
-            setLocalOfferCode(event.code || '');
-        } else if (event.type === 'local-answer') {
-            setLocalAnswerCode(event.code || '');
         } else if (event.type === 'connected') {
             renderChannelsStatus({
                 connected: true,
