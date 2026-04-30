@@ -262,35 +262,33 @@
                         <!-- SUB-PANEL 1: Choose Role -->
                         <div id="dm-choose-role">
                             <h3>💬 P2P Direct Messenger</h3>
-                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with manual signaling</p>
+                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with magnet bootstrap signaling</p>
                             <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
-                            <div class="hash-input-group" style="margin-bottom: 1rem">
-                                <input
-                                    type="text"
-                                    id="channels-name-input"
-                                    placeholder="private room key (ex: private-key-98765)"
-                                    class="hash-input"
-                                    maxlength="40"
-                                />
-                            </div>
+                            <p style="text-align:center; margin-bottom: 0.5rem">
+                                Direct Messenger uses two magnet links for bootstrap: the host generates the invite, the guest imports it, and automatically
+                                receives a response magnet. After the connection is established, messages remain E2E encrypted with ECIES.
+                            </p>
+                            <p style="text-align:center; margin-bottom: 1.25rem; opacity: 0.85">
+                                The container key is used only to verify and bind the invite to the response. It is not the E2E encryption key for the conversation.
+                            </p>
                             <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
                             <div class="dm-role-cards">
                                 <div class="dm-role-card">
-                                    <p class="dm-card-title">New chat (Host)</p>
-                                    <p class="dm-instruction">Generate an offer code and share it with your buddy.</p>
-                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%">Generate Offer</button>
+                                    <p class="dm-card-title">Generate room magnet as host</p>
+                                    <p class="dm-instruction">Create a room invite magnet and share it with your peer.</p>
+                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Generate Room Magnet</button>
                                 </div>
                                 <div class="dm-or-separator">or</div>
                                 <div class="dm-role-card">
-                                    <p class="dm-card-title">Join a chat (Guest)</p>
-                                    <p class="dm-instruction">Paste the offer code you received:</p>
+                                    <p class="dm-card-title">Join a room and send your magnet</p>
+                                    <p class="dm-instruction">Paste the host room magnet, then generate your response magnet.</p>
                                     <textarea
                                         id="channels-remote-offer-input"
                                         class="hash-input"
                                         rows="4"
-                                        placeholder="Paste host offer code here..."
+                                        placeholder="Paste host room magnet here..."
                                     ></textarea>
-                                    <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Chat</button>
+                                    <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Room &amp; Generate My Magnet</button>
                                 </div>
                             </div>
                         </div>
@@ -300,27 +298,27 @@
                             <h3 style="text-align:center; margin-bottom: 1.5rem">Starting a new chat</h3>
                             <div class="dm-step-card">
                                 <div class="dm-step-indicator">1</div>
-                                <p class="dm-instruction">Send this code to your buddy:</p>
+                                <p class="dm-instruction">Send this room magnet to your peer:</p>
                                 <textarea
                                     id="channels-local-offer-output"
                                     class="hash-input"
                                     rows="5"
                                     readonly
-                                    placeholder="Offer code appears here..."
+                                    placeholder="Offer magnet appears here..."
                                 ></textarea>
                                 <button id="dm-copy-offer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
                             </div>
                             <div class="dm-step-card" style="margin-top: 1rem">
                                 <div class="dm-step-indicator">2</div>
-                                <p class="dm-instruction">Paste the answer code from your buddy:</p>
+                                <p class="dm-instruction">Paste the peer magnet from your peer:</p>
                                 <textarea
                                     id="channels-remote-answer-input"
                                     class="hash-input"
                                     rows="5"
-                                    placeholder="Paste answer code from your buddy..."
+                                    placeholder="magnet:?xt=urn:btih:..."
                                 ></textarea>
                                 <p id="dm-apply-answer-error" class="dm-error-message hidden"></p>
-                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Connect</button>
+                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Import Peer Magnet</button>
                             </div>
                             <button id="dm-host-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
                         </div>
@@ -329,13 +327,13 @@
                         <div id="dm-guest-waiting" class="hidden">
                             <h3 style="text-align:center; margin-bottom: 1.5rem">Joining a chat</h3>
                             <div class="dm-step-card">
-                                <p class="dm-instruction">Send back this code to your buddy:</p>
+                                <p class="dm-instruction">Send this magnet back to the host.</p>
                                 <textarea
                                     id="channels-local-answer-output"
                                     class="hash-input"
                                     rows="5"
                                     readonly
-                                    placeholder="Answer code appears here..."
+                                    placeholder="Answer magnet appears here..."
                                 ></textarea>
                                 <button id="dm-copy-answer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
                                 <p style="margin-top: 0.75rem; opacity: 0.75">⏳ Waiting for connection...</p>

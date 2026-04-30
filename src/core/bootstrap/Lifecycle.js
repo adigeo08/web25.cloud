@@ -11,6 +11,7 @@ import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, suppor
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
+import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -68,53 +69,128 @@ export async function initAuth() {
 
 export function setupChannels() {
     this.channelsService = new ChannelsService();
+    this.dmOfferSessionId = null;
+    this.dmOfferContainerKey = null;
 
     bindChannelsPanel({
-        onCreateOffer: async ({ roomKey }) => {
+        onCreateOffer: async () => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                return;
+                return false;
             }
 
             try {
+                this.showDirectMessageProgress('Generating secure container…');
                 clearChannelsMessages();
                 setLocalAnswerCode('');
-                const code = await this.channelsService.createHostOffer(roomKey, identity);
-                setLocalOfferCode(code);
-                this.toast.success('Share the offer code with your peer.', 'Offer generated');
+                const autoRoom = `room-${Date.now().toString(36)}`;
+                const signal = await this.channelsService.createHostOfferPayload(autoRoom, identity);
+                this.showDirectMessageProgress('Seeding Direct Message magnet…');
+                const created = await createDirectMessageBootstrapTorrent({
+                    client: this.client,
+                    trackers: this.trackers,
+                    identity,
+                    recipientAddress: '*',
+                    role: 'offer',
+                    webrtcDescription: signal.description,
+                    eciesPublicKey: signal.publicKey
+                });
+                this.dmOfferSessionId = created.bootstrap.session.sessionId;
+                this.dmOfferContainerKey = created.bootstrap.session.containerKey;
+                setLocalOfferCode(created.magnetURI);
+                this.toast.success('Share the offer magnet link with your peer.', 'Offer magnet generated');
+                return true;
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');
+                return false;
+            } finally {
+                this.hideDirectMessageProgress();
             }
         },
-        onCreateAnswer: async ({ roomKey, offerCode }) => {
+        onCreateAnswer: async ({ offerMagnet }) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                return;
+                return false;
             }
 
             try {
+                this.showDirectMessageProgress('Loading peer magnet…');
                 clearChannelsMessages();
-                const code = await this.channelsService.createAnswerFromOffer(roomKey, offerCode, identity);
-                setLocalAnswerCode(code);
-                this.toast.success('Send the answer code back to the host.', 'Answer generated');
+                const offerBootstrap = await loadDirectMessageBootstrapFromMagnet({
+                    client: this.client,
+                    magnetURI: offerMagnet,
+                    localAddress: identity.address,
+                    trackers: this.trackers
+                });
+                this.showDirectMessageProgress('Verifying .torrentchain identity…');
+                const offerPayload = {
+                    description: offerBootstrap.webrtc.description,
+                    evmAddress: offerBootstrap.from.evmAddress,
+                    publicKey: offerBootstrap.from.eciesPublicKey
+                };
+                this.showDirectMessageProgress('Applying WebRTC offer…');
+                const derivedRoom = `room-${(offerBootstrap?.session?.sessionId || Date.now()).toString().slice(0, 24)}`;
+                const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
+                this.showDirectMessageProgress('Creating WebRTC answer…');
+                const created = await createDirectMessageBootstrapTorrent({
+                    client: this.client,
+                    trackers: this.trackers,
+                    identity,
+                    recipientAddress: offerBootstrap.from.evmAddress,
+                    role: 'answer',
+                    webrtcDescription: answerSignal.description,
+                    eciesPublicKey: answerSignal.publicKey,
+                    replyToSessionId: offerBootstrap.session.sessionId,
+                    replyToContainerKey: offerBootstrap.session.containerKey
+                });
+                setLocalAnswerCode(created.magnetURI);
+                this.toast.success('Send the answer magnet link back to the host.', 'Answer magnet generated');
+                return true;
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');
+                return false;
+            } finally {
+                this.hideDirectMessageProgress();
             }
         },
         onApplyAnswer: async (answerCode) => {
             try {
-                await this.channelsService.applyAnswer(answerCode);
+                const identity = this.authController.getActiveIdentity();
+                if (!identity?.address) {
+                    this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
+                    return;
+                }
+                this.showDirectMessageProgress('Loading peer magnet…');
+                const answerBootstrap = await loadDirectMessageBootstrapFromMagnet({
+                    client: this.client,
+                    magnetURI: answerCode,
+                    localAddress: identity.address,
+                    expectedReplyToSessionId: this.dmOfferSessionId || null,
+                    expectedReplyToContainerKey: this.dmOfferContainerKey || null,
+                    trackers: this.trackers
+                });
+                this.showDirectMessageProgress('Verifying .torrentchain identity…');
+                await this.channelsService.applyRemoteAnswerPayload({
+                    description: answerBootstrap.webrtc.description,
+                    evmAddress: answerBootstrap.from.evmAddress,
+                    publicKey: answerBootstrap.from.eciesPublicKey
+                });
+                this.showDirectMessageProgress('Waiting for encrypted peer connection…');
                 this.toast.success('Answer accepted. Waiting for data channel open...', 'Direct Messenger');
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');
+            } finally {
+                this.hideDirectMessageProgress();
             }
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
             setLocalOfferCode('');
             setLocalAnswerCode('');
+            this.dmOfferSessionId = null;
+            this.dmOfferContainerKey = null;
         },
         onSend: (text) => {
             try {
@@ -170,6 +246,14 @@ export function setupChannels() {
             this.toast.error(event.error?.message || 'Unexpected direct messenger error', 'Direct Messenger');
         }
     });
+}
+
+export function showDirectMessageProgress(message) {
+    this.showUploadProgress(message);
+}
+
+export function hideDirectMessageProgress() {
+    this.hideUploadProgress();
 }
 
 
