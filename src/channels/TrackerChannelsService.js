@@ -4,6 +4,10 @@ import { eciesEncrypt, eciesDecrypt, signMessage, verifySignature, evmAddressFro
 import { getUnlockedPrivateKey } from '../auth/LocalWalletService.js';
 
 const MSG_PREFIX = 'WEB25DM:';
+const HANDSHAKE_TIMEOUT_MS = 10000;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+const msgPrefixBytes = textEncoder.encode(MSG_PREFIX);
 
 /**
  * Derive a deterministic SHA-1 infohash from a room key.
@@ -57,6 +61,9 @@ export default class TrackerChannelsService {
         this._peerConn = null; // Active bittorrent wire
         this._dc = null;       // Active wire transport used for send/receive
         this._handshakeDone = false;
+        this._incomingBuffer = new Uint8Array(0);
+        this._incomingOffset = 0;
+        this._handshakeTimer = null;
     }
 
     onUpdate(listener) {
@@ -114,13 +121,109 @@ export default class TrackerChannelsService {
         this.emit({ type: 'debug', message: 'wire created' });
         this._peerConn = wire;
         if (!wire || typeof wire.write !== 'function' || typeof wire.on !== 'function') {
+            try { wire?.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this.emit({ type: 'error', error: new Error('Wire transport is not usable (missing write/on API).') });
             return;
         }
 
         this._dc = wire;
+        this._incomingBuffer = new Uint8Array(0);
+        this._incomingOffset = 0;
         this._setupConnection(wire);
+    }
+
+    decodeRawChunk(rawData) {
+        if (typeof rawData === 'string') return textEncoder.encode(rawData);
+        if (rawData instanceof ArrayBuffer) return new Uint8Array(rawData);
+        if (ArrayBuffer.isView(rawData)) return new Uint8Array(rawData.buffer, rawData.byteOffset, rawData.byteLength);
+        return new Uint8Array(rawData || []);
+    }
+
+    encodeFrame(payload) {
+        const payloadByteLength = textEncoder.encode(payload).length;
+        return `${MSG_PREFIX}${payloadByteLength}:${payload}`;
+    }
+
+    _indexOfBytes(buffer, needle, from = 0) {
+        if (!needle || needle.length === 0) return -1;
+        for (let i = from; i <= buffer.length - needle.length; i++) {
+            let found = true;
+            for (let j = 0; j < needle.length; j++) {
+                if (buffer[i + j] !== needle[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) return i;
+        }
+        return -1;
+    }
+
+    _appendIncomingBytes(chunkBytes) {
+        const unread = this._incomingBuffer.subarray(this._incomingOffset);
+        const next = new Uint8Array(unread.length + chunkBytes.length);
+        next.set(unread, 0);
+        next.set(chunkBytes, unread.length);
+        this._incomingBuffer = next;
+        this._incomingOffset = 0;
+    }
+
+    pushAndExtractFrames(chunkBytes) {
+        this._appendIncomingBytes(chunkBytes);
+        const frames = [];
+
+        while (true) {
+            const prefixIndex = this._indexOfBytes(this._incomingBuffer, msgPrefixBytes, this._incomingOffset);
+            if (prefixIndex < 0) {
+                this._incomingBuffer = new Uint8Array(0);
+                this._incomingOffset = 0;
+                break;
+            }
+            if (prefixIndex > this._incomingOffset) {
+                this._incomingOffset = prefixIndex;
+            }
+
+            const lenStart = this._incomingOffset + msgPrefixBytes.length;
+            const colonByte = 58; // ':'
+            let colonIndex = -1;
+            for (let i = lenStart; i < this._incomingBuffer.length; i++) {
+                if (this._incomingBuffer[i] === colonByte) {
+                    colonIndex = i;
+                    break;
+                }
+            }
+            if (colonIndex < 0) break;
+
+            const lenRaw = textDecoder.decode(this._incomingBuffer.subarray(lenStart, colonIndex));
+            const frameLen = Number.parseInt(lenRaw, 10);
+            if (!Number.isFinite(frameLen) || frameLen < 0) {
+                this.emit({ type: 'debug', message: `parse fail: invalid frame length "${lenRaw}"` });
+                const nextPrefix = this._indexOfBytes(this._incomingBuffer, msgPrefixBytes, this._incomingOffset + 1);
+                if (nextPrefix >= 0) {
+                    this._incomingOffset = nextPrefix;
+                } else {
+                    this._incomingBuffer = new Uint8Array(0);
+                    this._incomingOffset = 0;
+                }
+                continue;
+            }
+
+            const frameStart = colonIndex + 1;
+            const frameEnd = frameStart + frameLen;
+            if (this._incomingBuffer.length < frameEnd) break;
+
+            const candidateFrameBytes = this._incomingBuffer.subarray(frameStart, frameEnd);
+            const candidateFrame = textDecoder.decode(candidateFrameBytes);
+            frames.push(candidateFrame);
+            this._incomingOffset = frameEnd;
+            if (this._incomingOffset >= this._incomingBuffer.length) {
+                this._incomingBuffer = new Uint8Array(0);
+                this._incomingOffset = 0;
+            }
+        }
+
+        return frames;
     }
 
     /**
@@ -150,53 +253,48 @@ export default class TrackerChannelsService {
         };
 
         wire.on('data', async (rawData) => {
-            let raw = '';
-            if (typeof rawData === 'string') {
-                raw = rawData;
-            } else if (rawData instanceof ArrayBuffer) {
-                raw = new TextDecoder().decode(new Uint8Array(rawData));
-            } else if (ArrayBuffer.isView(rawData)) {
-                raw = new TextDecoder().decode(rawData);
-            } else {
-                raw = new TextDecoder().decode(new Uint8Array(rawData || []));
-            }
-            if (!raw.startsWith(MSG_PREFIX)) return;
-            const jsonString = raw.slice(MSG_PREFIX.length);
+            const raw = this.decodeRawChunk(rawData);
+            this.emit({ type: 'debug', message: `raw chunk received (${raw.length} bytes)` });
+            const frames = this.pushAndExtractFrames(raw);
 
-            try {
-                if (!this._handshakeDone) {
-                    const msg = JSON.parse(jsonString);
-                    if (msg.type === 'web25-dm-hello') {
-                        this.emit({ type: 'debug', message: 'hello received' });
-                        await this._handleHello(msg, wire);
+            for (const frame of frames) {
+                this.emit({ type: 'debug', message: `frame decoded (${frame.length} chars)` });
+                try {
+                    if (!this._handshakeDone) {
+                        const msg = JSON.parse(frame);
+                        if (msg.type === 'web25-dm-hello') {
+                            this.emit({ type: 'debug', message: 'hello received' });
+                            await this._handleHello(msg, wire);
+                        }
+                        continue;
                     }
-                    return;
+
+                    // Regular message — decrypt and verify if ECIES is active
+                    let plaintext;
+                    if (this.peerPublicKey) {
+                        const ownPrivKey = this._getPrivateKey();
+                        if (!ownPrivKey) {
+                            this.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
+                            continue;
+                        }
+                        const envelope = await eciesDecrypt(frame, ownPrivKey);
+                        const { plaintext: pt, signature: sig } = JSON.parse(envelope);
+                        const valid = await verifySignature(pt, sig, this.peerPublicKey);
+                        if (!valid) {
+                            this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
+                            continue;
+                        }
+                        plaintext = pt;
+                    } else {
+                        plaintext = frame;
+                    }
+
+                    const payload = JSON.parse(plaintext);
+                    this.handleInbound(payload, false);
+                } catch (err) {
+                    this.emit({ type: 'debug', message: `parse fail: ${err instanceof Error ? err.message : String(err)}` });
+                    this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
                 }
-
-                // Regular message — decrypt and verify if ECIES is active
-                let plaintext;
-                if (this.peerPublicKey) {
-                    const ownPrivKey = this._getPrivateKey();
-                    if (!ownPrivKey) {
-                        this.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
-                        return;
-                    }
-                    const envelope = await eciesDecrypt(jsonString, ownPrivKey);
-                    const { plaintext: pt, signature: sig } = JSON.parse(envelope);
-                    const valid = await verifySignature(pt, sig, this.peerPublicKey);
-                    if (!valid) {
-                        this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
-                        return;
-                    }
-                    plaintext = pt;
-                } else {
-                    plaintext = jsonString;
-                }
-
-                const payload = JSON.parse(plaintext);
-                this.handleInbound(payload, false);
-            } catch (err) {
-                this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
             }
         });
 
@@ -209,14 +307,18 @@ export default class TrackerChannelsService {
             this.peerAddress = '';
             this._dc = null;
             this._peerConn = null;
+            this._incomingBuffer = new Uint8Array(0);
+            this._incomingOffset = 0;
+            this._clearHandshakeTimer();
         });
 
         try {
-            wire.write(MSG_PREFIX + JSON.stringify(hello));
+            wire.write(textEncoder.encode(this.encodeFrame(JSON.stringify(hello))));
             this.emit({ type: 'debug', message: 'hello sent' });
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
         }
+        this._startHandshakeTimer();
 
         wire.on('error', (err) => {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
@@ -234,8 +336,14 @@ export default class TrackerChannelsService {
             const err = new Error('Peer hello missing publicKey or evmAddress.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._incomingBuffer = new Uint8Array(0);
+            this._incomingOffset = 0;
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -244,8 +352,14 @@ export default class TrackerChannelsService {
             const err = new Error('Peer identity verification failed: public key does not match claimed address.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._incomingBuffer = new Uint8Array(0);
+            this._incomingOffset = 0;
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -253,8 +367,14 @@ export default class TrackerChannelsService {
             const err = new Error('Peer hello missing signature or nonce: identity cannot be verified.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._incomingBuffer = new Uint8Array(0);
+            this._incomingOffset = 0;
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -263,8 +383,14 @@ export default class TrackerChannelsService {
             const err = new Error('Peer hello signature verification failed.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._incomingBuffer = new Uint8Array(0);
+            this._incomingOffset = 0;
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -276,6 +402,8 @@ export default class TrackerChannelsService {
         this.emit({ type: 'peer-count', count: 1 });
         this.emit({ type: 'connected', channel: this.currentChannel });
         this.emit({ type: 'debug', message: 'peer verified' });
+        this.emit({ type: 'debug', message: 'connected' });
+        this._clearHandshakeTimer();
         this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);
 
         if (this.peerAddress) {
@@ -291,6 +419,9 @@ export default class TrackerChannelsService {
         this._peerConn = null;
         this._dc = null;
         this._handshakeDone = false;
+        this._incomingBuffer = new Uint8Array(0);
+        this._incomingOffset = 0;
+        this._clearHandshakeTimer();
         this.currentChannel = '';
         this.currentPeerCount = 0;
         this.peerPublicKey = '';
@@ -350,9 +481,26 @@ export default class TrackerChannelsService {
                 wire = plaintext;
             }
 
-            this._dc.write(MSG_PREFIX + wire);
+            this._dc.write(textEncoder.encode(this.encodeFrame(wire)));
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        }
+    }
+
+    _startHandshakeTimer() {
+        this._clearHandshakeTimer();
+        this._handshakeTimer = setTimeout(() => {
+            if (this._handshakeDone || !this._peerConn) return;
+            const warning = new Error(`Handshake timeout after ${Math.floor(HANDSHAKE_TIMEOUT_MS / 1000)}s: hello not verified yet.`);
+            this.emit({ type: 'warning', warning });
+            this.emit({ type: 'debug', message: 'handshake timeout (connection kept open for diagnostics)' });
+        }, HANDSHAKE_TIMEOUT_MS);
+    }
+
+    _clearHandshakeTimer() {
+        if (this._handshakeTimer) {
+            clearTimeout(this._handshakeTimer);
+            this._handshakeTimer = null;
         }
     }
 
