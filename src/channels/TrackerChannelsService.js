@@ -61,6 +61,8 @@ export default class TrackerChannelsService {
         this._peerConn = null; // Active bittorrent wire
         this._dc = null;       // Active wire transport used for send/receive
         this._handshakeDone = false;
+        this._extensionReady = false;
+        this._pendingHello = null;
         this._handshakeTimer = null;
     }
 
@@ -156,6 +158,8 @@ export default class TrackerChannelsService {
             try { wire.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this._dc = null;
+            this._extensionReady = false;
+            this._pendingHello = null;
             return;
         }
 
@@ -174,8 +178,26 @@ export default class TrackerChannelsService {
         const service = this;
         function Web25DmExtension() {}
         Web25DmExtension.prototype.name = DM_EXTENSION_NAME;
-        Web25DmExtension.prototype.onExtendedHandshake = function () {
+        Web25DmExtension.prototype.onExtendedHandshake = function (handshake = {}) {
             service.emit({ type: 'debug', message: 'extended handshake received' });
+            const peerExtensions = Object.keys(handshake?.m || {});
+            service.emit({ type: 'debug', message: `peer extensions list: ${peerExtensions.join(', ') || '(none)'}` });
+            if (!handshake?.m || !(DM_EXTENSION_NAME in handshake.m)) {
+                service.emit({ type: 'debug', message: 'peer does not advertise web25_dm extension' });
+                return;
+            }
+
+            service._extensionReady = true;
+            service.emit({ type: 'debug', message: 'web25_dm extension ready' });
+
+            if (!service._pendingHello) return;
+            try {
+                wire.extended(DM_EXTENSION_NAME, textEncoder.encode(JSON.stringify(service._pendingHello)));
+                service.emit({ type: 'debug', message: 'hello sent' });
+                service._pendingHello = null;
+            } catch (err) {
+                service.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+            }
         };
         Web25DmExtension.prototype.onMessage = async function (payload) {
             try {
@@ -216,12 +238,15 @@ export default class TrackerChannelsService {
             }
         };
         wire.use(Web25DmExtension);
+        this.emit({ type: 'debug', message: 'extension registered' });
 
         wire.on('close', () => {
             this.currentPeerCount = 0;
             this.emit({ type: 'peer-count', count: 0 });
             this.emit({ type: 'disconnected' });
             this._handshakeDone = false;
+            this._extensionReady = false;
+            this._pendingHello = null;
             this.peerPublicKey = '';
             this.peerAddress = '';
             this._dc = null;
@@ -229,12 +254,7 @@ export default class TrackerChannelsService {
             this._clearHandshakeTimer();
         });
 
-        try {
-            wire.extended(DM_EXTENSION_NAME, JSON.stringify(hello));
-            this.emit({ type: 'debug', message: 'hello sent' });
-        } catch (err) {
-            this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
-        }
+        this._pendingHello = hello;
         this._startHandshakeTimer();
 
         wire.on('error', (err) => {
@@ -254,6 +274,8 @@ export default class TrackerChannelsService {
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
             this._handshakeDone = false;
+            this._extensionReady = false;
+            this._pendingHello = null;
             this._peerConn = null;
             this._dc = null;
             this.peerPublicKey = '';
@@ -268,6 +290,8 @@ export default class TrackerChannelsService {
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
             this._handshakeDone = false;
+            this._extensionReady = false;
+            this._pendingHello = null;
             this._peerConn = null;
             this._dc = null;
             this.peerPublicKey = '';
@@ -281,6 +305,8 @@ export default class TrackerChannelsService {
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
             this._handshakeDone = false;
+            this._extensionReady = false;
+            this._pendingHello = null;
             this._peerConn = null;
             this._dc = null;
             this.peerPublicKey = '';
@@ -295,6 +321,8 @@ export default class TrackerChannelsService {
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
             this._handshakeDone = false;
+            this._extensionReady = false;
+            this._pendingHello = null;
             this._peerConn = null;
             this._dc = null;
             this.peerPublicKey = '';
@@ -328,6 +356,8 @@ export default class TrackerChannelsService {
         this._peerConn = null;
         this._dc = null;
         this._handshakeDone = false;
+        this._extensionReady = false;
+        this._pendingHello = null;
         this._clearHandshakeTimer();
         this.currentChannel = '';
         this.currentPeerCount = 0;
@@ -372,6 +402,10 @@ export default class TrackerChannelsService {
     async transmit(payload) {
         try {
             if (!this._dc || !this._handshakeDone) return;
+            if (!this._extensionReady) {
+                this.emit({ type: 'debug', message: 'send skipped: extension not ready' });
+                return;
+            }
             const plaintext = JSON.stringify(payload);
 
             let wire;
@@ -388,7 +422,7 @@ export default class TrackerChannelsService {
                 wire = plaintext;
             }
 
-            this._dc.extended(DM_EXTENSION_NAME, wire);
+            this._dc.extended(DM_EXTENSION_NAME, textEncoder.encode(wire));
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
         }
