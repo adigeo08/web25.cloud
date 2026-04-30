@@ -4,6 +4,10 @@ import { eciesEncrypt, eciesDecrypt, signMessage, verifySignature, evmAddressFro
 import { getUnlockedPrivateKey } from '../auth/LocalWalletService.js';
 
 const MSG_PREFIX = 'WEB25DM:';
+const HANDSHAKE_TIMEOUT_MS = 10000;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+const DM_EXTENSION_NAME = 'web25_dm';
 
 /**
  * Derive a deterministic SHA-1 infohash from a room key.
@@ -57,6 +61,7 @@ export default class TrackerChannelsService {
         this._peerConn = null; // Active bittorrent wire
         this._dc = null;       // Active wire transport used for send/receive
         this._handshakeDone = false;
+        this._handshakeTimer = null;
     }
 
     onUpdate(listener) {
@@ -114,13 +119,30 @@ export default class TrackerChannelsService {
         this.emit({ type: 'debug', message: 'wire created' });
         this._peerConn = wire;
         if (!wire || typeof wire.write !== 'function' || typeof wire.on !== 'function') {
+            try { wire?.destroy?.(); } catch (_) {}
             this._peerConn = null;
             this.emit({ type: 'error', error: new Error('Wire transport is not usable (missing write/on API).') });
+            return;
+        }
+        if (typeof wire.use !== 'function' || typeof wire.extended !== 'function') {
+            try { wire?.destroy?.(); } catch (_) {}
+            this._peerConn = null;
+            this.emit({ type: 'error', error: new Error('Wire transport does not support BEP10 extensions.') });
             return;
         }
 
         this._dc = wire;
         this._setupConnection(wire);
+    }
+
+    _decodeExtensionPayload(payload) {
+        let raw = '';
+        if (typeof payload === 'string') raw = payload;
+        else if (payload instanceof Uint8Array) raw = textDecoder.decode(payload);
+        else if (payload instanceof ArrayBuffer) raw = textDecoder.decode(new Uint8Array(payload));
+        else if (ArrayBuffer.isView(payload)) raw = textDecoder.decode(payload);
+        else raw = `${payload || ''}`;
+        return raw.replace(/^\d+:/, '');
     }
 
     /**
@@ -149,56 +171,51 @@ export default class TrackerChannelsService {
             signature
         };
 
-        wire.on('data', async (rawData) => {
-            let raw = '';
-            if (typeof rawData === 'string') {
-                raw = rawData;
-            } else if (rawData instanceof ArrayBuffer) {
-                raw = new TextDecoder().decode(new Uint8Array(rawData));
-            } else if (ArrayBuffer.isView(rawData)) {
-                raw = new TextDecoder().decode(rawData);
-            } else {
-                raw = new TextDecoder().decode(new Uint8Array(rawData || []));
-            }
-            if (!raw.startsWith(MSG_PREFIX)) return;
-            const jsonString = raw.slice(MSG_PREFIX.length);
-
+        const service = this;
+        function Web25DmExtension() {}
+        Web25DmExtension.prototype.name = DM_EXTENSION_NAME;
+        Web25DmExtension.prototype.onExtendedHandshake = function () {
+            service.emit({ type: 'debug', message: 'extended handshake received' });
+        };
+        Web25DmExtension.prototype.onMessage = async function (payload) {
             try {
-                if (!this._handshakeDone) {
-                    const msg = JSON.parse(jsonString);
+                const raw = service._decodeExtensionPayload(payload);
+                service.emit({ type: 'debug', message: `frame decoded (${raw.length} chars)` });
+                if (!service._handshakeDone) {
+                    const msg = JSON.parse(raw);
                     if (msg.type === 'web25-dm-hello') {
-                        this.emit({ type: 'debug', message: 'hello received' });
-                        await this._handleHello(msg, wire);
+                        service.emit({ type: 'debug', message: 'hello received' });
+                        await service._handleHello(msg, wire);
                     }
                     return;
                 }
 
-                // Regular message — decrypt and verify if ECIES is active
                 let plaintext;
-                if (this.peerPublicKey) {
-                    const ownPrivKey = this._getPrivateKey();
+                if (service.peerPublicKey) {
+                    const ownPrivKey = service._getPrivateKey();
                     if (!ownPrivKey) {
-                        this.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
+                        service.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
                         return;
                     }
-                    const envelope = await eciesDecrypt(jsonString, ownPrivKey);
+                    const envelope = await eciesDecrypt(raw, ownPrivKey);
                     const { plaintext: pt, signature: sig } = JSON.parse(envelope);
-                    const valid = await verifySignature(pt, sig, this.peerPublicKey);
+                    const valid = await verifySignature(pt, sig, service.peerPublicKey);
                     if (!valid) {
-                        this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
+                        service.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
                         return;
                     }
                     plaintext = pt;
                 } else {
-                    plaintext = jsonString;
+                    plaintext = raw;
                 }
-
-                const payload = JSON.parse(plaintext);
-                this.handleInbound(payload, false);
+                const decoded = JSON.parse(plaintext);
+                service.handleInbound(decoded, false);
             } catch (err) {
-                this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+                service.emit({ type: 'debug', message: `parse fail: ${err instanceof Error ? err.message : String(err)}` });
+                service.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
             }
-        });
+        };
+        wire.use(Web25DmExtension);
 
         wire.on('close', () => {
             this.currentPeerCount = 0;
@@ -209,14 +226,16 @@ export default class TrackerChannelsService {
             this.peerAddress = '';
             this._dc = null;
             this._peerConn = null;
+            this._clearHandshakeTimer();
         });
 
         try {
-            wire.write(MSG_PREFIX + JSON.stringify(hello));
+            wire.extended(DM_EXTENSION_NAME, JSON.stringify(hello));
             this.emit({ type: 'debug', message: 'hello sent' });
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
         }
+        this._startHandshakeTimer();
 
         wire.on('error', (err) => {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
@@ -234,8 +253,12 @@ export default class TrackerChannelsService {
             const err = new Error('Peer hello missing publicKey or evmAddress.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -244,8 +267,12 @@ export default class TrackerChannelsService {
             const err = new Error('Peer identity verification failed: public key does not match claimed address.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -253,8 +280,12 @@ export default class TrackerChannelsService {
             const err = new Error('Peer hello missing signature or nonce: identity cannot be verified.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -263,8 +294,12 @@ export default class TrackerChannelsService {
             const err = new Error('Peer hello signature verification failed.');
             this.emit({ type: 'error', error: err });
             try { wire.destroy?.(); } catch (_) {}
+            this._handshakeDone = false;
             this._peerConn = null;
             this._dc = null;
+            this.peerPublicKey = '';
+            this.peerAddress = '';
+            this._clearHandshakeTimer();
             return;
         }
 
@@ -276,6 +311,8 @@ export default class TrackerChannelsService {
         this.emit({ type: 'peer-count', count: 1 });
         this.emit({ type: 'connected', channel: this.currentChannel });
         this.emit({ type: 'debug', message: 'peer verified' });
+        this.emit({ type: 'debug', message: 'connected' });
+        this._clearHandshakeTimer();
         this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);
 
         if (this.peerAddress) {
@@ -291,6 +328,7 @@ export default class TrackerChannelsService {
         this._peerConn = null;
         this._dc = null;
         this._handshakeDone = false;
+        this._clearHandshakeTimer();
         this.currentChannel = '';
         this.currentPeerCount = 0;
         this.peerPublicKey = '';
@@ -350,9 +388,26 @@ export default class TrackerChannelsService {
                 wire = plaintext;
             }
 
-            this._dc.write(MSG_PREFIX + wire);
+            this._dc.extended(DM_EXTENSION_NAME, wire);
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        }
+    }
+
+    _startHandshakeTimer() {
+        this._clearHandshakeTimer();
+        this._handshakeTimer = setTimeout(() => {
+            if (this._handshakeDone || !this._peerConn) return;
+            const warning = new Error(`Handshake timeout after ${Math.floor(HANDSHAKE_TIMEOUT_MS / 1000)}s: hello not verified yet.`);
+            this.emit({ type: 'warning', warning });
+            this.emit({ type: 'debug', message: 'handshake timeout (connection kept open for diagnostics)' });
+        }, HANDSHAKE_TIMEOUT_MS);
+    }
+
+    _clearHandshakeTimer() {
+        if (this._handshakeTimer) {
+            clearTimeout(this._handshakeTimer);
+            this._handshakeTimer = null;
         }
     }
 
