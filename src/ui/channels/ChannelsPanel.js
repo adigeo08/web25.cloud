@@ -61,6 +61,7 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     const copyAnswerBtn = document.getElementById('dm-copy-answer-btn');
 
     const roomKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-name-input'));
+    const peerAddressInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-peer-address-input'));
     const remoteOfferInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-offer-input'));
     const remoteAnswerInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-answer-input'));
     const localOfferOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
@@ -70,7 +71,7 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     createOfferBtn?.addEventListener('click', async () => {
         setDmError('dm-choose-role-error', '');
         try {
-            await onCreateOffer({ roomKey: roomKeyInput?.value || '' });
+            await onCreateOffer({ roomKey: roomKeyInput?.value || '', peerAddress: peerAddressInput?.value || '' });
             showDmStep('dm-host-signaling');
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));

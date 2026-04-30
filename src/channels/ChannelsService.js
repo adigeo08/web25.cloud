@@ -63,6 +63,18 @@ function generateHexKey(byteLength = 8) {
     return [...bytes].map((item) => item.toString(16).padStart(2, '0')).join('');
 }
 
+function verifySignalIdentity(signal, label = 'signal') {
+    if (signal.publicKey || signal.evmAddress) {
+        if (!signal.publicKey || !signal.evmAddress) {
+            throw new Error(`Malformed peer identity: ${label} must contain both publicKey and evmAddress.`);
+        }
+        const derivedAddress = evmAddressFromPublicKey(signal.publicKey);
+        if (derivedAddress.toLowerCase() !== signal.evmAddress.toLowerCase()) {
+            throw new Error('Peer identity verification failed: public key does not match claimed address.');
+        }
+    }
+}
+
 export default class ChannelsService {
     /**
      * @param {{ rtcConfig?: RTCConfiguration, getPrivateKey?: (() => string|null) }} [options]
@@ -94,7 +106,7 @@ export default class ChannelsService {
         this.listeners.forEach((listener) => listener(event));
     }
 
-    async createHostOffer(roomKey, identity) {
+    async createHostOfferPayload(roomKey, identity) {
         const normalized = this.normalizeChannel(roomKey);
         if (!normalized) throw new Error('Room key is required.');
 
@@ -106,62 +118,32 @@ export default class ChannelsService {
         this.peerAddress = '';
         this.messageIds.clear();
 
-        const privKey = this._getPrivateKey();
-        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
-
         const peer = this.createPeerConnection();
         const channel = peer.createDataChannel('web25-direct-messenger');
         this.bindDataChannel(channel);
         this.dataChannel = channel;
 
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
-        await this.waitForIceGathering(peer);
-
-        const code = encodeSignal(peer.localDescription, identity?.address || null, ownPublicKey);
-        this.emit({ type: 'local-offer', code, channel: normalized });
+        const payload = await this.createOfferSignalPayload(identity);
         this.emit({ type: 'connecting', channel: normalized });
+        return payload;
+    }
+
+    async createHostOffer(roomKey, identity) {
+        const payload = await this.createHostOfferPayload(roomKey, identity);
+        const code = encodeSignal(payload.description, payload.evmAddress, payload.publicKey);
+        this.emit({ type: 'local-offer', code, channel: this.currentChannel });
         return code;
     }
 
     async createAnswerFromOffer(roomKey, offerCode, identity) {
-        const normalized = this.normalizeChannel(roomKey);
-        if (!normalized) throw new Error('Room key is required.');
         const offerSignal = decodeSignal(offerCode);
         const offer = offerSignal.description;
         if (offer?.type !== 'offer') throw new Error('Offer code is invalid.');
-
-        // Verify peer identity embedded in the offer signal
-        if (offerSignal.publicKey || offerSignal.evmAddress) {
-            if (!offerSignal.publicKey || !offerSignal.evmAddress) {
-                throw new Error('Malformed peer identity: offer must contain both publicKey and evmAddress.');
-            }
-            const derivedAddress = evmAddressFromPublicKey(offerSignal.publicKey);
-            if (derivedAddress.toLowerCase() !== offerSignal.evmAddress.toLowerCase()) {
-                throw new Error('Peer identity verification failed: public key does not match claimed address.');
-            }
-        }
-
-        await this.leaveChannel();
-        this.currentChannel = normalized;
-        this.role = 'guest';
-        this.identityAddress = identity?.address || 'anonymous';
+        const answerPayload = await this.createAnswerPayloadFromRemoteOffer(roomKey, offerSignal, identity);
         this.peerPublicKey = offerSignal.publicKey || '';
         this.peerAddress = offerSignal.evmAddress || '';
-        this.messageIds.clear();
-
-        const privKey = this._getPrivateKey();
-        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
-
-        const peer = this.createPeerConnection();
-        await peer.setRemoteDescription(offer);
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        await this.waitForIceGathering(peer);
-
-        const code = encodeSignal(peer.localDescription, identity?.address || null, ownPublicKey);
-        this.emit({ type: 'local-answer', code, channel: normalized });
-        this.emit({ type: 'connecting', channel: normalized });
+        const code = encodeSignal(answerPayload.description, answerPayload.evmAddress, answerPayload.publicKey);
+        this.emit({ type: 'local-answer', code, channel: this.currentChannel });
 
         if (this.peerAddress) {
             this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
@@ -169,25 +151,26 @@ export default class ChannelsService {
         return code;
     }
 
+    async createAnswerPayloadFromRemoteOffer(roomKey, offerPayload, identity) {
+        const normalized = this.normalizeChannel(roomKey);
+        if (!normalized) throw new Error('Room key is required.');
+        await this.leaveChannel();
+        this.currentChannel = normalized;
+        this.role = 'guest';
+        this.identityAddress = identity?.address || 'anonymous';
+        this.messageIds.clear();
+        this.createPeerConnection();
+        const answerPayload = await this.createAnswerSignalPayloadFromOfferPayload(offerPayload, identity);
+        this.emit({ type: 'connecting', channel: normalized });
+        return answerPayload;
+    }
+
     async applyAnswer(answerCode) {
         if (!this.peerConnection || this.role !== 'host') throw new Error('Create an offer first.');
         const answerSignal = decodeSignal(answerCode);
         const answer = answerSignal.description;
         if (answer?.type !== 'answer') throw new Error('Answer code is invalid.');
-
-        // Verify peer identity embedded in the answer signal
-        if (answerSignal.publicKey || answerSignal.evmAddress) {
-            if (!answerSignal.publicKey || !answerSignal.evmAddress) {
-                const err = new Error('Malformed peer identity: answer must contain both publicKey and evmAddress.');
-                this.emit({ type: 'error', error: err });
-                throw err;
-            }
-            const derivedAddress = evmAddressFromPublicKey(answerSignal.publicKey);
-            if (derivedAddress.toLowerCase() !== answerSignal.evmAddress.toLowerCase()) {
-                this.emit({ type: 'error', error: new Error('Peer identity verification failed: public key does not match claimed address.') });
-                throw new Error('Peer identity verification failed: public key does not match claimed address.');
-            }
-        }
+        verifySignalIdentity(answerSignal, 'answer');
 
         this.peerPublicKey = answerSignal.publicKey || '';
         this.peerAddress = answerSignal.evmAddress || '';
@@ -197,6 +180,62 @@ export default class ChannelsService {
         }
 
         await this.peerConnection.setRemoteDescription(answer);
+    }
+
+    async createOfferSignalPayload(identity) {
+        if (!this.peerConnection) throw new Error('Peer connection not initialized. Create host offer first.');
+        const privKey = this._getPrivateKey();
+        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
+        const offer = await this.peerConnection.createOffer();
+        await this.peerConnection.setLocalDescription(offer);
+        await this.waitForIceGathering(this.peerConnection);
+        return {
+            description: this.peerConnection.localDescription,
+            evmAddress: identity?.address || null,
+            publicKey: ownPublicKey
+        };
+    }
+
+    async applyRemoteOfferPayload(offerSignalPayload) {
+        if (!offerSignalPayload?.description || offerSignalPayload?.description?.type !== 'offer') {
+            throw new Error('Offer payload is invalid.');
+        }
+        if (!this.peerConnection) throw new Error('Peer connection is not initialized.');
+        const offer = offerSignalPayload.description;
+        verifySignalIdentity(offerSignalPayload, 'offer');
+        this.peerPublicKey = offerSignalPayload.publicKey || '';
+        this.peerAddress = offerSignalPayload.evmAddress || '';
+        await this.peerConnection.setRemoteDescription(offer);
+    }
+
+    async createAnswerSignalPayloadFromOfferPayload(offerSignalPayload, identity) {
+        if (!this.peerConnection) {
+            this.createPeerConnection();
+        }
+        await this.applyRemoteOfferPayload(offerSignalPayload);
+        const answer = await this.peerConnection.createAnswer();
+        await this.peerConnection.setLocalDescription(answer);
+        await this.waitForIceGathering(this.peerConnection);
+        const privKey = this._getPrivateKey();
+        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
+        if (this.peerAddress) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        return {
+            description: this.peerConnection.localDescription,
+            evmAddress: identity?.address || null,
+            publicKey: ownPublicKey
+        };
+    }
+
+    async applyRemoteAnswerPayload(answerSignalPayload) {
+        if (!this.peerConnection || this.role !== 'host') throw new Error('Create an offer first.');
+        if (!answerSignalPayload?.description || answerSignalPayload.description.type !== 'answer') {
+            throw new Error('Answer payload is invalid.');
+        }
+        verifySignalIdentity(answerSignalPayload, 'answer');
+        this.peerPublicKey = answerSignalPayload.publicKey || '';
+        this.peerAddress = answerSignalPayload.evmAddress || '';
+        if (this.peerAddress) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        await this.peerConnection.setRemoteDescription(answerSignalPayload.description);
     }
 
     async leaveChannel() {
