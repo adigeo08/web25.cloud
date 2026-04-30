@@ -60,7 +60,6 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     const copyOfferBtn = document.getElementById('dm-copy-offer-btn');
     const copyAnswerBtn = document.getElementById('dm-copy-answer-btn');
 
-    const roomKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-name-input'));
     const remoteOfferInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-offer-input'));
     const remoteAnswerInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-answer-input'));
     const localOfferOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
@@ -70,8 +69,8 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     createOfferBtn?.addEventListener('click', async () => {
         setDmError('dm-choose-role-error', '');
         try {
-            await onCreateOffer({ roomKey: roomKeyInput?.value || '' });
-            showDmStep('dm-host-signaling');
+            const ok = await onCreateOffer();
+            if (ok === true) showDmStep('dm-host-signaling');
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
         }
@@ -80,11 +79,10 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     createAnswerBtn?.addEventListener('click', async () => {
         setDmError('dm-choose-role-error', '');
         try {
-            await onCreateAnswer({
-                roomKey: roomKeyInput?.value || '',
-                offerCode: remoteOfferInput?.value || ''
+            const ok = await onCreateAnswer({
+                offerMagnet: remoteOfferInput?.value || ''
             });
-            showDmStep('dm-guest-waiting');
+            if (ok === true) showDmStep('dm-guest-waiting');
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
         }
