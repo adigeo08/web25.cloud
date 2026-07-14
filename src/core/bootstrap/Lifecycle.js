@@ -28,6 +28,18 @@ const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
+function createDirectMessageSessionId() {
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes)
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+function directMessageRoomFromSession(sessionId) {
+    return `room-${`${sessionId || ''}`.slice(0, 24)}`;
+}
+
 export async function init() {
     try {
         await this.loadRequiredLibraries();
@@ -84,8 +96,9 @@ export function setupChannels() {
                 this.showDirectMessageProgress('Generating secure container…');
                 clearChannelsMessages();
                 setLocalAnswerCode('');
-                const autoRoom = `room-${Date.now().toString(36)}`;
-                const signal = await this.channelsService.createHostOfferPayload(autoRoom, identity);
+                const offerSessionId = createDirectMessageSessionId();
+                const sharedRoom = directMessageRoomFromSession(offerSessionId);
+                const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
                 this.showDirectMessageProgress('Seeding Direct Message magnet…');
                 const created = await createDirectMessageBootstrapTorrent({
                     client: this.client,
@@ -94,7 +107,8 @@ export function setupChannels() {
                     recipientAddress: '*',
                     role: 'offer',
                     webrtcDescription: signal.description,
-                    eciesPublicKey: signal.publicKey
+                    eciesPublicKey: signal.publicKey,
+                    sessionId: offerSessionId
                 });
                 this.dmOfferSessionId = created.bootstrap.session.sessionId;
                 this.dmOfferContainerKey = created.bootstrap.session.containerKey;
@@ -131,7 +145,7 @@ export function setupChannels() {
                     publicKey: offerBootstrap.from.eciesPublicKey
                 };
                 this.showDirectMessageProgress('Applying WebRTC offer…');
-                const derivedRoom = `room-${(offerBootstrap?.session?.sessionId || Date.now()).toString().slice(0, 24)}`;
+                const derivedRoom = directMessageRoomFromSession(offerBootstrap?.session?.sessionId);
                 const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
                 this.showDirectMessageProgress('Creating WebRTC answer…');
                 const created = await createDirectMessageBootstrapTorrent({
@@ -192,10 +206,10 @@ export function setupChannels() {
             this.dmOfferSessionId = null;
             this.dmOfferContainerKey = null;
         },
-        onSend: (text) => {
+        onSend: async (text) => {
             try {
                 const identity = this.authController.getActiveIdentity();
-                this.channelsService.sendChatMessage(text, identity);
+                await this.channelsService.sendChatMessage(text, identity);
                 clearChannelsComposer();
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');

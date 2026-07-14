@@ -68,7 +68,8 @@ export async function createDirectMessageBootstrapTorrent({
     webrtcDescription,
     eciesPublicKey,
     replyToSessionId = null,
-    replyToContainerKey = null
+    replyToContainerKey = null,
+    sessionId = null
 }) {
     if (!client) throw new Error('WebTorrent client is required.');
     if (!identity?.address) throw new Error('Local EVM identity is required.');
@@ -76,6 +77,11 @@ export async function createDirectMessageBootstrapTorrent({
     if (!eciesPublicKey) throw new Error('ECIES public key is required for Direct Messenger bootstrap.');
     if (role !== 'offer' && role !== 'answer') throw new Error('Role must be offer or answer.');
     if (!webrtcDescription?.type || !webrtcDescription?.sdp) throw new Error('WebRTC description is required.');
+
+    const normalizedSessionId = `${sessionId || ''}`.trim();
+    if (normalizedSessionId && !/^[a-f0-9]{16,64}$/i.test(normalizedSessionId)) {
+        throw new Error('Direct Messenger session id must be 16-64 hex characters.');
+    }
 
     const createdAt = Date.now();
     const bootstrap = {
@@ -95,7 +101,7 @@ export async function createDirectMessageBootstrapTorrent({
             stunServers: ['stun:stun.l.google.com:19302']
         },
         session: {
-            sessionId: randomHex(12),
+            sessionId: normalizedSessionId || randomHex(12),
             containerKey: randomHex(32),
             replyToSessionId,
             replyToContainerKey,
