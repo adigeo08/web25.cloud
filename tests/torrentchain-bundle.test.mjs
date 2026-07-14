@@ -42,7 +42,7 @@ if (typeof global.DecompressionStream === 'undefined') {
 
 const { encodeSiteBundleGzip, decodeSiteBundleGzip } = await import('../src/torrent/SiteBundleCodec.js');
 const { evaluateRenderGate } = await import('../src/torrent/RenderGate.js');
-const { applyCachedSignatureState, buildSignatureState, verifyTorrentChainBeforeDownload } = await import(
+const { applyCachedSignatureState, buildSignatureState, isTorrentComplete, verifyTorrentChainBeforeDownload } = await import(
     '../src/core/torrent/TorrentLoader.js'
 );
 const { PEERWEB_CONFIG } = await import('../src/config/peerweb.config.js');
@@ -119,6 +119,13 @@ test('Cache signature persistence applies verified state on cache hit without pe
     assert.equal(ctx.currentSiteSignatureStatus.verified, true);
     assert.equal(ctx.currentSiteSignatureStatus.label.startsWith('Verified publisher'), true);
     assert.equal(ctx.currentSiteSignatureStatus.verificationVersion, SIGNATURE_STATE_VERIFICATION_VERSION);
+});
+
+test('isTorrentComplete detects already-finished WebTorrent instances', () => {
+    assert.equal(isTorrentComplete({ done: true, progress: 0, downloaded: 0, length: 10 }), true);
+    assert.equal(isTorrentComplete({ progress: 1, downloaded: 0, length: 10 }), true);
+    assert.equal(isTorrentComplete({ progress: 0.99, downloaded: 10, length: 10 }), true);
+    assert.equal(isTorrentComplete({ progress: 0.99, downloaded: 9, length: 10 }), false);
 });
 
 test('Legacy/orphan permissive mode allows load but strict mode blocks', async () => {

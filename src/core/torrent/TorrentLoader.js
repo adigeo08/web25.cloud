@@ -136,9 +136,32 @@ export async function loadSite(hash, _retryAttempt = 0) {
 
             this.updatePeerStats(torrent);
 
+            const processCompletedTorrent = async (reason = 'done') => {
+                if (this.processingInProgress || this.currentHash !== sanitizedHash) return;
+                this.log(`Download completed (100%) via ${reason}; processing site.`);
+                this.sendToServiceWorker('SITE_LOADING', {
+                    hash: sanitizedHash,
+                    state: 'stop',
+                    loadId,
+                    magnetURI,
+                    expectedSize: torrent.length || null
+                });
+                this.processingInProgress = true;
+                if (this.processingTimeout) {
+                    clearTimeout(this.processingTimeout);
+                    this.processingTimeout = null;
+                }
+                await this.processTorrent(torrent, sanitizedHash);
+            };
+
             torrent.on('download', () => {
                 this.updateProgress(torrent);
                 this.updatePeerStats(torrent);
+
+                if (this.isTorrentComplete(torrent)) {
+                    void processCompletedTorrent('download-progress');
+                    return;
+                }
 
                 // Check if we have enough data to process the site
                 if (!this.processingInProgress && this.shouldProcessSiteEarly(torrent)) {
@@ -156,22 +179,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
             });
 
             torrent.on('done', async () => {
-                this.log('Download completed (100%)!');
-                this.sendToServiceWorker('SITE_LOADING', {
-                    hash: sanitizedHash,
-                    state: 'stop',
-                    loadId,
-                    magnetURI,
-                    expectedSize: torrent.length || null
-                });
-                if (!this.processingInProgress) {
-                    this.processingInProgress = true;
-                    if (this.processingTimeout) {
-                        clearTimeout(this.processingTimeout);
-                        this.processingTimeout = null;
-                    }
-                    await this.processTorrent(torrent, sanitizedHash);
-                }
+                await processCompletedTorrent('done-event');
             });
 
             torrent.on('error', (error) => {
@@ -278,12 +286,23 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 }
             }
 
+            // Some WebTorrent instances can already be complete by the time the `add` callback
+            // runs, especially for cached/fast local peers. In that case the `done` event may have
+            // already fired, so schedule an explicit completion check after listeners are installed.
+            setTimeout(() => {
+                if (this.isTorrentComplete(torrent)) void processCompletedTorrent('post-add-completion-check');
+            }, 0);
+
             // Calculate dynamic timeout based on torrent size and file count
             const dynamicTimeout = this.calculateProcessingTimeout(torrent);
             this.log(`Dynamic processing timeout set to: ${(dynamicTimeout / 1000).toFixed(1)} seconds`);
             
             // Set a timeout to process the site even if it doesn't reach 100%
             this.processingTimeout = setTimeout(() => {
+                if (this.isTorrentComplete(torrent)) {
+                    void processCompletedTorrent('processing-timeout-complete');
+                    return;
+                }
                 if (!this.processingInProgress && PEERWEB_CONFIG.SITE_BUNDLE_MODE !== 'gzip' && torrent.progress > 0.8) {
                     this.log('Processing site due to timeout (80%+ downloaded)');
                     this.processingInProgress = true;
@@ -300,6 +319,15 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 "\n\n🔧 Troubleshooting:\n• Verify the hash format is correct (40 hex characters)\n• Check that seeders are available\n• Ensure your firewall isn't blocking WebRTC connections\n• Try loading the torrent again"
         );
     }
+}
+
+export function isTorrentComplete(torrent) {
+    if (!torrent) return false;
+    if (torrent.done === true) return true;
+    if (torrent.progress >= 1) return true;
+    const downloaded = Number(torrent.downloaded || 0);
+    const length = Number(torrent.length || 0);
+    return length > 0 && downloaded >= length;
 }
 
 export async function verifyTorrentChainBeforeDownload(torrent, hash) {
