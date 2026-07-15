@@ -12,6 +12,7 @@ import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/Deplo
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
+import { isValidDirectMessageSessionId } from '../../channels/DirectMessageSessionId.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -145,7 +146,13 @@ export function setupChannels() {
                     publicKey: offerBootstrap.from.eciesPublicKey
                 };
                 this.showDirectMessageProgress('Applying WebRTC offer…');
-                const derivedRoom = directMessageRoomFromSession(offerBootstrap?.session?.sessionId);
+                const remoteSessionId = offerBootstrap?.session?.sessionId;
+                if (!isValidDirectMessageSessionId(remoteSessionId)) {
+                    throw new Error(
+                        'Remote offer contains an invalid or missing session id. Handshake aborted.'
+                    );
+                }
+                const derivedRoom = directMessageRoomFromSession(remoteSessionId);
                 const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
                 this.showDirectMessageProgress('Creating WebRTC answer…');
                 const created = await createDirectMessageBootstrapTorrent({

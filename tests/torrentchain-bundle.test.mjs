@@ -42,11 +42,12 @@ if (typeof global.DecompressionStream === 'undefined') {
 
 const { encodeSiteBundleGzip, decodeSiteBundleGzip } = await import('../src/torrent/SiteBundleCodec.js');
 const { evaluateRenderGate } = await import('../src/torrent/RenderGate.js');
-const { applyCachedSignatureState, buildSignatureState, isTorrentComplete, verifyTorrentChainBeforeDownload } = await import(
+const { applyCachedSignatureState, buildSignatureState, isTorrentComplete, verifyTorrentChainBeforeDownload, processTorrent } = await import(
     '../src/core/torrent/TorrentLoader.js'
 );
 const { PEERWEB_CONFIG } = await import('../src/config/peerweb.config.js');
 const { SIGNATURE_STATE_VERIFICATION_VERSION } = await import('../src/core/cache/SignatureStateVersion.js');
+const { isValidDirectMessageSessionId } = await import('../src/channels/DirectMessageSessionId.js');
 
 function makeFile(path, contentType, text) {
     return { path, contentType, bytes: new TextEncoder().encode(text) };
@@ -150,4 +151,57 @@ test('Legacy/orphan permissive mode allows load but strict mode blocks', async (
     assert.equal(strict.ok, false);
 
     PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN = original;
+});
+
+test('isValidDirectMessageSessionId accepts valid 16-64 hex session ids and rejects invalid ones', () => {
+    // Valid: exactly 16 hex chars (lowercase and uppercase)
+    assert.equal(isValidDirectMessageSessionId('a'.repeat(16)), true);
+    assert.equal(isValidDirectMessageSessionId('A'.repeat(16)), true);
+    assert.equal(isValidDirectMessageSessionId('0123456789abcdef'), true);
+    // Valid: 24 hex chars (typical output of createDirectMessageSessionId)
+    assert.equal(isValidDirectMessageSessionId('a'.repeat(24)), true);
+    // Valid: 64 hex chars (upper bound)
+    assert.equal(isValidDirectMessageSessionId('f'.repeat(64)), true);
+
+    // Invalid: too short
+    assert.equal(isValidDirectMessageSessionId('abc'), false);
+    assert.equal(isValidDirectMessageSessionId('a'.repeat(15)), false);
+    // Invalid: too long
+    assert.equal(isValidDirectMessageSessionId('a'.repeat(65)), false);
+    // Invalid: non-hex characters
+    assert.equal(isValidDirectMessageSessionId('z'.repeat(24)), false);
+    assert.equal(isValidDirectMessageSessionId('room-abc123'), false);
+    // Invalid: empty / null / undefined
+    assert.equal(isValidDirectMessageSessionId(''), false);
+    assert.equal(isValidDirectMessageSessionId(null), false);
+    assert.equal(isValidDirectMessageSessionId(undefined), false);
+});
+
+test('processTorrent resets processingInProgress to false when cache.set throws', async () => {
+    const original = PEERWEB_CONFIG.SITE_BUNDLE_MODE;
+    PEERWEB_CONFIG.SITE_BUNDLE_MODE = 'legacy';
+
+    const overlayHidden = { called: false };
+    const ctx = {
+        processingInProgress: true,
+        log() {},
+        hideLoadingOverlay() { overlayHidden.called = true; },
+        getFileBuffer: async () => new Uint8Array([]),
+        getContentType: () => 'text/html',
+        isTextFile: () => true,
+        attachSignatureManifest() {},
+        validateReceivedManifest() {},
+        reportVerificationIssue() {},
+        cache: {
+            set: async () => { throw new Error('storage quota exceeded'); }
+        },
+        displaySite() {}
+    };
+
+    await processTorrent.call(ctx, { files: [{ name: 'index.html' }] }, 'a'.repeat(40));
+
+    assert.equal(ctx.processingInProgress, false, 'processingInProgress must be reset on cache error');
+    assert.equal(overlayHidden.called, true, 'hideLoadingOverlay must be called on cache error');
+
+    PEERWEB_CONFIG.SITE_BUNDLE_MODE = original;
 });

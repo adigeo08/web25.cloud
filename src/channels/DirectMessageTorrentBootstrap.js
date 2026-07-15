@@ -2,6 +2,9 @@
 
 import { createTorrentChainArtifact, verifyTorrentChainManifest } from '../torrent/TorrentChainProtocol.js';
 import { evmAddressFromPublicKey } from './ecies.js';
+import { isValidDirectMessageSessionId } from './DirectMessageSessionId.js';
+
+export { isValidDirectMessageSessionId };
 
 const BOOTSTRAP_FILE_NAME = 'dm-bootstrap.json';
 const MAX_FUTURE_SKEW_MS = 2 * 60 * 1000;
@@ -79,7 +82,7 @@ export async function createDirectMessageBootstrapTorrent({
     if (!webrtcDescription?.type || !webrtcDescription?.sdp) throw new Error('WebRTC description is required.');
 
     const normalizedSessionId = `${sessionId || ''}`.trim();
-    if (normalizedSessionId && !/^[a-f0-9]{16,64}$/i.test(normalizedSessionId)) {
+    if (normalizedSessionId && !isValidDirectMessageSessionId(normalizedSessionId)) {
         throw new Error('Direct Messenger session id must be 16-64 hex characters.');
     }
 

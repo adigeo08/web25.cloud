@@ -151,7 +151,14 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     clearTimeout(this.processingTimeout);
                     this.processingTimeout = null;
                 }
-                await this.processTorrent(torrent, sanitizedHash);
+                try {
+                    await this.processTorrent(torrent, sanitizedHash);
+                } catch (error) {
+                    this.log(`processCompletedTorrent failed: ${error.message}`);
+                    this.hideLoadingOverlay();
+                    this.processingInProgress = false;
+                    this.toast?.error?.(`Failed to process site: ${error.message}`, 'Load Error');
+                }
             };
 
             torrent.on('download', () => {
@@ -712,40 +719,45 @@ export async function processTorrent(torrent, hash) {
 
     this.log(`Processing ${files.length} files...`);
 
-    // Process all files
-    for (const file of files) {
-        try {
-            this.log(`Processing file: ${file.name}`);
-            const buffer = await this.getFileBuffer(file);
+    try {
+        // Process all files
+        for (const file of files) {
+            try {
+                this.log(`Processing file: ${file.name}`);
+                const buffer = await this.getFileBuffer(file);
 
-            siteData[file.name] = {
-                content: buffer,
-                type: this.getContentType(file.name),
-                isText: this.isTextFile(file.name),
-                size: buffer.length
-            };
+                siteData[file.name] = {
+                    content: buffer,
+                    type: this.getContentType(file.name),
+                    isText: this.isTextFile(file.name),
+                    size: buffer.length
+                };
 
-            this.log(`Processed ${file.name} (${buffer.length} bytes, ${siteData[file.name].type})`);
-        } catch (error) {
-            this.log(`Error processing file ${file.name}: ${error.message}`);
+                this.log(`Processed ${file.name} (${buffer.length} bytes, ${siteData[file.name].type})`);
+            } catch (error) {
+                this.log(`Error processing file ${file.name}: ${error.message}`);
+            }
         }
+
+        this.log(`Successfully processed ${Object.keys(siteData).length} files`);
+        this.log(`File list: ${Object.keys(siteData).join(', ')}`);
+
+        this.attachSignatureManifest(siteData, hash);
+        this.validateReceivedManifest(siteData, hash);
+
+        // Cache the site
+        await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+
+        // Display the site
+        this.displaySite(siteData, hash);
+    } catch (error) {
+        this.log(`Failed to process torrent files: ${error.message}`);
+        this.reportVerificationIssue?.(`Failed to display site: ${error.message}`);
+    } finally {
+        this.hideLoadingOverlay();
+        // Reset processing flag
+        this.processingInProgress = false;
     }
-
-    this.log(`Successfully processed ${Object.keys(siteData).length} files`);
-    this.log(`File list: ${Object.keys(siteData).join(', ')}`);
-
-    this.attachSignatureManifest(siteData, hash);
-    this.validateReceivedManifest(siteData, hash);
-
-    // Cache the site
-    await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
-
-    // Display the site
-    this.displaySite(siteData, hash);
-    this.hideLoadingOverlay();
-
-    // Reset processing flag
-    this.processingInProgress = false;
 }
 
 export async function processTorrentGzipBundle(torrent, hash) {
