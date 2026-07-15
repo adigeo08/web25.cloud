@@ -7,7 +7,7 @@ export function evaluateRenderGate({ signatureVerified, strictMode, hasTorrentCh
     if (hasTorrentChain && !signatureVerified) {
         return { allowed: false, reason: 'signature-invalid' };
     }
-    if (bundleHashExpected && bundleHashExpected !== bundleHashActual) {
+    if (bundleHashExpected && bundleHashExpected.toLowerCase() !== (bundleHashActual || '').toLowerCase()) {
         return { allowed: false, reason: 'bundle-hash-mismatch' };
     }
     return { allowed: true, reason: 'ok' };
