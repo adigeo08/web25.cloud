@@ -64,14 +64,20 @@ function generateHexKey(byteLength = 8) {
 }
 
 function verifySignalIdentity(signal, label = 'signal') {
-    if (signal.publicKey || signal.evmAddress) {
-        if (!signal.publicKey || !signal.evmAddress) {
-            throw new Error(`Malformed peer identity: ${label} must contain both publicKey and evmAddress.`);
-        }
-        const derivedAddress = evmAddressFromPublicKey(signal.publicKey);
-        if (derivedAddress.toLowerCase() !== signal.evmAddress.toLowerCase()) {
-            throw new Error('Peer identity verification failed: public key does not match claimed address.');
-        }
+    if (!signal?.publicKey || !signal?.evmAddress) {
+        throw new Error(`Missing peer identity: ${label} must contain both publicKey and evmAddress.`);
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(signal.evmAddress)) {
+        throw new Error(`Malformed peer identity: ${label} contains an invalid evmAddress.`);
+    }
+    let derivedAddress;
+    try {
+        derivedAddress = evmAddressFromPublicKey(signal.publicKey);
+    } catch (_) {
+        throw new Error(`Malformed peer identity: ${label} contains an invalid publicKey.`);
+    }
+    if (derivedAddress.toLowerCase() !== signal.evmAddress.toLowerCase()) {
+        throw new Error('Peer identity verification failed: public key does not match claimed address.');
     }
 }
 
@@ -106,14 +112,43 @@ export default class ChannelsService {
         this.listeners.forEach((listener) => listener(event));
     }
 
+    requireAuthenticatedLocalIdentity(identity, label = 'session') {
+        const ownPrivKey = this._getPrivateKey();
+        if (!ownPrivKey) {
+            throw new Error(`Cannot create ${label}: wallet is locked or private key is unavailable.`);
+        }
+
+        const ownPublicKey = getPublicKeyFromPrivateKey(ownPrivKey);
+        const ownAddress = evmAddressFromPublicKey(ownPublicKey);
+        const claimedAddress = `${identity?.address || identity?.evmAddress || ''}`.trim();
+        if (!/^0x[0-9a-fA-F]{40}$/.test(claimedAddress)) {
+            throw new Error(`Cannot create ${label}: valid local evmAddress is required.`);
+        }
+        if (ownAddress.toLowerCase() !== claimedAddress.toLowerCase()) {
+            throw new Error(`Cannot create ${label}: local publicKey does not match provided evmAddress.`);
+        }
+
+        return { privateKey: ownPrivKey, publicKey: ownPublicKey, evmAddress: claimedAddress };
+    }
+
+    hasVerifiedPeerIdentity() {
+        if (!this.peerPublicKey || !this.peerAddress) return false;
+        try {
+            return evmAddressFromPublicKey(this.peerPublicKey).toLowerCase() === this.peerAddress.toLowerCase();
+        } catch (_) {
+            return false;
+        }
+    }
+
     async createHostOfferPayload(roomKey, identity) {
         const normalized = this.normalizeChannel(roomKey);
         if (!normalized) throw new Error('Room key is required.');
+        const localIdentity = this.requireAuthenticatedLocalIdentity(identity, 'host offer');
 
         await this.leaveChannel();
         this.currentChannel = normalized;
         this.role = 'host';
-        this.identityAddress = identity?.address || 'anonymous';
+        this.identityAddress = localIdentity.evmAddress;
         this.peerPublicKey = '';
         this.peerAddress = '';
         this.messageIds.clear();
@@ -123,7 +158,7 @@ export default class ChannelsService {
         this.bindDataChannel(channel);
         this.dataChannel = channel;
 
-        const payload = await this.createOfferSignalPayload(identity);
+        const payload = await this.createOfferSignalPayload(localIdentity);
         this.emit({ type: 'connecting', channel: normalized });
         return payload;
     }
@@ -156,13 +191,14 @@ export default class ChannelsService {
     async createAnswerPayloadFromRemoteOffer(roomKey, offerPayload, identity) {
         const normalized = this.normalizeChannel(roomKey);
         if (!normalized) throw new Error('Room key is required.');
+        const localIdentity = this.requireAuthenticatedLocalIdentity(identity, 'answer');
         await this.leaveChannel();
         this.currentChannel = normalized;
         this.role = 'guest';
-        this.identityAddress = identity?.address || 'anonymous';
+        this.identityAddress = localIdentity.evmAddress;
         this.messageIds.clear();
         this.createPeerConnection();
-        const answerPayload = await this.createAnswerSignalPayloadFromOfferPayload(offerPayload, identity);
+        const answerPayload = await this.createAnswerSignalPayloadFromOfferPayload(offerPayload, localIdentity);
         this.emit({ type: 'connecting', channel: normalized });
         return answerPayload;
     }
@@ -187,15 +223,14 @@ export default class ChannelsService {
 
     async createOfferSignalPayload(identity) {
         if (!this.peerConnection) throw new Error('Peer connection not initialized. Create host offer first.');
-        const privKey = this._getPrivateKey();
-        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
+        const localIdentity = this.requireAuthenticatedLocalIdentity(identity, 'host offer');
         const offer = await this.peerConnection.createOffer();
         await this.peerConnection.setLocalDescription(offer);
         await this.waitForIceGathering(this.peerConnection);
         return {
             description: this.peerConnection.localDescription,
-            evmAddress: identity?.address || null,
-            publicKey: ownPublicKey
+            evmAddress: localIdentity.evmAddress,
+            publicKey: localIdentity.publicKey
         };
     }
 
@@ -215,17 +250,16 @@ export default class ChannelsService {
         if (!this.peerConnection) {
             this.createPeerConnection();
         }
+        const localIdentity = this.requireAuthenticatedLocalIdentity(identity, 'answer');
         await this.applyRemoteOfferPayload(offerSignalPayload);
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
         await this.waitForIceGathering(this.peerConnection);
-        const privKey = this._getPrivateKey();
-        const ownPublicKey = privKey ? getPublicKeyFromPrivateKey(privKey) : null;
         if (this.peerAddress) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
         return {
             description: this.peerConnection.localDescription,
-            evmAddress: identity?.address || null,
-            publicKey: ownPublicKey
+            evmAddress: localIdentity.evmAddress,
+            publicKey: localIdentity.publicKey
         };
     }
 
@@ -284,8 +318,10 @@ export default class ChannelsService {
             timestamp: new Date().toISOString()
         };
 
-        this.handleInbound(payload, true);
-        return this.transmit(payload);
+        return this.transmit(payload).then((sent) => {
+            if (sent) this.handleInbound(payload, true);
+            return sent;
+        });
     }
 
     sendSystemMessage(kind, data, identity = null) {
@@ -347,28 +383,26 @@ export default class ChannelsService {
 
         channel.onmessage = async (event) => {
             try {
-                const raw = `${event?.data || ''}`;
-                let plaintext;
-
-                if (this.peerPublicKey) {
-                    const ownPrivKey = this._getPrivateKey();
-                    if (!ownPrivKey) {
-                        this.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
-                        return;
-                    }
-                    const envelope = await eciesDecrypt(raw, ownPrivKey);
-                    const { plaintext: pt, signature } = JSON.parse(envelope);
-
-                    const valid = await verifySignature(pt, signature, this.peerPublicKey);
-                    if (!valid) {
-                        this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
-                        return;
-                    }
-                    plaintext = pt;
-                } else {
-                    plaintext = raw;
+                if (!this.hasVerifiedPeerIdentity()) {
+                    this.emit({ type: 'error', error: new Error('Cannot accept message: verified peer identity is required.') });
+                    return;
                 }
-
+                const raw = `${event?.data || ''}`;
+                const ownPrivKey = this._getPrivateKey();
+                if (!ownPrivKey) {
+                    this.emit({ type: 'error', error: new Error('Cannot decrypt message: wallet is locked.') });
+                    return;
+                }
+                const envelope = await eciesDecrypt(raw, ownPrivKey);
+                const { plaintext, signature } = JSON.parse(envelope);
+                if (typeof plaintext !== 'string' || typeof signature !== 'string') {
+                    throw new Error('Malformed encrypted message envelope.');
+                }
+                const valid = await verifySignature(plaintext, signature, this.peerPublicKey);
+                if (!valid) {
+                    this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
+                    return;
+                }
                 const payload = JSON.parse(plaintext);
                 this.handleInbound(payload, false);
             } catch (err) {
@@ -379,26 +413,25 @@ export default class ChannelsService {
 
     async transmit(payload) {
         try {
-            if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
-            const plaintext = JSON.stringify(payload);
-
-            let wire;
-            if (this.peerPublicKey) {
-                const ownPrivKey = this._getPrivateKey();
-                if (!ownPrivKey) {
-                    this.emit({ type: 'error', error: new Error('Cannot send message: wallet is locked.') });
-                    return;
-                }
-                const signature = await signMessage(plaintext, ownPrivKey);
-                const envelope = JSON.stringify({ plaintext, signature });
-                wire = await eciesEncrypt(envelope, this.peerPublicKey);
-            } else {
-                wire = plaintext;
+            if (!this.dataChannel || this.dataChannel.readyState !== 'open') return false;
+            if (!this.hasVerifiedPeerIdentity()) {
+                this.emit({ type: 'error', error: new Error('Cannot send message: verified peer identity is required.') });
+                return false;
             }
-
+            const plaintext = JSON.stringify(payload);
+            const ownPrivKey = this._getPrivateKey();
+            if (!ownPrivKey) {
+                this.emit({ type: 'error', error: new Error('Cannot send message: wallet is locked.') });
+                return false;
+            }
+            const signature = await signMessage(plaintext, ownPrivKey);
+            const envelope = JSON.stringify({ plaintext, signature });
+            const wire = await eciesEncrypt(envelope, this.peerPublicKey);
             this.dataChannel.send(wire);
+            return true;
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+            return false;
         }
     }
 

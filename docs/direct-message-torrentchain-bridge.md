@@ -12,9 +12,9 @@
   - upload seeds in-memory files and exposes `infoHash` (used to compose magnet URI);
   - load path composes `magnet:?xt=urn:btih:<hash>&tr=...` and adds via `client.add()`.
 - Verification path before rendering:
-  - `.torrentchain` is read first if present;
-  - `verifyTorrentChainManifest()` validates signature against `payload.publisher`.
-  - optional strict mode blocks load if missing/invalid manifest;
+  - `.torrentchain` is required and read first;
+  - `verifyTorrentChainManifest()` validates signature against `payload.publisher`;
+  - missing, malformed, or invalid manifest blocks load/render;
   - entry file hash and (gzip mode) bundle hash checks gate rendering.
 
 **Reusable parts immediately:**
@@ -30,13 +30,15 @@
   - peer `evmAddress`;
   - peer secp256k1 public key.
 - STUN remains `stun:stun.l.google.com:19302` in DM service default RTC config.
-- Identity checks already exist in signaling parse stage:
-  - if `publicKey` + `evmAddress` exist, address is derived from pubkey and compared.
+- Identity checks in signaling parse stage:
+  - `publicKey` + `evmAddress` are mandatory on both offer and answer;
+  - address is derived from pubkey and compared before continuing.
 - E2E message crypto stays on data-channel payload:
   - sender signs plaintext;
   - wraps `{ plaintext, signature }`;
   - encrypts envelope with ECIES to peer pubkey;
   - receiver decrypts and verifies signature.
+- No plaintext fallback is allowed in DM send/receive paths.
 - Manual UX points today:
   - host copies offer text;
   - guest pastes offer, copies answer;

@@ -101,12 +101,10 @@ At load time, the client:
 - verifies signature before render
 - applies integrity gate checks prior to rendering
 
-#### Verification policy / backward compatibility
+#### Verification policy
 
-- **Permissive (default):** `REQUIRE_TORRENTCHAIN = false`
-  - missing `.torrentchain` can still load, flagged as **Orphan**
-- **Strict:** `REQUIRE_TORRENTCHAIN = true`
-  - missing/invalid `.torrentchain` blocks load
+- **Strict (default):** `REQUIRE_TORRENTCHAIN = true`
+  - missing, malformed, or invalid `.torrentchain` blocks load/render
 
 ---
 
@@ -168,14 +166,16 @@ To avoid regressions from verified → pending after refresh:
 
 Direct Messenger follows manual offer/answer signaling with asymmetric crypto on secp256k1:
 
-- host creates offer with EVM address + public key
+- host creates offer with mandatory `evmAddress` + `publicKey`
 - guest verifies host identity (`publicKey → keccak256 → address`)
-- guest replies with answer carrying own identity
+- guest replies with answer carrying mandatory `evmAddress` + `publicKey`
 - host verifies guest identity and opens data channel
+- DM setup requires an unlocked local wallet private key on both peers
 - STUN used for ICE discovery: `stun:stun.l.google.com:19302`
-- outbound messages are encrypted for recipient + signed by sender
-- inbound messages are decrypted locally + signature-verified
+- outbound messages are always encrypted for recipient (ECIES) + signed by sender
+- inbound messages are always decrypted locally + signature-verified
 - invalid signatures are rejected
+- no plaintext DM fallback is allowed
 
 ---
 
