@@ -59,12 +59,16 @@
 
         <div id="main-content">
             <header class="hero">
+                <div class="hero-kicker"><span class="live-dot"></span> DECENTRALIZED EDGE NETWORK · ONLINE</div>
                 <h1>
                     <a class="maintitle" href="https://github.com/adigeo08/web25.cloud" target="_blank"
                         >☁️ Web25.Cloud</a
                     >
                 </h1>
                 <h2>Decentralized Web Platform — Hosting · Identity · Messaging</h2>
+                <div class="network-telemetry" aria-label="Network status">
+                    <span><b>01</b> BROWSER NODE</span><span><b>E2E</b> ENCRYPTED</span><span><b>P2P</b> DELIVERY</span>
+                </div>
             </header>
 
             <!-- Tab Navigation -->
@@ -85,10 +89,11 @@
             <main class="container">
                 <!-- ── AUTH TAB ── -->
                 <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
-                    <section class="quick-upload">
+                    <section class="quick-upload identity-dashboard">
                         <h3>📇 Local Identity Profile</h3>
                         <p>Manage your local signing identity and recovery options.</p>
-                        <div class="identity-profile-card">
+                        <div class="identity-widget-grid">
+                        <div class="identity-profile-card identity-main-widget">
                             <div class="identity-profile-header">
                                 <div class="identity-avatar" aria-hidden="true">📇</div>
                                 <div class="identity-profile-main">
@@ -112,6 +117,12 @@
                                     </p>
                                 </div>
                             </div>
+                        </div>
+                        <div class="identity-side-widgets" aria-label="Identity security summary">
+                            <article class="mini-widget"><span class="widget-icon">◈</span><div><small>KEY STORAGE</small><strong>LOCAL / DEVICE</strong></div></article>
+                            <article class="mini-widget"><span class="widget-icon">⌁</span><div><small>SIGNING LAYER</small><strong>EVM IDENTITY</strong></div></article>
+                            <article class="mini-widget"><span class="widget-icon">⬡</span><div><small>NETWORK EXPOSURE</small><strong>ZERO CUSTODY</strong></div></article>
+                        </div>
                         </div>
                         <div id="passkey-protection-badge" class="upload-result hidden">🔐 Protected by device passkey (WebAuthn)</div>
                         <div id="passkey-unsupported-warning" class="upload-result hidden">
@@ -216,8 +227,8 @@
                         <section class="controls deploy-card">
                             <h3>✍️ Sign and Deploy</h3>
                             <p id="signature-status" class="status-chip status-pending">Signature pending</p>
-                            <div class="deploy-stepper">
-                                <span class="step-chip">1. Select files</span>
+                            <div class="deploy-stepper" aria-label="Deployment progress">
+                                <span class="step-chip is-current">1. Select files</span>
                                 <span class="step-chip">2. Build in-memory bundle</span>
                                 <span class="step-chip">3. Review payload</span>
                                 <span class="step-chip">4. Sign payload</span>
@@ -393,9 +404,9 @@
 
                 <!-- ── BROWSE TAB ── -->
                 <div id="tab-browse" class="tab-panel active" role="tabpanel">
-                    <section class="example">
-                        <h3>🔍 Load a Site by Hash</h3>
-                        <p>Enter a torrent hash to load any peer-hosted website:</p>
+                    <section class="example cloud-console">
+                        <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
+                        <p>Resolve and open any peer-hosted website through your local browser node.</p>
                         <div class="hash-input-group">
                             <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
                             <button id="load-site" class="btn btn-primary">Load Site</button>
@@ -403,7 +414,7 @@
                         <p>🎯 Just the hash — Web25.Cloud automatically adds the magnet link prefix and trackers.</p>
                     </section>
 
-                    <section class="debug">
+                    <section class="debug console-widget">
                         <h3>🐛 Debug Mode</h3>
                         <p>Add <code>&amp;debug=true</code> to any URL for detailed progress logs:</p>
                         <div class="code-block">
@@ -414,7 +425,7 @@
 
                 <!-- ── ABOUT TAB ── -->
                 <div id="tab-about" class="tab-panel" role="tabpanel">
-                    <section class="intro">
+                    <section class="intro about-hero-card">
                         <h3>☁️ About Web25.Cloud</h3>
                         <p>
                             Web25.Cloud is a
@@ -424,7 +435,7 @@
                         </p>
                     </section>
 
-                    <section class="features">
+                    <section class="features about-bento">
                         <h3>🪪 Identity: Local EVM wallet + WebAuthn passkeys</h3>
                         <p>
                             The identity model is local-first and is inspired by
@@ -631,7 +642,7 @@
                         btn.classList.add('active');
                         btn.setAttribute('aria-selected', 'true');
                         var panel = document.getElementById('tab-' + target);
-                        if (panel) panel.classList.add('active');
+                        if (panel) { panel.classList.add('active'); panel.animate([{ opacity: 0, transform: 'translateX(18px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 380, easing: 'cubic-bezier(.2,.8,.2,1)' }); }
                     });
                 });
             })();
