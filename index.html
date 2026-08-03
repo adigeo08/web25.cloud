@@ -89,40 +89,40 @@
             <main class="container">
                 <!-- ── AUTH TAB ── -->
                 <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
-                    <section class="quick-upload identity-dashboard">
+                    <section class="quick-upload identity-dashboard card-base">
                         <h3>📇 Local Identity Profile</h3>
                         <p>Manage your local signing identity and recovery options.</p>
                         <div class="identity-widget-grid">
-                        <div class="identity-profile-card identity-main-widget">
-                            <div class="identity-profile-header">
-                                <div class="identity-avatar" aria-hidden="true">📇</div>
-                                <div class="identity-profile-main">
-                                    <p id="identity-badge" class="identity-profile-name">Identity: anonymous</p>
-                                    <p id="auth-status" class="identity-profile-status">Status: anonymous</p>
-                                </div>
-                            </div>
-                            <div class="identity-profile-details">
-                                <p id="local-wallet-meta" class="identity-profile-detail">Local wallet: not registered</p>
-                                <div id="identity-keys-panel" class="hidden" style="margin-top: 0.75rem">
-                                    <p class="identity-profile-detail" style="margin-bottom: 0.25rem"><strong>EVM Address:</strong></p>
-                                    <p id="identity-full-address" class="identity-key-value" style="word-break: break-all; user-select: all"></p>
-                                    <p class="identity-profile-detail" style="margin-top: 0.75rem; margin-bottom: 0.25rem"><strong>ECIES Public Key:</strong></p>
-                                    <div class="identity-pubkey-row">
-                                        <p id="identity-full-pubkey" class="identity-key-value" style="word-break: break-all; user-select: all; flex: 1; margin: 0"></p>
-                                        <button id="copy-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy public key" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
+                            <div class="identity-profile-card identity-main-widget">
+                                <div class="identity-profile-header">
+                                    <div class="identity-avatar" aria-hidden="true">📇</div>
+                                    <div class="identity-profile-main">
+                                        <p id="identity-badge" class="identity-profile-name">Identity: anonymous</p>
+                                        <p id="auth-status" class="identity-profile-status">Status: anonymous</p>
                                     </div>
-                                    <p class="identity-pubkey-hint">
-                                        Your public key is safe to share. It is the value another person needs to send you a recipient-encrypted Direct Message invite.
-                                        This is <strong>not</strong> your private key — never share your private key with anyone.
-                                    </p>
+                                </div>
+                                <div class="identity-profile-details">
+                                    <p id="local-wallet-meta" class="identity-profile-detail">Local wallet: not registered</p>
+                                    <div id="identity-keys-panel" class="hidden" style="margin-top: 0.75rem">
+                                        <p class="identity-profile-detail" style="margin-bottom: 0.25rem"><strong>EVM Address:</strong></p>
+                                        <p id="identity-full-address" class="identity-key-value" style="word-break: break-all; user-select: all"></p>
+                                        <p class="identity-profile-detail" style="margin-top: 0.75rem; margin-bottom: 0.25rem"><strong>ECIES Public Key:</strong></p>
+                                        <div class="identity-pubkey-row">
+                                            <p id="identity-full-pubkey" class="identity-key-value" style="word-break: break-all; user-select: all; flex: 1; margin: 0"></p>
+                                            <button id="copy-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy public key" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
+                                        </div>
+                                        <p class="identity-pubkey-hint">
+                                            Your public key is safe to share. It is the value another person needs to send you a recipient-encrypted Direct Message invite.
+                                            This is <strong>not</strong> your private key — never share your private key with anyone.
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="identity-side-widgets" aria-label="Identity security summary">
-                            <article class="mini-widget"><span class="widget-icon">◈</span><div><small>KEY STORAGE</small><strong>LOCAL / DEVICE</strong></div></article>
-                            <article class="mini-widget"><span class="widget-icon">⌁</span><div><small>SIGNING LAYER</small><strong>EVM IDENTITY</strong></div></article>
-                            <article class="mini-widget"><span class="widget-icon">⬡</span><div><small>NETWORK EXPOSURE</small><strong>ZERO CUSTODY</strong></div></article>
-                        </div>
+                            <div class="identity-side-widgets" aria-label="Identity security summary">
+                                <article class="mini-widget"><span class="widget-icon">◈</span><div><small>KEY STORAGE</small><strong>LOCAL / DEVICE</strong></div></article>
+                                <article class="mini-widget"><span class="widget-icon">⌁</span><div><small>SIGNING LAYER</small><strong>EVM IDENTITY</strong></div></article>
+                                <article class="mini-widget"><span class="widget-icon">⬡</span><div><small>NETWORK EXPOSURE</small><strong>ZERO CUSTODY</strong></div></article>
+                            </div>
                         </div>
                         <div id="passkey-protection-badge" class="upload-result hidden">🔐 Protected by device passkey (WebAuthn)</div>
                         <div id="passkey-unsupported-warning" class="upload-result hidden">
@@ -153,7 +153,7 @@
 
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
-                    <section id="deploy-auth-wall" class="quick-upload">
+                    <section id="deploy-auth-wall" class="quick-upload card-base">
                         <div>
                             <h3>🔐 Welcome back</h3>
                             <p>Choose how you want to continue to signed deploy.</p>
@@ -172,7 +172,7 @@
                     </section>
 
                     <div id="deploy-panel" class="hidden">
-                        <section class="quick-upload">
+                        <section class="quick-upload card-base">
                             <h3>📤 Quick Upload</h3>
                             <div id="drop-zone" class="drop-zone">
                                 <div class="drop-content">
@@ -224,7 +224,7 @@
                             </div>
                         </section>
 
-                        <section class="controls deploy-card">
+                        <section class="controls deploy-card card-base">
                             <h3>✍️ Sign and Deploy</h3>
                             <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             <div class="deploy-stepper" aria-label="Deployment progress">
@@ -281,7 +281,7 @@
 
                 <!-- ── DIRECT MESSENGER TAB ── -->
                 <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
-                    <section class="quick-upload">
+                    <section class="quick-upload card-base">
 
                         <!-- SUB-PANEL 1: Choose Role -->
                         <div id="dm-choose-role">
@@ -404,7 +404,7 @@
 
                 <!-- ── BROWSE TAB ── -->
                 <div id="tab-browse" class="tab-panel active" role="tabpanel">
-                    <section class="example cloud-console">
+                    <section class="example cloud-console card-base">
                         <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
                         <p>Resolve and open any peer-hosted website through your local browser node.</p>
                         <div class="hash-input-group">
@@ -414,7 +414,7 @@
                         <p>🎯 Just the hash — Web25.Cloud automatically adds the magnet link prefix and trackers.</p>
                     </section>
 
-                    <section class="debug console-widget">
+                    <section class="debug console-widget card-base">
                         <h3>🐛 Debug Mode</h3>
                         <p>Add <code>&amp;debug=true</code> to any URL for detailed progress logs:</p>
                         <div class="code-block">
@@ -425,7 +425,7 @@
 
                 <!-- ── ABOUT TAB ── -->
                 <div id="tab-about" class="tab-panel" role="tabpanel">
-                    <section class="intro about-hero-card">
+                    <section class="intro about-hero-card card-base">
                         <h3>☁️ About Web25.Cloud</h3>
                         <p>
                             Web25.Cloud is a
@@ -642,7 +642,7 @@
                         btn.classList.add('active');
                         btn.setAttribute('aria-selected', 'true');
                         var panel = document.getElementById('tab-' + target);
-                        if (panel) { panel.classList.add('active'); panel.animate([{ opacity: 0, transform: 'translateX(18px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 380, easing: 'cubic-bezier(.2,.8,.2,1)' }); }
+                        if (panel) panel.classList.add('active');
                     });
                 });
             })();
