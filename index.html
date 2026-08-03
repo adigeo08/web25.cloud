@@ -98,6 +98,19 @@
                             </div>
                             <div class="identity-profile-details">
                                 <p id="local-wallet-meta" class="identity-profile-detail">Local wallet: not registered</p>
+                                <div id="identity-keys-panel" class="hidden" style="margin-top: 0.75rem">
+                                    <p class="identity-profile-detail" style="margin-bottom: 0.25rem"><strong>EVM Address:</strong></p>
+                                    <p id="identity-full-address" class="identity-key-value" style="word-break: break-all; user-select: all"></p>
+                                    <p class="identity-profile-detail" style="margin-top: 0.75rem; margin-bottom: 0.25rem"><strong>ECIES Public Key:</strong></p>
+                                    <div class="identity-pubkey-row">
+                                        <p id="identity-full-pubkey" class="identity-key-value" style="word-break: break-all; user-select: all; flex: 1; margin: 0"></p>
+                                        <button id="copy-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy public key" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
+                                    </div>
+                                    <p class="identity-pubkey-hint">
+                                        Your public key is safe to share. It is the value another person needs to send you a recipient-encrypted Direct Message invite.
+                                        This is <strong>not</strong> your private key — never share your private key with anyone.
+                                    </p>
+                                </div>
                             </div>
                         </div>
                         <div id="passkey-protection-badge" class="upload-result hidden">🔐 Protected by device passkey (WebAuthn)</div>
@@ -262,31 +275,46 @@
                         <!-- SUB-PANEL 1: Choose Role -->
                         <div id="dm-choose-role">
                             <h3>💬 P2P Direct Messenger</h3>
-                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with magnet bootstrap signaling</p>
+                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with recipient-encrypted magnet bootstrap</p>
                             <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
-                            <p style="text-align:center; margin-bottom: 0.5rem">
-                                Direct Messenger uses two magnet links for bootstrap: the host generates the invite, the guest imports it, and automatically
-                                receives a response magnet. After the connection is established, messages remain E2E encrypted with ECIES.
+                            <p style="text-align:center; margin-bottom: 1.25rem">
+                                Each magnet distributes a signed, recipient-encrypted DM envelope. Only the intended recipient can decrypt the invite.
+                                After the connection is established, messages remain E2E encrypted with ECIES on the WebRTC data channel.
                             </p>
-                            <p style="text-align:center; margin-bottom: 1.25rem; opacity: 0.85">
-                                The container key is used only to verify and bind the invite to the response. It is not the E2E encryption key for the conversation.
-                            </p>
+                            <div id="dm-my-pubkey-panel" class="dm-own-pubkey-panel hidden">
+                                <p class="dm-own-pubkey-label">🔑 Your ECIES Public Key <span class="dm-own-pubkey-hint">(share this so others can send you encrypted invites)</span></p>
+                                <div class="identity-pubkey-row">
+                                    <code id="dm-own-pubkey-value" class="dm-own-pubkey-value"></code>
+                                    <button id="dm-copy-own-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy my public key" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
+                                </div>
+                            </div>
+                            <div id="dm-my-pubkey-locked" class="dm-own-pubkey-panel hidden">
+                                <p class="dm-own-pubkey-label">🔑 Your ECIES Public Key</p>
+                                <p class="dm-own-pubkey-hint">Authenticate and unlock your wallet to view your public key.</p>
+                            </div>
                             <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
                             <div class="dm-role-cards">
                                 <div class="dm-role-card">
                                     <p class="dm-card-title">Generate room magnet as host</p>
-                                    <p class="dm-instruction">Create a room invite magnet and share it with your peer.</p>
-                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Generate Room Magnet</button>
+                                    <p class="dm-instruction">Enter the recipient's ECIES public key (<code>04…</code> hex), then generate an encrypted invite magnet.</p>
+                                    <input
+                                        id="dm-recipient-pubkey-input"
+                                        type="text"
+                                        class="hash-input"
+                                        placeholder="Recipient public key: 04..."
+                                        style="margin-top: 0.5rem"
+                                    />
+                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Generate Encrypted Invite Magnet</button>
                                 </div>
                                 <div class="dm-or-separator">or</div>
                                 <div class="dm-role-card">
                                     <p class="dm-card-title">Join a room and send your magnet</p>
-                                    <p class="dm-instruction">Paste the host room magnet, then generate your response magnet.</p>
+                                    <p class="dm-instruction">Paste the host invite magnet (encrypted for you), then generate your encrypted response magnet.</p>
                                     <textarea
                                         id="channels-remote-offer-input"
                                         class="hash-input"
                                         rows="4"
-                                        placeholder="Paste host room magnet here..."
+                                        placeholder="Paste host invite magnet here..."
                                     ></textarea>
                                     <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Room &amp; Generate My Magnet</button>
                                 </div>
@@ -428,10 +456,10 @@
                         <p>
                             Messaging UX is inspired by
                             <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                            (manual offer/answer), then extended with EVM identity verification and asymmetric crypto.
+                            (manual offer/answer), then extended with EVM identity verification, recipient-encrypted bootstrap, and asymmetric crypto.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🧭 Manual host/guest handshake (offer + answer)</div>
+                            <div class="feature">🔏 Recipient-encrypted magnet bootstrap (ECIES)</div>
                             <div class="feature">🪪 Peer verification from public key to EVM address</div>
                             <div class="feature">🔐 Asymmetric encryption for invites/messages</div>
                             <div class="feature">✍️ Per-message signatures verified on receive</div>

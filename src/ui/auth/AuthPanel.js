@@ -3,6 +3,8 @@
 import { passkeySupported } from '../../auth/SecureKeyStore.js';
 import { AUTH_STATUS } from '../../auth/AuthState.js';
 import { renderIdentityBadge } from './IdentityBadge.js';
+import { getUnlockedPrivateKey } from '../../auth/LocalWalletService.js';
+import { getPublicKeyFromPrivateKey } from '../../channels/ecies.js';
 
 export function renderAuthPanel(state) {
     renderIdentityBadge(state);
@@ -17,6 +19,73 @@ export function renderAuthPanel(state) {
         localMeta.textContent = state.localWalletExists
             ? `Local wallet: ${state.localWalletUnlocked ? 'unlocked 🔓' : 'locked 🔒'}`
             : 'Local wallet: not registered';
+    }
+
+    // Full address + ECIES public key panel (only when unlocked)
+    const keysPanel = document.getElementById('identity-keys-panel');
+    const fullAddress = document.getElementById('identity-full-address');
+    const fullPubkey = document.getElementById('identity-full-pubkey');
+    const copyPubkeyBtn = document.getElementById('copy-pubkey-btn');
+
+    const privateKey = getUnlockedPrivateKey();
+    const isUnlocked = Boolean(state.localWalletUnlocked && state.address && privateKey);
+
+    if (keysPanel) {
+        keysPanel.classList.toggle('hidden', !isUnlocked);
+    }
+
+    if (isUnlocked && state.address) {
+        let derivedPubKey = '';
+        try {
+            derivedPubKey = getPublicKeyFromPrivateKey(/** @type {string} */ (privateKey));
+        } catch (_) {
+            derivedPubKey = '';
+        }
+
+        if (fullAddress) fullAddress.textContent = state.address;
+        if (fullPubkey) fullPubkey.textContent = derivedPubKey;
+
+        if (copyPubkeyBtn && !copyPubkeyBtn.dataset.bound) {
+            copyPubkeyBtn.dataset.bound = '1';
+            copyPubkeyBtn.addEventListener('click', () => {
+                const key = fullPubkey?.textContent || '';
+                if (!key) return;
+                const originalText = copyPubkeyBtn.textContent || '📋 Copy';
+                navigator.clipboard
+                    .writeText(key)
+                    .then(() => {
+                        copyPubkeyBtn.textContent = '✅ Copied!';
+                        setTimeout(() => {
+                            copyPubkeyBtn.textContent = originalText;
+                        }, 2000);
+                    })
+                    .catch(() => {
+                        // fallback for browsers without clipboard API
+                        try {
+                            const ta = document.createElement('textarea');
+                            ta.value = key;
+                            ta.style.position = 'fixed';
+                            ta.style.opacity = '0';
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(ta);
+                            copyPubkeyBtn.textContent = '✅ Copied!';
+                            setTimeout(() => {
+                                copyPubkeyBtn.textContent = originalText;
+                            }, 2000);
+                        } catch (_) {
+                            copyPubkeyBtn.textContent = '❌ Failed';
+                            setTimeout(() => {
+                                copyPubkeyBtn.textContent = originalText;
+                            }, 2000);
+                        }
+                    });
+            });
+        }
+    } else {
+        if (fullAddress) fullAddress.textContent = '';
+        if (fullPubkey) fullPubkey.textContent = '';
     }
 
     const passKeyBadge = document.getElementById('passkey-protection-badge');

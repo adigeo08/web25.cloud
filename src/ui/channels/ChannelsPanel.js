@@ -59,17 +59,20 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     const guestBackBtn = document.getElementById('dm-guest-back-btn');
     const copyOfferBtn = document.getElementById('dm-copy-offer-btn');
     const copyAnswerBtn = document.getElementById('dm-copy-answer-btn');
+    const copyOwnPubkeyBtn = document.getElementById('dm-copy-own-pubkey-btn');
 
     const remoteOfferInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-offer-input'));
     const remoteAnswerInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-answer-input'));
     const localOfferOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
     const localAnswerOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-answer-output'));
     const messageInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
+    const recipientPubKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-pubkey-input'));
 
     createOfferBtn?.addEventListener('click', async () => {
         setDmError('dm-choose-role-error', '');
         try {
-            const ok = await onCreateOffer();
+            const recipientPublicKey = recipientPubKeyInput?.value?.trim() || '';
+            const ok = await onCreateOffer({ recipientPublicKey });
             if (ok === true) showDmStep('dm-host-signaling');
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
@@ -122,10 +125,50 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
         if (code) copyToClipboard(code);
     });
 
+    copyOwnPubkeyBtn?.addEventListener('click', () => {
+        const pubkeyEl = document.getElementById('dm-own-pubkey-value');
+        const key = pubkeyEl?.textContent || '';
+        if (!key) return;
+        const originalText = copyOwnPubkeyBtn.textContent || '📋 Copy';
+        copyToClipboard(key)
+            .then(() => {
+                copyOwnPubkeyBtn.textContent = '✅ Copied!';
+                setTimeout(() => {
+                    copyOwnPubkeyBtn.textContent = originalText;
+                }, 2000);
+            })
+            .catch(() => {
+                copyOwnPubkeyBtn.textContent = '❌ Failed';
+                setTimeout(() => {
+                    copyOwnPubkeyBtn.textContent = originalText;
+                }, 2000);
+            });
+    });
+
     sendBtn?.addEventListener('click', () => onSend(messageInput?.value || ''));
     messageInput?.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') onSend(messageInput.value || '');
     });
+}
+
+/**
+ * Update the "My Public Key" display in the DM choose-role panel.
+ * @param {string|null} publicKey  — full uncompressed hex key ("04…"), or null if unavailable
+ */
+export function updateDmOwnPubkey(publicKey) {
+    const panel = document.getElementById('dm-my-pubkey-panel');
+    const lockedPanel = document.getElementById('dm-my-pubkey-locked');
+    const valueEl = document.getElementById('dm-own-pubkey-value');
+
+    if (publicKey) {
+        if (panel) panel.classList.remove('hidden');
+        if (lockedPanel) lockedPanel.classList.add('hidden');
+        if (valueEl) valueEl.textContent = publicKey;
+    } else {
+        if (panel) panel.classList.add('hidden');
+        if (lockedPanel) lockedPanel.classList.remove('hidden');
+        if (valueEl) valueEl.textContent = '';
+    }
 }
 
 export function renderChannelsStatus({ channel = '', peers = 0, connected = false }) {
