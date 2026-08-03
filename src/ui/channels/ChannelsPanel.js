@@ -65,11 +65,13 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     const localOfferOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
     const localAnswerOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-answer-output'));
     const messageInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
+    const recipientPubKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-pubkey-input'));
 
     createOfferBtn?.addEventListener('click', async () => {
         setDmError('dm-choose-role-error', '');
         try {
-            const ok = await onCreateOffer();
+            const recipientPublicKey = recipientPubKeyInput?.value?.trim() || '';
+            const ok = await onCreateOffer({ recipientPublicKey });
             if (ok === true) showDmStep('dm-host-signaling');
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));

@@ -262,31 +262,35 @@
                         <!-- SUB-PANEL 1: Choose Role -->
                         <div id="dm-choose-role">
                             <h3>💬 P2P Direct Messenger</h3>
-                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with magnet bootstrap signaling</p>
+                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with recipient-encrypted magnet bootstrap</p>
                             <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
-                            <p style="text-align:center; margin-bottom: 0.5rem">
-                                Direct Messenger uses two magnet links for bootstrap: the host generates the invite, the guest imports it, and automatically
-                                receives a response magnet. After the connection is established, messages remain E2E encrypted with ECIES.
-                            </p>
-                            <p style="text-align:center; margin-bottom: 1.25rem; opacity: 0.85">
-                                The container key is used only to verify and bind the invite to the response. It is not the E2E encryption key for the conversation.
+                            <p style="text-align:center; margin-bottom: 1.25rem">
+                                Each magnet distributes a signed, recipient-encrypted DM envelope. Only the intended recipient can decrypt the invite.
+                                After the connection is established, messages remain E2E encrypted with ECIES on the WebRTC data channel.
                             </p>
                             <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
                             <div class="dm-role-cards">
                                 <div class="dm-role-card">
                                     <p class="dm-card-title">Generate room magnet as host</p>
-                                    <p class="dm-instruction">Create a room invite magnet and share it with your peer.</p>
-                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Generate Room Magnet</button>
+                                    <p class="dm-instruction">Enter the recipient's ECIES public key (<code>04…</code> hex), then generate an encrypted invite magnet.</p>
+                                    <input
+                                        id="dm-recipient-pubkey-input"
+                                        type="text"
+                                        class="hash-input"
+                                        placeholder="Recipient public key: 04..."
+                                        style="margin-top: 0.5rem"
+                                    />
+                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Generate Encrypted Invite Magnet</button>
                                 </div>
                                 <div class="dm-or-separator">or</div>
                                 <div class="dm-role-card">
                                     <p class="dm-card-title">Join a room and send your magnet</p>
-                                    <p class="dm-instruction">Paste the host room magnet, then generate your response magnet.</p>
+                                    <p class="dm-instruction">Paste the host invite magnet (encrypted for you), then generate your encrypted response magnet.</p>
                                     <textarea
                                         id="channels-remote-offer-input"
                                         class="hash-input"
                                         rows="4"
-                                        placeholder="Paste host room magnet here..."
+                                        placeholder="Paste host invite magnet here..."
                                     ></textarea>
                                     <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Room &amp; Generate My Magnet</button>
                                 </div>
@@ -428,10 +432,10 @@
                         <p>
                             Messaging UX is inspired by
                             <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                            (manual offer/answer), then extended with EVM identity verification and asymmetric crypto.
+                            (manual offer/answer), then extended with EVM identity verification, recipient-encrypted bootstrap, and asymmetric crypto.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🧭 Manual host/guest handshake (offer + answer)</div>
+                            <div class="feature">🔏 Recipient-encrypted magnet bootstrap (ECIES)</div>
                             <div class="feature">🪪 Peer verification from public key to EVM address</div>
                             <div class="feature">🔐 Asymmetric encryption for invites/messages</div>
                             <div class="feature">✍️ Per-message signatures verified on receive</div>

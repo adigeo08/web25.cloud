@@ -12,6 +12,7 @@ import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/Deplo
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
+import { getUnlockedPrivateKey } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -82,10 +83,9 @@ export async function initAuth() {
 export function setupChannels() {
     this.channelsService = new ChannelsService();
     this.dmOfferSessionId = null;
-    this.dmOfferContainerKey = null;
 
     bindChannelsPanel({
-        onCreateOffer: async () => {
+        onCreateOffer: async ({ recipientPublicKey }) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
@@ -93,7 +93,7 @@ export function setupChannels() {
             }
 
             try {
-                this.showDirectMessageProgress('Generating secure container…');
+                this.showDirectMessageProgress('Generating encrypted invite…');
                 clearChannelsMessages();
                 setLocalAnswerCode('');
                 const offerSessionId = createDirectMessageSessionId();
@@ -104,14 +104,13 @@ export function setupChannels() {
                     client: this.client,
                     trackers: this.trackers,
                     identity,
-                    recipientAddress: '*',
+                    recipientPublicKey,
                     role: 'offer',
                     webrtcDescription: signal.description,
                     eciesPublicKey: signal.publicKey,
                     sessionId: offerSessionId
                 });
                 this.dmOfferSessionId = created.bootstrap.session.sessionId;
-                this.dmOfferContainerKey = created.bootstrap.session.containerKey;
                 setLocalOfferCode(created.magnetURI);
                 this.toast.success('Share the offer magnet link with your peer.', 'Offer magnet generated');
                 return true;
@@ -132,10 +131,12 @@ export function setupChannels() {
             try {
                 this.showDirectMessageProgress('Loading peer magnet…');
                 clearChannelsMessages();
+                const localPrivateKey = getUnlockedPrivateKey();
                 const offerBootstrap = await loadDirectMessageBootstrapFromMagnet({
                     client: this.client,
                     magnetURI: offerMagnet,
                     localAddress: identity.address,
+                    localPrivateKey,
                     trackers: this.trackers
                 });
                 this.showDirectMessageProgress('Verifying .torrentchain identity…');
@@ -152,12 +153,11 @@ export function setupChannels() {
                     client: this.client,
                     trackers: this.trackers,
                     identity,
-                    recipientAddress: offerBootstrap.from.evmAddress,
+                    recipientPublicKey: offerBootstrap.from.eciesPublicKey,
                     role: 'answer',
                     webrtcDescription: answerSignal.description,
                     eciesPublicKey: answerSignal.publicKey,
-                    replyToSessionId: offerBootstrap.session.sessionId,
-                    replyToContainerKey: offerBootstrap.session.containerKey
+                    replyToSessionId: offerBootstrap.session.sessionId
                 });
                 setLocalAnswerCode(created.magnetURI);
                 this.toast.success('Send the answer magnet link back to the host.', 'Answer magnet generated');
@@ -177,12 +177,13 @@ export function setupChannels() {
                     return;
                 }
                 this.showDirectMessageProgress('Loading peer magnet…');
+                const localPrivateKey = getUnlockedPrivateKey();
                 const answerBootstrap = await loadDirectMessageBootstrapFromMagnet({
                     client: this.client,
                     magnetURI: answerCode,
                     localAddress: identity.address,
+                    localPrivateKey,
                     expectedReplyToSessionId: this.dmOfferSessionId || null,
-                    expectedReplyToContainerKey: this.dmOfferContainerKey || null,
                     trackers: this.trackers
                 });
                 this.showDirectMessageProgress('Verifying .torrentchain identity…');
@@ -204,7 +205,6 @@ export function setupChannels() {
             setLocalOfferCode('');
             setLocalAnswerCode('');
             this.dmOfferSessionId = null;
-            this.dmOfferContainerKey = null;
         },
         onSend: async (text) => {
             try {
