@@ -234,7 +234,9 @@ function isMediaFile(contentType) {
 }
 
 function isMediaPath(filePath) {
-    if (!filePath) return false;
+    if (!filePath) {
+        return false;
+    }
     const lower = filePath.toLowerCase();
     return (
         lower.endsWith('.mp4') ||
@@ -250,7 +252,9 @@ function isMediaPath(filePath) {
 
 function cacheMediaFile(url, entry) {
     const incomingSize = entry.length || 0;
-    if (incomingSize <= 0) return;
+    if (incomingSize <= 0) {
+        return;
+    }
 
     if (incomingSize > MEDIA_CACHE_MAX_BYTES) {
         console.warn('[PeerWeb SW] Media caching refused (file exceeds cache max):', url, incomingSize);
@@ -416,25 +420,25 @@ async function handlePeerWebRequest(request) {
     // If site is not loaded yet, wait for it
     if (!currentSiteHash) {
         console.log('[PeerWeb SW] Site not ready yet, waiting...');
-        
+
         // Dynamic wait time: start with 30 seconds, can be extended
         // We give more time for larger sites to initialize
         const baseWait = 30000; // 30 seconds base
         const maxWait = 120000; // Maximum 2 minutes
-        
+
         const startTime = Date.now();
-        let waitTime = baseWait;
-        
+        const waitTime = baseWait;
+
         while (!currentSiteHash && (Date.now() - startTime) < maxWait) {
             await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms
-            
+
             // Log progress every 5 seconds
             const elapsed = Date.now() - startTime;
             if (elapsed % 5000 < 100) {
                 console.log(`[PeerWeb SW] Still waiting for site... (${(elapsed / 1000).toFixed(0)}s elapsed)`);
             }
         }
-        
+
         if (!currentSiteHash) {
             console.log('[PeerWeb SW] Timeout waiting for site to load');
             return new Response('Site not loaded - timeout. The site may be too large or downloading slowly.', {
@@ -442,7 +446,7 @@ async function handlePeerWebRequest(request) {
                 headers: { 'Content-Type': 'text/plain' }
             });
         }
-        
+
         console.log('[PeerWeb SW] Site now ready:', currentSiteHash);
     }
 
@@ -563,7 +567,7 @@ async function requestResourceFromMainThread(requestUrl, filePath, range) {
                 const mainClients = clients.filter(client => {
                     return client.url && !client.url.includes('/peerweb-site/');
                 });
-                
+
                 console.log('[PeerWeb SW] Main (non-iframe) clients:', mainClients.length);
 
                 if (mainClients.length > 0) {

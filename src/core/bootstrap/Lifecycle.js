@@ -13,6 +13,7 @@ import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWiz
 import ChannelsService from '../../channels/ChannelsService.js';
 import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
 import { getUnlockedPrivateKey } from '../../auth/LocalWalletService.js';
+import { getPublicKeyFromPrivateKey } from '../../channels/ecies.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -22,7 +23,8 @@ import {
     clearChannelsMessages,
     renderChannelsStatus,
     setLocalAnswerCode,
-    setLocalOfferCode
+    setLocalOfferCode,
+    updateDmOwnPubkey
 } from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
@@ -556,6 +558,22 @@ export function setupAuthAwareUi(state) {
     const registerBtn = document.getElementById('register-wallet-btn');
     if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
+
+    // Update DM panel "My Public Key" display
+    if (isAuthenticated) {
+        const privateKey = getUnlockedPrivateKey();
+        let ownPubKey = null;
+        if (privateKey) {
+            try {
+                ownPubKey = getPublicKeyFromPrivateKey(privateKey);
+            } catch (_) {
+                ownPubKey = null;
+            }
+        }
+        updateDmOwnPubkey(ownPubKey);
+    } else {
+        updateDmOwnPubkey(null);
+    }
 
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');

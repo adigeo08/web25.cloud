@@ -36,8 +36,8 @@
         "node": ">=14.0.0"
     },
     "devDependencies": {
-        "@noble/curves": "^1.4.2",
-        "@noble/hashes": "^1.4.0",
+        "@noble/curves": "^1.9.7",
+        "@noble/hashes": "^1.8.0",
         "eslint": "^8.55.0",
         "http-server": "^14.1.1",
         "nodemon": "^3.0.2",
