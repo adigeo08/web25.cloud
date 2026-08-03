@@ -25,7 +25,7 @@
 
 ### B. Direct Message path (`WebRTC` + STUN + ECIES)
 
-- `ChannelsService` currently does manual signaling with JSON “signal code” that embeds:
+- `ChannelsService` currently does manual signaling with JSON "signal code" that embeds:
   - base64 SDP description (`offer` or `answer`);
   - peer `evmAddress`;
   - peer secp256k1 public key.
@@ -39,151 +39,148 @@
   - encrypts envelope with ECIES to peer pubkey;
   - receiver decrypts and verifies signature.
 - No plaintext fallback is allowed in DM send/receive paths.
-- Manual UX points today:
-  - host copies offer text;
-  - guest pastes offer, copies answer;
-  - host pastes answer.
 
-**Key observation:** ICE trickle is not exchanged incrementally; flow waits for ICE gathering and bundles local description in one signal object, so 2 artifacts (offer bootstrap + answer bootstrap) are enough for current handshake model.
-
-## 2) Bridge architecture proposal (without replacing WebRTC/ECIES)
-
-Create a **bootstrap transport layer** for DM using WebTorrent + `.torrentchain` and keep `ChannelsService` crypto/data-plane unchanged.
-
-### New concept
+## 2) Bridge architecture (v2 encrypted protocol)
 
 Each peer publishes a small JSON (`dm-bootstrap.json`) as a torrent that also includes `.torrentchain`.
 
-- Transport: magnet link.
-- AuthN/AuthZ: `.torrentchain` signature + payload checks.
-- Payload content: signaling data currently copied manually.
-- Data channel, STUN, ECIES chat encryption: unchanged.
+- **Transport:** magnet link.
+- **AuthN/AuthZ:** `.torrentchain` signature + payload checks.
+- **Confidentiality:** ECIES-encrypted inner payload (only the intended recipient can decrypt).
+- **Data channel, STUN, ECIES chat encryption:** unchanged.
 
-## 3) Recommended DM bootstrap JSON
+### Key design principle
+
+The torrent file contains a **minimal plaintext envelope** signed by `.torrentchain`, plus an **ECIES-encrypted inner payload** that can only be decrypted by the intended recipient's private key. The host must know (and validate) the recipient's secp256k1 ECIES public key before generating an offer.
+
+## 3) v2 Bootstrap envelope schema
+
+### Outer envelope (plaintext, signed by `.torrentchain`)
 
 ```json
 {
-  "type": "direct-message-bootstrap",
-  "version": 1,
+  "type": "direct-message-bootstrap-v2",
+  "version": 2,
   "role": "offer|answer",
-  "from": {
-    "evmAddress": "0x...",
-    "identityPublicKey": "04...",
-    "identitySignature": "0x..."
-  },
-  "to": {
-    "evmAddress": "0x..."
-  },
-  "webrtc": {
-    "sdp": { "type": "offer", "sdp": "..." },
-    "iceComplete": true,
-    "stunServers": ["stun:stun.l.google.com:19302"]
-  },
-  "session": {
-    "sessionId": "hex-random",
-    "createdAt": 1777550000000,
-    "expiresAt": 1777551800000,
-    "nonce": "hex-random"
+  "from": { "evmAddress": "0xSENDER" },
+  "to": { "evmAddress": "0xRECIPIENT" },
+  "createdAt": 1777550000000,
+  "expiresAt": 1777551800000,
+  "encrypted": {
+    "algorithm": "ECIES-secp256k1-HKDF-SHA256-AES-256-GCM",
+    "ciphertext": "<hex ECIES payload>"
   }
 }
 ```
 
-Notes:
-- `identitySignature` is optional if `.torrentchain` signature is considered sufficient for publisher proof; keep optional for forward compatibility.
-- `to.evmAddress` is mandatory to enforce intended recipient check.
-- keep short TTL (10–30 min).
+### Inner payload (ECIES-encrypted; only recipient can read)
+
+```json
+{
+  "from": {
+    "evmAddress": "0xSENDER",
+    "eciesPublicKey": "04..."
+  },
+  "webrtc": {
+    "description": { "type": "offer", "sdp": "..." },
+    "iceComplete": true,
+    "stunServers": ["stun:stun.l.google.com:19302"]
+  },
+  "session": {
+    "sessionId": "hex-random-24-chars",
+    "replyToSessionId": null,
+    "createdAt": 1777550000000,
+    "expiresAt": 1777551800000,
+    "nonce": "hex-random-24-chars"
+  }
+}
+```
+
+**What is visible in plaintext (pre-decryption):**
+- Sender and recipient EVM addresses, creation/expiry timestamps.
+- Existence of a DM invite on the network (not its content).
+
+**What is confidential (inside ciphertext):**
+- WebRTC SDP offer/answer (ICE candidates, codecs, etc.).
+- Sender ECIES public key.
+- `sessionId`, `replyToSessionId`, and `nonce` — no session correlation from torrent metadata.
+- Torrent name is `dm-offer` or `dm-answer` (no `sessionId` embedded).
+
+**Note:** `containerKey` has been removed. Session binding uses `sessionId` / `replyToSessionId` only.
 
 ## 4) Verification rules for imported magnet
 
-When A imports B magnet (and vice versa), run:
-1. download torrent;
-2. extract `.torrentchain` + `dm-bootstrap.json`;
-3. `verifyTorrentChainManifest(manifest)`;
-4. ensure `manifest.payload.publisher == bootstrap.from.evmAddress`;
-5. ensure local user address equals `bootstrap.to.evmAddress`;
-6. recompute SHA256 for `dm-bootstrap.json` and match manifest file entry;
-7. enforce TTL (`now <= expiresAt`) and max age;
-8. replay protection: cache tuple `(from, to, sessionId, nonce)` and reject duplicates.
+When peer A imports a magnet from peer B:
+1. Download torrent.
+2. Extract `.torrentchain` + `dm-bootstrap.json`.
+3. `verifyTorrentChainManifest(manifest)` → get verified `publisher`.
+4. Verify `publisher === envelope.from.evmAddress`.
+5. Verify `envelope.to.evmAddress === localAddress` (recipient binding).
+6. Recompute SHA256 for `dm-bootstrap.json` and match manifest file entry.
+7. Verify `createdAt` not too far in the future (max 2 min skew) and `expiresAt > now`.
+8. Decrypt `envelope.encrypted.ciphertext` using local private key.
+9. Verify `innerPayload.from.evmAddress === envelope.from.evmAddress`.
+10. Verify `evmAddressFromPublicKey(innerPayload.from.eciesPublicKey) === innerPayload.from.evmAddress`.
+11. Verify inner timestamps.
+12. For answers: verify `innerPayload.session.replyToSessionId === expectedSessionId`.
+13. Replay protection: cache `(from, to, sessionId, nonce)` and reject duplicates.
 
-## 5) Answers to requested questions
+## 5) Offer/answer flow
 
-1. **Reusable directly:** `.torrentchain` build/verify, signer verification, WebTorrent seeding/loading patterns, tracker config.
-2. **Extract to common module:** DM-specific torrent helpers (seed/load/find file) + generic `verifyTorrentPayloadAgainstManifest(fileName, bytes, manifest)` utility.
-3. **Required JSON fields:** role, from identity (evm+pubkey), recipient evm, SDP, session id, nonce, timestamps, expiry.
-4. **Are 2 magnet links enough?** Yes for current non-trickle flow (offer artifact + answer artifact).
-5. **If not enough:** only if later enabling trickle ICE; then would need update channel or re-publish deltas.
-6. **Can we eliminate manual SDP/ICE/key copy?** Yes; users exchange only magnets.
-7. **What stays on WebRTC/STUN:** peer connection setup, ICE gathering, data channel transport.
-8. **What stays ECIES-encrypted:** actual chat/file message payloads on data channel.
-9. **Risks with public torrent JSON:** metadata leakage (addresses, timing, room/session correlation), replay, scraping.
-10. **Encrypt vs public:** SDP + addresses can remain public if recipient-bound + short TTL; never include private keys or wallet secrets; optional extra encryption for SDP can be added later.
-11. **How verify magnet belongs to expected EVM:** `.torrentchain` signature recovers publisher; compare to expected EVM and bootstrap `from`.
-12. **How verify intended recipient:** enforce `bootstrap.to.evmAddress === localAddress`.
-13. **Replay prevention:** TTL + nonce/session cache + reject stale `createdAt`.
-14. **Recommended expiration:** default 15 minutes; hard max 30 minutes.
-15. **Concrete DM page changes:** replace textarea offer/answer exchange with magnet create/import controls; keep channel connect/send UI.
+### Offer: Host → Guest
 
-## 6) Concrete implementation plan
+1. Host knows the guest's ECIES public key (`04…` hex).
+2. Host derives `recipientAddress = evmAddressFromPublicKey(recipientPublicKey)`.
+3. Host creates inner payload: SDP offer, own `eciesPublicKey`, `sessionId`, timestamps, nonce.
+4. Host ECIES-encrypts inner payload to guest's public key.
+5. Host creates plaintext envelope with `from/to` addresses + ciphertext.
+6. Host signs envelope with `.torrentchain` and seeds the torrent.
+7. Host shares the magnet link with the guest.
 
-1. Add `src/channels/DirectMessageTorrentBootstrap.js` with:
-   - `createDirectMessageBootstrapTorrent(...)`
-   - `loadDirectMessageBootstrapFromMagnet(...)`
-   - `verifyDirectMessageTorrentchain(...)`
-2. Extend `ChannelsService` with low-level methods:
-   - `createOfferSignalPayload(identity)` returns decoded signal object (not encoded string)
-   - `createAnswerSignalPayloadFromOfferPayload(...)`
-   - `applyRemoteAnswerPayload(...)`
-   (keep existing methods for backward compatibility).
-3. Update `Lifecycle.setupChannels()` and `ChannelsPanel`:
-   - add generate magnet buttons for offer/answer;
-   - add import magnet input for remote offer/answer;
-   - auto-run verify+handshake after import.
-4. Reuse existing WebTorrent client (`this.client`) and tracker list (`this.trackers`) for DM bootstrap torrents.
-5. Add in-memory replay cache + expiry checks.
-6. Keep old manual mode under a feature flag fallback until stable.
+### Answer: Guest → Host
 
-## 7) Pseudocode snippets
+1. Guest receives the magnet link, downloads torrent.
+2. Guest validates signature + recipient binding.
+3. Guest decrypts offer with their local private key.
+4. Guest validates inner payload coherence (address ↔ public key, timestamps, etc.).
+5. Guest creates answer inner payload: SDP answer, own public key, `replyToSessionId = offer.session.sessionId`, timestamps, nonce.
+6. Guest ECIES-encrypts answer to **host's** `eciesPublicKey` (recovered from decrypted offer).
+7. Guest signs envelope with `.torrentchain` and seeds the answer torrent.
+8. Guest shares the answer magnet link with the host.
+9. Host validates, decrypts, verifies `replyToSessionId` matches active offer, applies WebRTC answer.
 
-```js
-async function createDirectMessageBootstrapTorrent({ client, trackers, identity, recipientAddress, role, signalPayload }) {
-  const bootstrap = buildBootstrapJson({ identity, recipientAddress, role, signalPayload });
-  const bootstrapBytes = new TextEncoder().encode(JSON.stringify(bootstrap, null, 2));
-  const bootstrapFile = makeVirtualFile('dm-bootstrap.json', bootstrapBytes, 'application/json');
+## 6) Security properties
 
-  const chainArtifact = await createTorrentChainArtifact({
-    inMemoryFiles: [bootstrapFile],
-    publisher: identity.address,
-    chainId: identity.chainId || 1,
-    identityType: identity.identityType,
-    createdAt: bootstrap.session.createdAt,
-    bundle: null,
-    filesSemantics: 'torrent-entries'
-  });
+| Property | Mechanism |
+|---|---|
+| **Authenticity** | `.torrentchain` signature by sender's EVM key |
+| **Integrity** | SHA256 file hash in `.torrentchain` manifest |
+| **Confidentiality** | ECIES encryption of inner payload |
+| **Recipient binding** | `to.evmAddress` check + only correct private key decrypts |
+| **Sender binding** | `publisher === from.evmAddress` + key/address coherence in inner payload |
+| **Replay protection** | Nonce + session ID + in-memory cache per session |
+| **Expiry** | Short TTL (15 min default); `expiresAt` enforced on both envelope and inner payload |
+| **Session correlation** | `sessionId` / `replyToSessionId` inside ciphertext; not in torrent name or plaintext |
 
-  const chainFile = makeVirtualFile('.torrentchain', chainArtifact.content, 'application/json');
-  const torrent = await seedFiles(client, [chainFile, bootstrapFile], trackers, `dm-${role}-${bootstrap.session.sessionId}`);
-  return { magnetURI: torrent.magnetURI, infoHash: torrent.infoHash, bootstrap };
-}
-```
+**No private keys** ever enter the torrent, envelope, UI, logs, or tests.
 
-```js
-async function loadDirectMessageBootstrapFromMagnet({ client, magnetURI, expectedFrom, localAddress }) {
-  const torrent = await addMagnet(client, magnetURI);
-  const { manifest, bootstrap, bootstrapBytes } = await extractManifestAndBootstrap(torrent);
-  await verifyDirectMessageTorrentchain({ manifest, bootstrap, bootstrapBytes, expectedFrom, localAddress });
-  return bootstrap;
-}
-```
+## 7) Migration from v1
 
-```js
-async function verifyDirectMessageTorrentchain({ manifest, bootstrap, bootstrapBytes, expectedFrom, localAddress }) {
-  const sig = await verifyTorrentChainManifest(manifest);
-  if (!sig.verified) throw new Error('Invalid .torrentchain signature');
-  if (sig.publisher.toLowerCase() !== bootstrap.from.evmAddress.toLowerCase()) throw new Error('Publisher mismatch');
-  if (expectedFrom && sig.publisher.toLowerCase() !== expectedFrom.toLowerCase()) throw new Error('Unexpected sender');
-  if (bootstrap.to.evmAddress.toLowerCase() !== localAddress.toLowerCase()) throw new Error('Not addressed to current user');
-  enforceExpiryAndReplay(bootstrap.session);
-  await verifyManifestEntryHash(manifest, 'dm-bootstrap.json', bootstrapBytes);
-  return true;
-}
-```
+Legacy v1 bootstrap artifacts (`type: "direct-message-bootstrap"`, `version: 1`) are **rejected** with a clear error:
+
+> "This is a legacy v1 Direct Message bootstrap artifact. The v1 unencrypted protocol is no longer supported. Please ask your peer to generate a new encrypted invite using the current version."
+
+There is no silent fallback. All parties must use v2 clients.
+
+## 8) Implementation modules
+
+- **`src/channels/DirectMessageTorrentBootstrap.js`**
+  - `createEncryptedDMBootstrapArtifact(...)` — build envelope + encrypt inner payload
+  - `decryptAndVerifyDMBootstrapArtifact(...)` — decrypt + validate (injectable verifier for tests)
+  - `createDirectMessageBootstrapTorrent(...)` — full WebTorrent seed flow
+  - `loadDirectMessageBootstrapFromMagnet(...)` — full WebTorrent load + verify flow
+  - `verifyDirectMessageTorrentchain(...)` — validate manifest + decrypt + verify
+- **`src/channels/ecies.js`** — `eciesEncrypt`, `eciesDecrypt`, `getPublicKeyFromPrivateKey`, `evmAddressFromPublicKey`
+- **`src/core/bootstrap/Lifecycle.js`** — orchestration; passes `recipientPublicKey` and `localPrivateKey`
+- **`src/ui/channels/ChannelsPanel.js`** — reads `#dm-recipient-pubkey-input` and passes to callback
+
