@@ -240,7 +240,7 @@ test('createAnswerFromOffer rejects offer with publicKey but no evmAddress (part
     const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
     await assert.rejects(
         () => service.createAnswerFromOffer('builders', partialOfferCode, { address: GUEST_ADDRESS }),
-        /Malformed peer identity/
+        /Missing peer identity/
     );
 });
 
@@ -253,7 +253,7 @@ test('createAnswerFromOffer rejects offer with evmAddress but no publicKey (part
     const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
     await assert.rejects(
         () => service.createAnswerFromOffer('builders', partialOfferCode, { address: GUEST_ADDRESS }),
-        /Malformed peer identity/
+        /Missing peer identity/
     );
 });
 
@@ -266,7 +266,7 @@ test('applyAnswer rejects answer with publicKey but no evmAddress (partial ident
         publicKey: GUEST_PUB_KEY,
         evmAddress: null
     });
-    await assert.rejects(() => service.applyAnswer(partialAnswerCode), /Malformed peer identity/);
+    await assert.rejects(() => service.applyAnswer(partialAnswerCode), /Missing peer identity/);
 });
 
 test('applyAnswer rejects answer with evmAddress but no publicKey (partial identity)', async () => {
@@ -278,7 +278,49 @@ test('applyAnswer rejects answer with evmAddress but no publicKey (partial ident
         publicKey: null,
         evmAddress: GUEST_ADDRESS
     });
-    await assert.rejects(() => service.applyAnswer(partialAnswerCode), /Malformed peer identity/);
+    await assert.rejects(() => service.applyAnswer(partialAnswerCode), /Missing peer identity/);
+});
+
+test('createAnswerFromOffer rejects offer with missing identity fields', async () => {
+    const missingIdentityOfferCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64')
+    });
+    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    await assert.rejects(
+        () => service.createAnswerFromOffer('builders', missingIdentityOfferCode, { address: GUEST_ADDRESS }),
+        /Missing peer identity/
+    );
+});
+
+test('applyAnswer rejects answer with missing identity fields', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    await service.createHostOffer('builders', { address: HOST_ADDRESS });
+
+    const missingIdentityAnswerCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'answer', sdp: 'xyz' }), 'utf8').toString('base64')
+    });
+    await assert.rejects(() => service.applyAnswer(missingIdentityAnswerCode), /Missing peer identity/);
+});
+
+test('createHostOffer rejects when local wallet private key is unavailable', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => null });
+    await assert.rejects(
+        () => service.createHostOffer('builders', { address: HOST_ADDRESS }),
+        /wallet is locked or private key is unavailable/
+    );
+});
+
+test('createAnswerFromOffer rejects when local wallet private key is unavailable', async () => {
+    const offerCode = JSON.stringify({
+        description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64'),
+        evmAddress: HOST_ADDRESS,
+        publicKey: HOST_PUB_KEY
+    });
+    const service = new ChannelsService({ getPrivateKey: () => null });
+    await assert.rejects(
+        () => service.createAnswerFromOffer('builders', offerCode, { address: GUEST_ADDRESS }),
+        /wallet is locked or private key is unavailable/
+    );
 });
 
 test('onmessage emits error event for garbled ciphertext instead of silently dropping it', async () => {
@@ -288,6 +330,7 @@ test('onmessage emits error event for garbled ciphertext instead of silently dro
 
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set after createHostOffer (leaveChannel resets it)
+    service.peerAddress = GUEST_ADDRESS;
     service.dataChannel.readyState = 'open';
 
     // Send completely garbled (non-ECIES) data
@@ -327,6 +370,7 @@ test('sendChatMessage emits local event and sends ECIES-encrypted payload', asyn
 
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
+    service.peerAddress = GUEST_ADDRESS;
     service.dataChannel.readyState = 'open';
     await service.sendChatMessage('salut', { address: HOST_ADDRESS });
 
@@ -350,6 +394,7 @@ test('transmit sends ECIES-encrypted + signed payload when peerPublicKey is set'
     const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
+    service.peerAddress = GUEST_ADDRESS;
     service.dataChannel.readyState = 'open';
 
     const payload = { type: 'chat', id: 'test-1', text: 'secret', channel: 'builders', from: HOST_ADDRESS, timestamp: new Date().toISOString() };
@@ -363,6 +408,20 @@ test('transmit sends ECIES-encrypted + signed payload when peerPublicKey is set'
     assert.equal(await verifySignature(plaintext, signature, HOST_PUB_KEY), true);
 });
 
+test('transmit rejects when verified peer identity is missing', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const events = [];
+    service.onUpdate((e) => events.push(e));
+
+    await service.createHostOffer('builders', { address: HOST_ADDRESS });
+    service.dataChannel.readyState = 'open';
+
+    const sent = await service.transmit({ type: 'chat', id: 'missing-peer', text: 'secret', channel: 'builders', from: HOST_ADDRESS, timestamp: new Date().toISOString() });
+    assert.equal(sent, false);
+    assert.equal(service.dataChannel.sent.length, 0);
+    assert.equal(events.some((e) => e.type === 'error' && e.error?.message?.includes('verified peer identity')), true);
+});
+
 test('onmessage decrypts ECIES payload, verifies signature, and calls handleInbound', async () => {
     const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
     const events = [];
@@ -370,6 +429,7 @@ test('onmessage decrypts ECIES payload, verifies signature, and calls handleInbo
 
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
+    service.peerAddress = GUEST_ADDRESS;
     service.dataChannel.readyState = 'open';
 
     const inboundPayload = {
@@ -399,6 +459,7 @@ test('onmessage emits error event when signature verification fails', async () =
 
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
+    service.peerAddress = GUEST_ADDRESS;
     service.dataChannel.readyState = 'open';
 
     const inboundPayload = { type: 'chat', id: 'tampered-1', text: 'bad', channel: 'builders', from: GUEST_ADDRESS, timestamp: new Date().toISOString() };
@@ -412,6 +473,21 @@ test('onmessage emits error event when signature verification fails', async () =
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.equal(events.some((e) => e.type === 'error' && e.error?.message?.includes('signature')), true);
+    assert.equal(events.some((e) => e.type === 'message'), false);
+});
+
+test('onmessage rejects payload before peer identity is verified', async () => {
+    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const events = [];
+    service.onUpdate((e) => events.push(e));
+
+    await service.createHostOffer('builders', { address: HOST_ADDRESS });
+    service.dataChannel.readyState = 'open';
+
+    await service.dataChannel.onmessage?.({ data: 'abcdef' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(events.some((e) => e.type === 'error' && e.error?.message?.includes('verified peer identity')), true);
     assert.equal(events.some((e) => e.type === 'message'), false);
 });
 
@@ -452,6 +528,7 @@ test('sendFile emits file-send-start and transmits ECIES-encrypted file-info + f
     const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
+    service.peerAddress = GUEST_ADDRESS;
     service.dataChannel.readyState = 'open';
 
     const events = [];

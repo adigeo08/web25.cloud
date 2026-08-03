@@ -151,3 +151,28 @@ test('Legacy/orphan permissive mode allows load but strict mode blocks', async (
 
     PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN = original;
 });
+
+test('Default configuration enforces strict .torrentchain requirement', () => {
+    assert.equal(PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN, true);
+});
+
+test('Malformed .torrentchain manifest is rejected before render', async () => {
+    const ctx = {
+        currentSiteSignatureStatus: null,
+        buildSignatureState,
+        log() {},
+        hideLoadingOverlay() {},
+        reportVerificationIssue() {},
+        readFileBuffer() {
+            return new TextEncoder().encode('not-json');
+        }
+    };
+    const torrent = {
+        files: [{ name: '.torrentchain', path: '.torrentchain' }],
+        destroy() {}
+    };
+
+    const result = await verifyTorrentChainBeforeDownload.call(ctx, torrent, 'c'.repeat(40));
+    assert.equal(result.ok, false);
+    assert.equal(result.signatureState.label, 'Failed to parse .torrentchain');
+});
