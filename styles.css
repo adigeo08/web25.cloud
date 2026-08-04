@@ -2302,3 +2302,191 @@ p { color:#a7bdc7; }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:.01ms !important; }
 }
+
+/* ── Cohesive surfaces and device-safe content ── */
+:is(.quick-upload, .deploy-card, .roadmap-card, .coming-soon-panel, .upload-result, .requirements, .benefits, .feature, .benefit, .req, .channels-messages, .channels-message, .dm-role-card, .dm-step-card, .dm-own-pubkey-panel, .identity-profile-card, .identity-keys-panel, .code-block, details) {
+    border-color: var(--line);
+    border-radius: 10px;
+}
+
+.identity-widget-grid {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr);
+    align-items: stretch;
+}
+
+.identity-main-widget,
+.identity-keys-panel {
+    min-width: 0;
+}
+
+.identity-keys-panel {
+    display: grid;
+    align-content: start;
+    gap: 0.8rem;
+    padding: 1rem;
+    border: 1px solid var(--line);
+    background: rgba(85, 230, 255, 0.035);
+}
+
+.identity-keys-panel.hidden {
+    display: none;
+}
+
+.identity-key-block {
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid rgba(85, 230, 255, 0.13);
+    border-radius: 8px;
+    background: rgba(2, 7, 11, 0.5);
+}
+
+.identity-key-label {
+    margin: 0 0 0.35rem;
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.identity-key-value,
+.dm-own-pubkey-value {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    color: #a9eef8;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+    user-select: all;
+}
+
+.identity-pubkey-row,
+.dm-own-pubkey-panel > div {
+    min-width: 0;
+}
+
+.identity-pubkey-row .identity-key-value {
+    flex: 1 1 12rem;
+}
+
+.identity-pubkey-row .btn {
+    flex: 0 0 auto;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.identity-security-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.9rem;
+}
+
+.identity-security-summary span {
+    padding: 0.3rem 0.5rem;
+    border: 1px solid rgba(85, 230, 255, 0.2);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(85, 230, 255, 0.04);
+    font-size: 0.68rem;
+}
+
+textarea,
+input,
+select,
+.code-block,
+.upload-result,
+.channels-message,
+.dm-error-message {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+textarea,
+input,
+select {
+    box-sizing: border-box;
+}
+
+.channels-message-meta,
+.channels-message-body,
+#channels-status,
+#channels-files {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+@media (max-width: 800px) {
+    .identity-widget-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dm-role-cards {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dm-role-card {
+        min-width: 0;
+    }
+
+    .dm-or-separator {
+        margin: -0.25rem auto;
+    }
+}
+
+@media (max-width: 480px) {
+    .card-base,
+    .quick-upload,
+    .deploy-card,
+    .dm-role-card,
+    .dm-step-card {
+        padding: 1rem !important;
+    }
+
+    .identity-profile-header {
+        align-items: flex-start;
+    }
+
+    .identity-avatar {
+        flex: 0 0 2.6rem;
+        width: 2.6rem;
+        height: 2.6rem;
+    }
+
+    .identity-pubkey-row,
+    .dm-own-pubkey-panel > div,
+    #dm-chat-active > div:has(#channels-message-input) {
+        display: flex !important;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .identity-pubkey-row .btn,
+    .dm-own-pubkey-panel .btn {
+        width: 100%;
+        margin-left: 0 !important;
+    }
+
+    #channels-message-input {
+        flex: 1 1 100% !important;
+    }
+
+    #channels-attach-btn,
+    #channels-send-btn {
+        width: auto;
+        flex: 1 1 0;
+    }
+
+    .channels-messages {
+        min-height: 180px;
+        padding: 0.55rem;
+    }
+}
+
+.identity-widget-grid:has(.identity-keys-panel.hidden) {
+    grid-template-columns: minmax(0, 1fr);
+}
