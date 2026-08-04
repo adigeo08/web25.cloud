@@ -1,15 +1,19 @@
 // @ts-check
 
 export function renderIdentityBadge(state) {
-    const node = document.getElementById('identity-badge');
-    if (!node) return;
+    const statusNode = document.getElementById('local-wallet-meta');
 
-    if (!state.address) {
-        node.textContent = 'Anonymous profile';
+    if (!statusNode) return;
+
+    if (state.localWalletUnlocked) {
+        statusNode.textContent = 'Local wallet: unlocked';
         return;
     }
 
-    const short = `${state.address.slice(0, 6)}...${state.address.slice(-4)}`;
-    const passkeyIcon = state.passkeyProtected ? ' 🔐' : '';
-    node.textContent = `${state.identityType} profile · ${short}${passkeyIcon}`;
+    if (state.localWalletExists) {
+        statusNode.textContent = 'Local wallet: locked';
+        return;
+    }
+
+    statusNode.textContent = 'Local wallet: not registered';
 }

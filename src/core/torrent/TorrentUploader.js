@@ -566,7 +566,7 @@ export async function seedInMemoryDeployBundle(inMemoryFiles, sourceFiles, onPro
                     announce: this.trackers,
                     name: this.generateTorrentName(sourceFiles || inMemoryFiles),
                     comment: 'Web25 Deploy Artifact (in-memory bundle)',
-                    createdBy: 'Web25.Cloud Deploy',
+                    createdBy: 'WEB25.cloud Deploy',
                     private: false,
                     pieceLength: this.calculateOptimalPieceLength(inMemoryFiles)
                 },

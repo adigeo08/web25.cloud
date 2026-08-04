@@ -1768,7 +1768,7 @@ a:hover {
         min-height: 44px;
         min-width: 44px;
     }
-    
+
     .btn,
     .tab-btn {
         min-height: 44px;
@@ -2287,7 +2287,6 @@ p { color:#a7bdc7; }
     .tab-nav { flex-direction:row; flex-wrap:nowrap; justify-content:flex-start !important; overflow-x:auto; border-bottom:1px solid var(--line); }
     .tab-btn { width:auto; flex:0 0 auto; border-color:transparent; }
     .hero { padding-top:1.8rem; }
-    .network-telemetry { display:none; }
     .container { margin:1rem .65rem 2rem; border-radius:10px; }
     .quick-upload { padding:1rem; }
     .deploy-stepper { grid-template-columns:repeat(2,1fr); }
@@ -2489,4 +2488,50 @@ select {
 
 .identity-widget-grid:has(.identity-keys-panel.hidden) {
     grid-template-columns: minmax(0, 1fr);
+}
+
+/* Cardul principal - centrare și aliniere verticală */
+#deploy-auth-wall {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+
+    max-width: 400px;
+    margin: 2rem auto;
+    padding: 2.5rem 2rem;
+    gap: 1.5rem; /* spațiere între secțiunile principale */
+
+    /* Stiluri opționale pentru aspect de card */
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    background-color: #ffffff;
+}
+
+/* Gruparea butoanelor pe verticală */
+#deploy-auth-wall .button-group {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 0.75rem; /* spațiere între butoane */
+}
+
+/* Stilizarea butoanelor pentru latime intreaga */
+#deploy-auth-wall .btn {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+/* Ascundere corectă pentru elementul cu clasa .hidden */
+#deploy-auth-wall .hidden {
+    display: none !important;
+}
+
+/* Stil text subsol/informații */
+#deploy-auth-wall div:last-child p {
+    margin: 0.25rem 0;
+    font-size: 0.875rem;
 }

@@ -1,8 +1,8 @@
-# ☁️ Web25.Cloud
+# ☁️ WEB25.cloud
 
 **Decentralized web platform for peer-to-peer static-site hosting + local EVM identity + signed torrent publishing + P2P direct messaging, fully in browser.**
 
-Web25.Cloud is a [PeerWeb fork (`Omodaka9375/peerweb`)](https://github.com/Omodaka9375/peerweb) with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, and direct encrypted peer messaging.
+WEB25.cloud is a [PeerWeb fork (`Omodaka9375/peerweb`)](https://github.com/Omodaka9375/peerweb) with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, and direct encrypted peer messaging.
 
 ---
 
@@ -252,7 +252,7 @@ How Web25 builds on this fork base:
 - extends publishing with signed `.torrentchain` provenance and integrity checks;
 - adds local EVM identity and direct peer messaging while keeping the upstream spirit.
 
-In short: Web25.Cloud is built on top of the upstream `Omodaka9375/peerweb` fork and extends it with identity-bound signing/messaging capabilities.
+In short: WEB25.cloud is built on top of the upstream `Omodaka9375/peerweb` fork and extends it with identity-bound signing/messaging capabilities.
 
 ### 2) [`mylofi/local-data-lock`](https://github.com/mylofi/local-data-lock)
 

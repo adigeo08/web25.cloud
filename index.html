@@ -4,29 +4,29 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <!-- HTML Meta Tags -->
-        <title>Web25.Cloud - Decentralized Web Platform</title>
+        <title>WEB25.cloud - Decentralized Web Platform</title>
         <meta
             name="description"
-            content="Web25.Cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
+            content="WEB25.cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
         />
 
         <!-- Facebook Meta Tags -->
         <meta property="og:url" content="https://web25.cloud/" />
         <meta property="og:type" content="website" />
-        <meta property="og:title" content="Web25.Cloud - Decentralized Web Platform" />
+        <meta property="og:title" content="WEB25.cloud - Decentralized Web Platform" />
         <meta
             property="og:description"
-            content="Web25.Cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
+            content="WEB25.cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
         />
 
         <!-- Twitter Meta Tags -->
         <meta name="twitter:card" content="summary_large_image" />
         <meta property="twitter:domain" content="web25.cloud" />
         <meta property="twitter:url" content="https://web25.cloud/" />
-        <meta name="twitter:title" content="Web25.Cloud - Decentralized Web Platform" />
+        <meta name="twitter:title" content="WEB25.cloud - Decentralized Web Platform" />
         <meta
             name="twitter:description"
-            content="Web25.Cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
+            content="WEB25.cloud delivers peer-to-peer static site hosting with WebAuthn passkey-protected signing, signed torrent deployments, and resilient browser-to-browser seeding."
         />
 
         <!-- PWA Meta Tags -->
@@ -34,7 +34,7 @@
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <meta name="apple-mobile-web-app-title" content="Web25.Cloud" />
+        <meta name="apple-mobile-web-app-title" content="WEB25.cloud" />
         <link rel="manifest" href="./manifest.json" />
 
         <link
@@ -62,10 +62,9 @@
                 <div class="hero-kicker"><span class="live-dot"></span> DECENTRALIZED EDGE NETWORK · ONLINE</div>
                 <h1>
                     <a class="maintitle" href="https://github.com/adigeo08/web25.cloud" target="_blank"
-                        >☁️ Web25.Cloud</a
+                        >☁️ WEB25.cloud</a
                     >
                 </h1>
-                <h2>Decentralized Web Platform — Hosting · Identity · Messaging</h2>
                 <div class="network-telemetry" aria-label="Network status">
                     <span><b>01</b> BROWSER NODE</span><span><b>E2E</b> ENCRYPTED</span><span><b>P2P</b> DELIVERY</span>
                 </div>
@@ -91,65 +90,69 @@
                 <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload identity-dashboard card-base">
                         <h3>📇 Local Identity Profile</h3>
-                        <p>Manage your local signing identity and recovery options.</p>
+
                         <div class="identity-widget-grid">
-                            <div class="identity-profile-card identity-main-widget">
+                            <div
+                                id="identity-profile-card"
+                                class="identity-profile-card identity-main-widget hidden"
+                            >
                                 <div class="identity-profile-header">
-                                    <div class="identity-avatar" aria-hidden="true">📇</div>
+                                    <div class="identity-avatar" aria-hidden="true">🔓</div>
+
                                     <div class="identity-profile-main">
-                                        <p id="identity-badge" class="identity-profile-name">Identity: anonymous</p>
-                                        <p id="auth-status" class="identity-profile-status">Status: anonymous</p>
+                                        <p id="local-wallet-meta" class="identity-profile-status">
+                                            Local wallet: unlocked
+                                        </p>
                                     </div>
                                 </div>
-                                <div class="identity-profile-details">
-                                    <p id="local-wallet-meta" class="identity-profile-detail">Local wallet: not registered</p>
-                                    <div class="identity-security-summary" aria-label="Identity security summary">
-                                        <span>Local storage</span>
-                                        <span>EVM signing</span>
-                                        <span>Zero custody</span>
-                                    </div>
+
+                                <div class="button-group identity-wallet-actions">
+                                    <button
+                                        id="lock-disconnect-auth-btn"
+                                        class="btn btn-secondary hidden"
+                                    >
+                                        Lock Wallet
+                                    </button>
+
+                                    <button
+                                        id="delete-local-wallet-btn"
+                                        class="btn btn-clear"
+                                    >
+                                        Delete Wallet
+                                    </button>
+
+                                    <button
+                                        id="add-passkey-btn"
+                                        class="btn btn-secondary hidden"
+                                    >
+                                        Add Passkey
+                                    </button>
                                 </div>
                             </div>
-                            <div id="identity-keys-panel" class="identity-keys-panel hidden">
-                                <div class="identity-key-block">
-                                    <p class="identity-key-label">EVM Address</p>
-                                    <p id="identity-full-address" class="identity-key-value"></p>
-                                </div>
-                                <div class="identity-key-block">
-                                    <p class="identity-key-label">ECIES Public Key</p>
-                                    <div class="identity-pubkey-row">
-                                        <p id="identity-full-pubkey" class="identity-key-value"></p>
-                                        <button id="copy-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy public key">📋 Copy</button>
-                                    </div>
-                                </div>
-                                <p class="identity-pubkey-hint">
-                                    Safe to share for encrypted Direct Message invites. Never share your private key.
-                                </p>
-                            </div>
                         </div>
-                        <div id="passkey-protection-badge" class="upload-result hidden">🔐 Protected by device passkey (WebAuthn)</div>
-                        <div id="passkey-unsupported-warning" class="upload-result hidden">
-                            ⚠️ Your browser/device does not support WebAuthn passkeys. The wallet will use legacy AES-GCM protection (less secure).
-                        </div>
-                        <button id="add-passkey-btn" class="btn btn-secondary hidden">➕ Add alternate passkey (FaceID / TouchID / PIN)</button>
-                        <div id="biometric-session-indicator" class="upload-result hidden">
-                            🟢 Biometric session active · expires in <span id="session-countdown">30:00</span>
-                        </div>
-                        <div id="legacy-migration-panel" class="upload-result hidden" style="margin-top: 1rem">
-                            <h4>🔄 Wallet upgrade required</h4>
-                            <p>Your existing wallet uses legacy encryption. Enter your seed phrase to upgrade to passkey protection.</p>
-                            <input type="password" id="migration-seed-input" placeholder="Enter your 12-word seed phrase" class="hash-input" />
-                            <button id="migrate-wallet-btn" class="btn btn-primary">Upgrade to Passkey</button>
-                        </div>
-                        <div class="button-group">
-                            <button id="lock-disconnect-auth-btn" class="btn btn-clear hidden">🔒 Lock Local / Disconnect</button>
-                            <button id="delete-local-wallet-btn" class="btn btn-clear">Delete Local Wallet</button>
-                        </div>
-                        <div id="seed-phrase-screen" class="upload-result hidden" style="margin-top: 1rem">
+
+                        <!-- Singurul card suplimentar rămas.
+                             Este controlat de fluxul de creare a wallet-ului. -->
+                        <div
+                            id="seed-phrase-screen"
+                            class="upload-result hidden"
+                            style="margin-top: 1rem"
+                        >
                             <h4>⚠️ Save your seed phrase now</h4>
-                            <p><strong>Security warning:</strong> This local signing wallet is not for deposits or storing funds.</p>
+
+                            <p>
+                                <strong>Security warning:</strong>
+                                This local signing wallet is not for deposits or storing funds.
+                            </p>
+
                             <pre id="seed-phrase-box" class="code-block"></pre>
-                            <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
+
+                            <button
+                                id="close-seed-screen-btn"
+                                class="btn btn-secondary"
+                            >
+                                I saved it
+                            </button>
                         </div>
                     </section>
                 </div>
@@ -159,7 +162,7 @@
                     <section id="deploy-auth-wall" class="quick-upload card-base">
                         <div>
                             <h3>🔐 Welcome back</h3>
-                            <p>Choose how you want to continue to signed deploy.</p>
+                            <p>Choose how you want to continue.</p>
                         </div>
 
                         <div class="button-group">
@@ -323,6 +326,7 @@
                                 <div class="dm-or-separator">or</div>
                                 <div class="dm-role-card">
                                     <p class="dm-card-title">Join a room and send your magnet</p>
+
                                     <p class="dm-instruction">Paste the host invite magnet (encrypted for you), then generate your encrypted response magnet.</p>
                                     <textarea
                                         id="channels-remote-offer-input"
@@ -414,14 +418,14 @@
                             <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
                             <button id="load-site" class="btn btn-primary">Load Site</button>
                         </div>
-                        <p>🎯 Just the hash — Web25.Cloud automatically adds the magnet link prefix and trackers.</p>
+                        <p>🎯 Just the hash — WEB25.cloud automatically adds the magnet link prefix and trackers.</p>
                     </section>
 
                     <section class="debug console-widget card-base">
                         <h3>🐛 Debug Mode</h3>
                         <p>Add <code>&amp;debug=true</code> to any URL for detailed progress logs:</p>
                         <div class="code-block">
-                            <code>https://web25.cloud?orc=ABC123DEF456...&amp;debug=true</code>
+                            <code>https://WEB25.cloud?orc=ABC123DEF456...&amp;debug=true</code>
                         </div>
                     </section>
                 </div>
@@ -429,9 +433,9 @@
                 <!-- ── ABOUT TAB ── -->
                 <div id="tab-about" class="tab-panel" role="tabpanel">
                     <section class="intro about-hero-card card-base">
-                        <h3>☁️ About Web25.Cloud</h3>
+                        <h3>☁️ About WEB25.cloud</h3>
                         <p>
-                            Web25.Cloud is a
+                            WEB25.cloud is a
                             <a href="https://github.com/Omodaka9375/peerweb" target="_blank" rel="noopener noreferrer">PeerWeb fork</a>
                             focused on local EVM identity, signed static-site deploys, and direct peer-to-peer messaging.
                             Core flows are browser-native and do not require a mandatory MetaMask connection.
@@ -483,7 +487,7 @@
                         <br /><br />
                         <h3>🛡️ Security profile</h3>
                         <p>
-                            Web25.Cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+                            WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
                             The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
                             to support richer static websites.
                         </p>
@@ -522,7 +526,7 @@
                 <p>
                     ☁️ Made with ❤️ for the decentralized web —
                     <a href="https://github.com/adigeo08/web25.cloud" target="_blank" style="color: #cce4ff"
-                        >Web25.Cloud</a
+                        >WEB25.cloud</a
                     >
                     ☁️
                 </p>
@@ -651,7 +655,7 @@
             })();
         </script>
 
-        <!-- Web25.Cloud Application Script -->
+        <!-- WEB25.cloud Application Script -->
         <script type="module" src="./peerweb.min.js"></script>
     </body>
 </html>
