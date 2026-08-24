@@ -22,6 +22,8 @@ class PeerWeb {
         this.toast = new ToastNotification();
         this.currentSiteData = null;
         this.currentHash = null;
+        /** @type {import('./renderer/SiteSandbox.js').default | null} */
+        this.siteSandbox = null;
         this.serviceWorkerReady = false;
         this.clientReady = false;
         this.librariesLoaded = false;

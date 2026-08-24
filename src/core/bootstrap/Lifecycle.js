@@ -12,8 +12,7 @@ import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/Deplo
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
-import { getUnlockedPrivateKey } from '../../auth/LocalWalletService.js';
-import { getPublicKeyFromPrivateKey } from '../../channels/ecies.js';
+import { createLocalWalletSigner, eciesDecryptWithLocalWallet } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -83,7 +82,8 @@ export async function initAuth() {
 }
 
 export function setupChannels() {
-    this.channelsService = new ChannelsService();
+    // The service is granted a signing handle, never the private key itself.
+    this.channelsService = new ChannelsService({ signer: createLocalWalletSigner() });
     this.dmOfferSessionId = null;
 
     bindChannelsPanel({
@@ -133,12 +133,11 @@ export function setupChannels() {
             try {
                 this.showDirectMessageProgress('Loading peer magnet…');
                 clearChannelsMessages();
-                const localPrivateKey = getUnlockedPrivateKey();
                 const offerBootstrap = await loadDirectMessageBootstrapFromMagnet({
                     client: this.client,
                     magnetURI: offerMagnet,
                     localAddress: identity.address,
-                    localPrivateKey,
+                    decryptFn: eciesDecryptWithLocalWallet,
                     trackers: this.trackers
                 });
                 this.showDirectMessageProgress('Verifying .torrentchain identity…');
@@ -179,12 +178,11 @@ export function setupChannels() {
                     return;
                 }
                 this.showDirectMessageProgress('Loading peer magnet…');
-                const localPrivateKey = getUnlockedPrivateKey();
                 const answerBootstrap = await loadDirectMessageBootstrapFromMagnet({
                     client: this.client,
                     magnetURI: answerCode,
                     localAddress: identity.address,
-                    localPrivateKey,
+                    decryptFn: eciesDecryptWithLocalWallet,
                     expectedReplyToSessionId: this.dmOfferSessionId || null,
                     trackers: this.trackers
                 });
@@ -559,21 +557,9 @@ export function setupAuthAwareUi(state) {
     if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
 
-    // Update DM panel "My Public Key" display
-    if (isAuthenticated) {
-        const privateKey = getUnlockedPrivateKey();
-        let ownPubKey = null;
-        if (privateKey) {
-            try {
-                ownPubKey = getPublicKeyFromPrivateKey(privateKey);
-            } catch (_) {
-                ownPubKey = null;
-            }
-        }
-        updateDmOwnPubkey(ownPubKey);
-    } else {
-        updateDmOwnPubkey(null);
-    }
+    // Update DM panel "My Public Key" display. The public key is supplied by the
+    // signing worker via auth state; the private key never reaches this thread.
+    updateDmOwnPubkey(isAuthenticated ? state.publicKey || null : null);
 
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');

@@ -3,14 +3,16 @@
 import { createAuthState, AUTH_STATUS } from './AuthState.js';
 import {
     clearLocalWalletSession,
+    destroyLocalWalletSession,
+    getLocalWalletPublicKey,
     getLocalWalletStatus,
+    onWalletLocked,
     registerLocalWallet,
     removeLocalWallet,
     unlockLocalWallet,
-    registerLocalWalletFromSeed,
-    restoreSessionFromSW
+    registerLocalWalletFromSeed
 } from './LocalWalletService.js';
-import { addAlternatePasskey, clearBiometricSession, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
+import { addAlternatePasskey, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
 import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
 import { bindRegisterWallet } from '../ui/auth/RegisterWalletModal.js';
 import { bindUnlockWallet } from '../ui/auth/UnlockWalletModal.js';
@@ -26,7 +28,12 @@ export default class AuthController {
     }
 
     async init() {
-        await restoreSessionFromSW();
+        // The signing worker starts locked on every page load: a refresh no
+        // longer restores a session, because no component outside the worker
+        // ever holds the key.
+        onWalletLocked(() => {
+            void this.handleWorkerLock();
+        });
         await this.refreshLocalWalletState();
 
         bindRegisterWallet(() => this.registerLocal());
@@ -65,11 +72,19 @@ export default class AuthController {
         renderAuthPanel(this.state);
     }
 
+    /** Worker-side TTL expiry or crash: drop back to the locked UI state. */
+    async handleWorkerLock() {
+        await this.refreshLocalWalletState();
+        this.render();
+        this.notify();
+    }
+
     async refreshLocalWalletState() {
         const localWallet = await getLocalWalletStatus();
         this.state.localWalletExists = localWallet.exists;
         this.state.localWalletUnlocked = localWallet.unlocked;
         this.state.passkeyProtected = Boolean(localWallet.passkeyProtected);
+        this.state.publicKey = localWallet.unlocked ? await getLocalWalletPublicKey() : null;
 
         if (localWallet.exists && localWallet.address) {
             this.state.identityType = 'local';
@@ -98,6 +113,7 @@ export default class AuthController {
     async registerLocal() {
         try {
             const result = await registerLocalWallet();
+            this.state.publicKey = await getLocalWalletPublicKey();
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
@@ -126,6 +142,7 @@ export default class AuthController {
     async recoverLocal(seedPhrase) {
         try {
             const result = await registerLocalWalletFromSeed(seedPhrase);
+            this.state.publicKey = await getLocalWalletPublicKey();
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
@@ -145,6 +162,7 @@ export default class AuthController {
     async unlockLocal() {
         try {
             const result = await unlockLocalWallet();
+            this.state.publicKey = await getLocalWalletPublicKey();
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
@@ -184,6 +202,7 @@ export default class AuthController {
         try {
             await removeLocalWallet();
             const result = await registerLocalWalletFromSeed(seedPhrase);
+            this.state.publicKey = await getLocalWalletPublicKey();
             input.value = '';
             this.state.identityType = 'local';
             this.state.address = result.address;
@@ -201,8 +220,9 @@ export default class AuthController {
 
     async lockAndDisconnect() {
         try {
-            clearBiometricSession();
             await clearLocalWalletSession();
+            // Terminating the worker guarantees nothing survives the disconnect.
+            destroyLocalWalletSession();
             if (this.onDisconnect) {
                 await this.onDisconnect();
             }
@@ -236,7 +256,8 @@ export default class AuthController {
             identityType: this.state.identityType,
             address: this.state.address,
             chainId: this.state.chainId,
-            status: this.state.status
+            status: this.state.status,
+            publicKey: this.state.publicKey
         };
     }
 }

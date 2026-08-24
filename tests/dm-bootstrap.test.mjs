@@ -23,6 +23,15 @@ const HOST_ADDR = evmAddressFromPublicKey(HOST_PUB);
 const GUEST_ADDR = evmAddressFromPublicKey(GUEST_PUB);
 const THIRD_ADDR = evmAddressFromPublicKey(THIRD_PUB);
 
+/**
+ * Stand-in for the wallet worker's ECIES_DECRYPT operation. Production code
+ * passes a worker-backed handle here; the private key never reaches the
+ * bootstrap module itself.
+ */
+function decryptorFor(privateKey) {
+    return (ciphertext) => eciesDecrypt(ciphertext, privateKey);
+}
+
 // ─── Shared mock WebRTC descriptions ─────────────────────────────────────────
 const OFFER_DESC = { type: 'offer', sdp: 'mock-offer-sdp' };
 const ANSWER_DESC = { type: 'answer', sdp: 'mock-answer-sdp' };
@@ -65,7 +74,7 @@ async function verifyOffer(artifact, overrides = {}) {
         envelopeBuffer: artifact.envelopeBytes,
         verifiedPublisher: HOST_ADDR,
         localAddress: GUEST_ADDR,
-        localPrivateKey: GUEST_PRIV,
+        decryptFn: decryptorFor(GUEST_PRIV),
         ...overrides
     });
 }
@@ -157,13 +166,13 @@ test('a different private key cannot decrypt the offer', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: THIRD_PRIV
+            decryptFn: decryptorFor(THIRD_PRIV)
         }),
         /decrypt/i
     );
 });
 
-test('missing private key is rejected with a clear error', async () => {
+test('a missing wallet decryption handle is rejected with a clear error', async () => {
     const artifact = await makeHostOffer();
 
     await assert.rejects(
@@ -172,9 +181,9 @@ test('missing private key is rejected with a clear error', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: null
+            decryptFn: null
         }),
-        /private key is required/i
+        /wallet decryption handle is required/i
     );
 });
 
@@ -205,7 +214,7 @@ test('valid encrypted answer round-trip: replyToSessionId is preserved and verif
         envelopeBuffer: answerArtifact.envelopeBytes,
         verifiedPublisher: GUEST_ADDR,
         localAddress: HOST_ADDR,
-        localPrivateKey: HOST_PRIV,
+        decryptFn: decryptorFor(HOST_PRIV),
         expectedReplyToSessionId: offerSessionId
     });
 
@@ -233,7 +242,7 @@ test('answer with wrong replyToSessionId is rejected', async () => {
             envelopeBuffer: answerArtifact.envelopeBytes,
             verifiedPublisher: GUEST_ADDR,
             localAddress: HOST_ADDR,
-            localPrivateKey: HOST_PRIV,
+            decryptFn: decryptorFor(HOST_PRIV),
             expectedReplyToSessionId: 'different-session-id-00000000'
         }),
         /expected offer session/i
@@ -312,7 +321,7 @@ test('expired bootstrap is rejected', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /expired/i
     );
@@ -334,7 +343,7 @@ test('bootstrap with future creation time exceeding skew is rejected', async () 
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /too far in the future/i
     );
@@ -350,7 +359,7 @@ test('publisher/sender mismatch is rejected', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: GUEST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /publisher does not match/i
     );
@@ -366,7 +375,7 @@ test('wrong recipient is rejected (envelope.to does not match localAddress)', as
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: THIRD_ADDR,
-            localPrivateKey: THIRD_PRIV
+            decryptFn: decryptorFor(THIRD_PRIV)
         }),
         /recipient does not match/i
     );
@@ -389,7 +398,7 @@ test('tampered ciphertext (corrupted bytes) is rejected', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /decrypt/i
     );
@@ -412,7 +421,7 @@ test('unsupported encryption algorithm is rejected', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /unsupported encryption algorithm/i
     );
@@ -435,7 +444,7 @@ test('v1 bootstrap type is rejected with a migration message', async () => {
             envelopeBuffer: new TextEncoder().encode(JSON.stringify(legacyEnvelope)),
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /v1.*no longer supported|legacy/i
     );
@@ -451,7 +460,7 @@ test('unknown/future version is rejected', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /unsupported bootstrap version/i
     );
@@ -475,7 +484,7 @@ test('inner sender mismatch (decrypted from.evmAddress ≠ envelope from.evmAddr
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: THIRD_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /inner payload sender does not match/i
     );
@@ -492,7 +501,7 @@ test('verifyDirectMessageTorrentchain passes through to decryptAndVerify using i
         envelope: artifact.envelope,
         envelopeBuffer: artifact.envelopeBytes,
         localAddress: GUEST_ADDR,
-        localPrivateKey: GUEST_PRIV,
+        decryptFn: decryptorFor(GUEST_PRIV),
         _verifyManifestFn: mockVerifyManifest
     });
 
@@ -510,7 +519,7 @@ test('verifyDirectMessageTorrentchain rejects when torrentchain signature is inv
             envelope: artifact.envelope,
             envelopeBuffer: artifact.envelopeBytes,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV,
+            decryptFn: decryptorFor(GUEST_PRIV),
             _verifyManifestFn: failingVerify
         }),
         /invalid .torrentchain signature/i
@@ -613,7 +622,7 @@ test('createDirectMessageBootstrapTorrent + loadDirectMessageBootstrapFromMagnet
         client,
         magnetURI,
         localAddress: GUEST_ADDR,
-        localPrivateKey: GUEST_PRIV,
+        decryptFn: decryptorFor(GUEST_PRIV),
         _verifyManifestFn: mockVerifyManifest
     });
 
@@ -643,7 +652,7 @@ test('replay of the same bootstrap nonce/session is rejected', async () => {
         envelopeBuffer: artifact.envelopeBytes,
         verifiedPublisher: HOST_ADDR,
         localAddress: GUEST_ADDR,
-        localPrivateKey: GUEST_PRIV
+        decryptFn: decryptorFor(GUEST_PRIV)
     });
 
     // Same artifact again — should be rejected as replay
@@ -653,7 +662,7 @@ test('replay of the same bootstrap nonce/session is rejected', async () => {
             envelopeBuffer: artifact.envelopeBytes,
             verifiedPublisher: HOST_ADDR,
             localAddress: GUEST_ADDR,
-            localPrivateKey: GUEST_PRIV
+            decryptFn: decryptorFor(GUEST_PRIV)
         }),
         /replay/i
     );

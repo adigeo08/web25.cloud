@@ -1,15 +1,19 @@
 // @ts-check
 
 import {
-    addPasskey,
-    clearBiometricSession,
-    createPasskey,
-    deletePasskey,
-    openData,
+    addPasskeyToVault,
+    createPasskeyVault,
+    deletePasskeyVault,
+    hasLegacyCredentialRecord,
+    isLegacyVaultBlob,
+    LegacyVaultError,
+    openPasskeyVault,
     passkeySupported,
-    sealData,
-    unlockPasskey
+    readCredentialRecord
 } from './PasskeyVault.js';
+
+/** Wallet records written by this version carry the PRF vault layout. */
+export const WALLET_VAULT_VERSION = 2;
 
 const DB_NAME = 'web25-auth';
 const DB_VERSION = 2;
@@ -66,14 +70,49 @@ export async function getLocalWalletRecord() {
     return readRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
 }
 
-export async function encryptPrivateKey(privateKeyHex, encPK) {
-    const encryptedBlob = await sealData(privateKeyHex, encPK);
-    return { encryptedBlob };
+/**
+ * Create the passkey-protected vault for a brand new wallet and seal the
+ * private key into it in one WebAuthn ceremony.
+ *
+ * @param {string} address
+ * @param {string} privateKeyHex
+ * @returns {Promise<{ credentialId: string, vaultId: string, encryptedBlob: string }>}
+ */
+export async function createProtectedWallet(address, privateKeyHex) {
+    const vault = await createPasskeyVault({
+        username: address.slice(0, 10),
+        displayName: `web25 wallet ${address.slice(0, 6)}`,
+        secret: privateKeyHex
+    });
+    return {
+        credentialId: vault.credentialId,
+        vaultId: vault.vaultId,
+        encryptedBlob: vault.sealedBlob
+    };
 }
 
+/**
+ * Decrypt the wallet blob via a WebAuthn PRF assertion.
+ * @param {string} encryptedBlob
+ * @param {string} credentialId
+ * @returns {Promise<string>} the 0x-prefixed private key
+ */
 export async function decryptPrivateKey(encryptedBlob, credentialId) {
-    const { encSK } = await unlockPasskey(credentialId);
-    return openData(encryptedBlob, encSK);
+    return openPasskeyVault(credentialId, encryptedBlob);
+}
+
+/**
+ * A wallet record needs seed-phrase recovery when it predates the PRF vault.
+ * @param {any} record
+ */
+export function walletRecordNeedsMigration(record) {
+    if (!record) return false;
+    if (record.encryptedPrivateKey && !record.encryptedBlob) return true;
+    if (!record.encryptedBlob) return true;
+    if (record.vaultVersion !== WALLET_VAULT_VERSION) return true;
+    if (isLegacyVaultBlob(record.encryptedBlob)) return true;
+    if (record.credentialId && !readCredentialRecord(record.credentialId)) return true;
+    return false;
 }
 
 export async function saveLocalWallet(record) {
@@ -86,10 +125,10 @@ export async function saveLocalWallet(record) {
 }
 
 export async function addAlternatePasskey(credentialId) {
-    await addPasskey(credentialId);
+    return addPasskeyToVault(credentialId);
 }
 
-export { clearBiometricSession, passkeySupported };
+export { hasLegacyCredentialRecord, isLegacyVaultBlob, LegacyVaultError, passkeySupported };
 
 export async function deleteLocalWallet() {
     const db = await openDb();
@@ -97,18 +136,6 @@ export async function deleteLocalWallet() {
     await deleteRecord(db, STORE_WALLETS, LOCAL_WALLET_ID);
 
     if (record?.credentialId) {
-        await deletePasskey(record.credentialId);
+        await deletePasskeyVault(record.credentialId);
     }
-}
-
-export async function createPasskeyLock(address) {
-    const passkey = await createPasskey({
-        username: address.slice(0, 10),
-        displayName: `web25 wallet ${address.slice(0, 6)}`
-    });
-    return {
-        credentialId: passkey.credentialId,
-        encPK: passkey.encPK,
-        encPKStored: passkey.encPK
-    };
 }

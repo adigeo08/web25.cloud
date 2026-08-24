@@ -42,7 +42,7 @@ Local identity supports:
 - Unlock via biometric/device authenticator (no password)
 - Manually lock session anytime
 - Delete local wallet state from browser storage
-- Legacy fallback path when WebAuthn is unavailable
+- No fallback unlock path: without WebAuthn PRF support the wallet cannot be created or opened
 
 Stored metadata in IndexedDB (`web25-auth`, v2):
 
@@ -50,17 +50,33 @@ Stored metadata in IndexedDB (`web25-auth`, v2):
 - `address`
 - `encryptedBlob`
 - `credentialId`
-- `encPKStored`
+- `vaultId`
+- `vaultVersion`
 - `createdAt`
 - `lastUsedAt`
 
 #### Security model
 
-1. `PasskeyVault.js` derives passkey-bound encryption material from WebAuthn flows.
-2. Signing key material is sealed before persistence.
-3. Only encrypted key blob + non-secret metadata are persisted.
-4. Decryption requires WebAuthn assertion on new sessions.
-5. Decrypted private key is memory-resident only during unlock/sign operations.
+1. `PasskeyVault.js` derives the vault key from the **WebAuthn PRF extension**
+   (`extensions.prf`) via HKDF-SHA256. `user.id` is a random, non-secret handle
+   and `response.userHandle` is never read back.
+2. The PRF secret is never persisted. localStorage holds only non-secret
+   credential metadata: the PRF salt, the HKDF salt, and the vault key wrapped
+   under the PRF-derived KEK.
+3. Each enrolled passkey wraps the same vault key under its own KEK, so several
+   passkeys can unlock one wallet.
+4. Decryption requires a user-verified WebAuthn assertion; there is no fallback
+   unlock path. An authenticator without PRF fails explicitly.
+5. The decrypted private key is transferred to a **dedicated worker**
+   (`src/auth/wallet-worker.js`) and the main-thread reference is dropped
+   immediately. No API returns the key: callers ask the worker for
+   `SIGN_MESSAGE`, `ECIES_SIGN`, `ECIES_DECRYPT` or `GET_PUBLIC_KEY`.
+6. The worker session has a 30-minute TTL/inactivity timeout; `LOCK`, worker
+   termination and page reload all leave the wallet locked. The service worker
+   holds no wallet state.
+
+> **Wallets created before the PRF vault cannot be unlocked.** They are detected
+> and reported as needing migration; recover them from the seed phrase.
 
 ---
 
@@ -105,6 +121,28 @@ At load time, the client:
 
 - **Strict (default):** `REQUIRE_TORRENTCHAIN = true`
   - missing, malformed, or invalid `.torrentchain` blocks load/render
+
+#### Site isolation
+
+`.torrentchain` proves **provenance, not privilege**. A site signed by a
+malicious publisher is still untrusted code, so verification gates *whether* a
+site renders, never *what it may do*.
+
+- The site renders in a sandboxed `iframe` **without `allow-same-origin`**, so
+  it executes in an opaque origin: no access to the wallet's IndexedDB, the
+  Web25 `localStorage`, the signing worker, service-worker messaging, the
+  application's auth/signing functions, or the Web25 DOM.
+- Bundle files reach the frame over one `MessagePort` whose operations are
+  allowlisted in `src/core/renderer/SandboxBridgeProtocol.js`
+  (`sandbox.ready`, `resource.get`, `site.title`, `site.log`). Origin, source
+  window, session token, message type and payload shape are all checked. No
+  signing or wallet operation is exposed.
+- Inside the frame, files are materialised as blob URLs and static references,
+  CSS `url()` / `@import`, `fetch` and `XHR` are remapped, so relative paths,
+  stylesheets and scripts keep working.
+- `/peerweb-site/` responses from the service worker additionally carry
+  `Content-Security-Policy: sandbox …`, so even a direct navigation to that path
+  lands in an opaque origin.
 
 ---
 

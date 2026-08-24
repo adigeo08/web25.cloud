@@ -1016,41 +1016,29 @@ export function displaySite(siteData, hash, fromCache = false) {
 
     this.log('Processing HTML content...');
 
-    // Process the HTML to update only internal resource URLs
+    // Rewrite internal references to the virtual /peerweb-site/{hash}/ form.
+    // The sandboxed renderer resolves those back to in-frame blob URLs; nothing
+    // is fetched from the web25.cloud origin on the site's behalf.
     htmlContent = this.processHtmlForPeerWeb(htmlContent, siteData, indexFileName, hash);
 
-    // Sanitize HTML content but preserve external links
-    htmlContent = this.sanitizeHtml(htmlContent);
+    this.log('HTML content processed for sandboxed rendering');
 
-    this.log('HTML content processed and sanitized');
-    // Note: htmlContent is processed for validation but Service Worker serves content directly
-    void htmlContent; // Mark as intentionally unused
-
-    // Create a virtual URL for the site (this is what we'll actually use)
-    const siteUrl = `${window.location.origin}/peerweb-site/${hash}/`;
-
-    this.log(`Site URL: ${siteUrl}`);
-
-    // Wait for service worker to be fully ready, then send SITE_READY message
-    // This ensures the SW is active and can receive the message
+    // Keep the service worker's view of the current site in sync so any stray
+    // request to /peerweb-site/ is still answered under the isolation headers.
     const sendSiteReadyAndLoad = async () => {
-        // Ensure SW controller is available and active
         await this.waitForController();
-        
-        // Notify service worker that site is ready BEFORE loading the iframe
-        // This ensures the SW has the site data before any fetch requests arrive
+
         await this.sendToServiceWorker('SITE_READY', {
             hash,
             fileCount: Object.keys(siteData).length,
             fileList: Object.keys(siteData), // Send the list of available files
             entryFile: indexFileName          // Tell SW the canonical entry path
         });
-        
-        // Small delay to ensure the service worker receives the message before iframe loads
+
         setTimeout(() => {
-            this.showSiteViewer(siteUrl, hash, fromCache);
+            this.showSiteViewer({ entryFile: indexFileName, entryHtml: htmlContent }, hash, fromCache);
         }, PEERWEB_CONFIG.INIT_DELAY);
     };
-    
+
     sendSiteReadyAndLoad();
 }

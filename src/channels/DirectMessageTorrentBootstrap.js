@@ -1,7 +1,7 @@
 // @ts-check
 
 import { createTorrentChainArtifact, verifyTorrentChainManifest } from '../torrent/TorrentChainProtocol.js';
-import { eciesEncrypt, eciesDecrypt, evmAddressFromPublicKey } from './ecies.js';
+import { eciesEncrypt, evmAddressFromPublicKey } from './ecies.js';
 
 const BOOTSTRAP_FILE_NAME = 'dm-bootstrap.json';
 const BOOTSTRAP_TYPE = 'direct-message-bootstrap-v2';
@@ -163,9 +163,13 @@ export async function createEncryptedDMBootstrapArtifact({
  * Decrypt and validate a v2 DM bootstrap envelope without calling TorrentChain.
  * Accepts the already-verified publisher from the caller (e.g. from verifyTorrentChainManifest).
  *
+ * `decryptFn` performs the ECIES decryption on the caller's behalf. In the app
+ * it is backed by the dedicated wallet worker, so the private key is never
+ * handed to this module.
+ *
  * @param {{ envelope: object, envelopeBuffer: Uint8Array|ArrayBuffer,
  *           verifiedPublisher: string, localAddress: string,
- *           localPrivateKey: string|null,
+ *           decryptFn: ((ciphertext: string) => Promise<string>)|null,
  *           expectedFrom?: string|null,
  *           expectedReplyToSessionId?: string|null,
  *           manifest?: object }} params
@@ -176,7 +180,7 @@ export async function decryptAndVerifyDMBootstrapArtifact({
     envelopeBuffer,
     verifiedPublisher,
     localAddress,
-    localPrivateKey,
+    decryptFn,
     expectedFrom = null,
     expectedReplyToSessionId = null,
     manifest = null
@@ -221,11 +225,13 @@ export async function decryptAndVerifyDMBootstrapArtifact({
     const algorithm = `${envelope?.encrypted?.algorithm || ''}`;
     if (algorithm !== ECIES_ALGORITHM) throw new Error(`Unsupported encryption algorithm: ${algorithm}`);
     if (!ciphertext) throw new Error('Missing encrypted ciphertext in bootstrap envelope.');
-    if (!localPrivateKey) throw new Error('Local private key is required to decrypt the bootstrap. Wallet may be locked.');
+    if (typeof decryptFn !== 'function') {
+        throw new Error('A wallet decryption handle is required to decrypt the bootstrap. Wallet may be locked.');
+    }
 
     let innerPayload;
     try {
-        const decrypted = await eciesDecrypt(ciphertext, localPrivateKey);
+        const decrypted = await decryptFn(ciphertext);
         innerPayload = JSON.parse(decrypted);
     } catch (_) {
         throw new Error('Failed to decrypt bootstrap: wrong recipient, corrupted ciphertext, or malformed payload.');
@@ -367,7 +373,7 @@ export async function loadDirectMessageBootstrapFromMagnet({
     client,
     magnetURI,
     localAddress,
-    localPrivateKey = null,
+    decryptFn = null,
     expectedFrom = null,
     expectedReplyToSessionId = null,
     trackers = [],
@@ -413,7 +419,7 @@ export async function loadDirectMessageBootstrapFromMagnet({
         envelope,
         envelopeBuffer,
         localAddress,
-        localPrivateKey,
+        decryptFn,
         expectedFrom,
         expectedReplyToSessionId,
         _verifyManifestFn
@@ -425,7 +431,7 @@ export async function verifyDirectMessageTorrentchain({
     envelope,
     envelopeBuffer,
     localAddress,
-    localPrivateKey = null,
+    decryptFn = null,
     expectedFrom = null,
     expectedReplyToSessionId = null,
     // @internal — injectable for unit testing; production always uses verifyTorrentChainManifest
@@ -440,7 +446,7 @@ export async function verifyDirectMessageTorrentchain({
         envelopeBuffer,
         verifiedPublisher: sig.publisher,
         localAddress,
-        localPrivateKey,
+        decryptFn,
         expectedFrom,
         expectedReplyToSessionId,
         manifest

@@ -602,10 +602,17 @@
             <div class="site-viewer-header">
                 <span id="site-signature-status" class="status-chip status-pending">Publisher: unverified</span>
             </div>
+            <!--
+                Torrent sites are untrusted code. `allow-same-origin` is
+                deliberately absent: with `allow-scripts` it would give the site
+                the wallet's own origin (IndexedDB, localStorage, the signing
+                worker, service-worker messaging). The frame is populated by
+                SiteSandbox.js over an allowlisted postMessage bridge.
+            -->
             <iframe
                 id="site-frame"
                 class="site-frame"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                sandbox="allow-scripts allow-forms allow-modals allow-popups"
             ></iframe>
         </div>
 

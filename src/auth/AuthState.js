@@ -19,6 +19,9 @@ export function createAuthState() {
         localWalletExists: false,
         localWalletUnlocked: false,
         seedPhrasePreview: null,
-        passkeyProtected: false
+        passkeyProtected: false,
+        // Public secp256k1 key of the unlocked wallet, fetched from the signing
+        // worker. Public material only — never the private key.
+        publicKey: null
     };
 }

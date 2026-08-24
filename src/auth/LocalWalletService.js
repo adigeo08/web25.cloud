@@ -1,137 +1,76 @@
 // @ts-check
+/**
+ * Local wallet façade.
+ *
+ * The decrypted EVM private key lives in the dedicated wallet worker and
+ * nowhere else. It touches the main thread for exactly two moments — right
+ * after it is derived from a mnemonic and right after the passkey vault is
+ * opened — and the local binding is cleared before either function returns.
+ *
+ * There is intentionally no exported accessor for the key. Callers ask for
+ * signatures and decryptions instead.
+ */
 
 import { loadViemAccounts } from '../web3/viemClients.js';
 import { generateBip39Mnemonic, mnemonicToSeedBytes, validateBip39Mnemonic } from './SeedPhraseService.js';
 import {
-    createPasskeyLock,
+    createProtectedWallet,
     decryptPrivateKey,
     deleteLocalWallet,
-    encryptPrivateKey,
     getLocalWalletRecord,
     passkeySupported,
-    saveLocalWallet
+    saveLocalWallet,
+    walletRecordNeedsMigration,
+    WALLET_VAULT_VERSION
 } from './SecureKeyStore.js';
+import {
+    lockWalletWorker,
+    onWalletLocked,
+    terminateWalletWorker,
+    unlockWalletWorker,
+    walletWorkerStatus,
+    workerEciesDecrypt,
+    workerEciesSign,
+    workerGetPublicKey,
+    workerSignMessage
+} from './WalletWorkerClient.js';
+import { WALLET_SESSION_TTL_MS } from './walletWorkerProtocol.js';
 
-/** Auto-lock the private key after 15 minutes of inactivity. */
-const AUTO_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
-
-/** @type {string | null} */
-let unlockedPrivateKey = null;
-/** @type {ReturnType<typeof setTimeout> | null} */
-let autoLockTimer = null;
-
-// ---------------------------------------------------------------------------
-// Service-worker session persistence
-// The SW keeps the private key in its own (non-disk) memory so the session
-// survives a page refresh within the AUTO_LOCK_TIMEOUT_MS window.
-// ---------------------------------------------------------------------------
-
-/** Milliseconds to wait for a SW query response before giving up. */
-const SESSION_QUERY_TIMEOUT_MS = 3000;
-
-/** Wait up to `maxWaitMs` for a SW controller to be available. */
-function waitForSWController(maxWaitMs = 2000) {
-    if (navigator.serviceWorker.controller) return Promise.resolve(true);
-    return new Promise((resolve) => {
-        const deadline = Date.now() + maxWaitMs;
-        const tick = () => {
-            if (navigator.serviceWorker.controller) return resolve(true);
-            if (Date.now() >= deadline) return resolve(false);
-            setTimeout(tick, 100);
-        };
-        tick();
-    });
-}
-
-/** Send the current private key to the SW so it survives a page refresh. */
-async function storeSessionInSW() {
-    if (!('serviceWorker' in navigator) || !unlockedPrivateKey) return;
-    const ready = await waitForSWController();
-    if (!ready || !navigator.serviceWorker.controller) return;
-    navigator.serviceWorker.controller.postMessage({
-        type: 'SESSION_STORE',
-        privateKey: unlockedPrivateKey,
-        ttlMs: AUTO_LOCK_TIMEOUT_MS
-    });
-}
-
-/** Extend the TTL of the SW session (called on every key use). */
-function extendSessionInSW() {
-    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
-    navigator.serviceWorker.controller.postMessage({
-        type: 'SESSION_EXTEND',
-        ttlMs: AUTO_LOCK_TIMEOUT_MS
-    });
-}
-
-/** Tell the SW to forget the session (called on explicit lock). */
-function clearSessionInSW() {
-    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
-    navigator.serviceWorker.controller.postMessage({ type: 'SESSION_CLEAR' });
-}
+/** Session TTL / inactivity timeout enforced inside the worker. */
+export const AUTO_LOCK_TIMEOUT_MS = WALLET_SESSION_TTL_MS;
 
 /**
- * On page load, asks the SW whether a valid session is still alive.
- * If so, restores `unlockedPrivateKey` so the user stays logged in.
- * @returns {Promise<boolean>} true if session was restored
+ * Hand the key over and drop the main-thread reference.
+ * @param {{ value: string | null }} holder single-field box so the caller's
+ *        binding can be cleared from here, before this function returns.
  */
-export async function restoreSessionFromSW() {
-    if (!('serviceWorker' in navigator)) return false;
-
-    const ready = await waitForSWController(SESSION_QUERY_TIMEOUT_MS);
-    if (!ready || !navigator.serviceWorker.controller) return false;
-
-    return new Promise((resolve) => {
-        /** @type {ReturnType<typeof setTimeout>} */
-        let timeoutId;
-        const handler = (/** @type {MessageEvent} */ event) => {
-            if (event.data?.type !== 'SESSION_RESPONSE') return;
-            navigator.serviceWorker.removeEventListener('message', handler);
-            clearTimeout(timeoutId);
-            const key = event.data.privateKey;
-            if (key) {
-                unlockedPrivateKey = key;
-                resetAutoLock();
-                resolve(true);
-            } else {
-                resolve(false);
-            }
-        };
-        navigator.serviceWorker.addEventListener('message', handler);
-        timeoutId = setTimeout(() => {
-            navigator.serviceWorker.removeEventListener('message', handler);
-            resolve(false);
-        }, SESSION_QUERY_TIMEOUT_MS);
-        navigator.serviceWorker.controller.postMessage({ type: 'SESSION_QUERY' });
-    });
+async function transferKeyToWorker(holder) {
+    const privateKey = holder.value;
+    if (!privateKey) throw new Error('No private key to transfer.');
+    try {
+        return await unlockWalletWorker(privateKey);
+    } finally {
+        holder.value = null;
+    }
 }
 
-// ---------------------------------------------------------------------------
+/** Subscribe to worker-side lock events (TTL expiry, worker crash). */
+export { onWalletLocked };
 
-/** Clears the auto-lock timer and wipes the private key from memory. */
+/** Clears the worker session; the key is wiped inside the worker immediately. */
 export function lockLocalWallet() {
     void clearLocalWalletSession();
 }
 
-function clearInMemorySession() {
-    if (autoLockTimer !== null) {
-        clearTimeout(autoLockTimer);
-        autoLockTimer = null;
-    }
-    unlockedPrivateKey = null;
-}
-
 export async function clearLocalWalletSession() {
-    clearSessionInSW();
-    clearInMemorySession();
+    await lockWalletWorker();
 }
 
-/** Resets the inactivity timer every time the key is used. */
-function resetAutoLock() {
-    if (autoLockTimer !== null) {
-        clearTimeout(autoLockTimer);
-    }
-    autoLockTimer = setTimeout(lockLocalWallet, AUTO_LOCK_TIMEOUT_MS);
+/**
+ * Hard reset: terminate the worker entirely. A restarted worker starts locked.
+ */
+export function destroyLocalWalletSession() {
+    terminateWalletWorker();
 }
 
 /**
@@ -153,27 +92,38 @@ async function derivePrivateKeyFromMnemonic(mnemonic) {
     return /** @type {`0x${string}`} */ (`0x${hex}`);
 }
 
+/**
+ * Derive, seal and hand off a freshly created wallet.
+ * @param {string} mnemonic
+ * @returns {Promise<{ address: string }>}
+ */
+async function provisionWallet(mnemonic) {
+    const holder = { value: /** @type {string | null} */ (await derivePrivateKeyFromMnemonic(mnemonic)) };
+    try {
+        const viemAccounts = await loadViemAccounts();
+        const address = viemAccounts.privateKeyToAccount(/** @type {any} */ (holder.value)).address;
+        const vault = await createProtectedWallet(address, /** @type {string} */ (holder.value));
+
+        await saveLocalWallet({
+            address,
+            encryptedBlob: vault.encryptedBlob,
+            credentialId: vault.credentialId,
+            vaultId: vault.vaultId,
+            vaultVersion: WALLET_VAULT_VERSION,
+            createdAt: new Date().toISOString(),
+            passkeyProtected: passkeySupported()
+        });
+
+        await transferKeyToWorker(holder);
+        return { address };
+    } finally {
+        holder.value = null;
+    }
+}
+
 export async function registerLocalWallet() {
     const mnemonic = await generateBip39Mnemonic();
-    const privateKey = await derivePrivateKeyFromMnemonic(mnemonic);
-    const viemAccounts = await loadViemAccounts();
-    const address = viemAccounts.privateKeyToAccount(privateKey).address;
-    const lockKey = await createPasskeyLock(address);
-    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey.encPK);
-
-    await saveLocalWallet({
-        address,
-        encryptedBlob,
-        credentialId: lockKey.credentialId,
-        encPKStored: lockKey.encPKStored,
-        createdAt: new Date().toISOString(),
-        passkeyProtected: passkeySupported()
-    });
-
-    unlockedPrivateKey = privateKey;
-    resetAutoLock();
-    void storeSessionInSW();
-
+    const { address } = await provisionWallet(mnemonic);
     return { address, seedPhrase: mnemonic };
 }
 
@@ -190,25 +140,7 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
         throw new Error('Invalid seed phrase. Please verify all 12 words and order.');
     }
 
-    const privateKey = await derivePrivateKeyFromMnemonic(normalized);
-    const viemAccounts = await loadViemAccounts();
-    const address = viemAccounts.privateKeyToAccount(privateKey).address;
-    const lockKey = await createPasskeyLock(address);
-    const { encryptedBlob } = await encryptPrivateKey(privateKey, lockKey.encPK);
-
-    await saveLocalWallet({
-        address,
-        encryptedBlob,
-        credentialId: lockKey.credentialId,
-        encPKStored: lockKey.encPKStored,
-        createdAt: new Date().toISOString(),
-        passkeyProtected: passkeySupported()
-    });
-
-    unlockedPrivateKey = privateKey;
-    resetAutoLock();
-    void storeSessionInSW();
-    return { address };
+    return provisionWallet(normalized);
 }
 
 export async function unlockLocalWallet() {
@@ -216,20 +148,29 @@ export async function unlockLocalWallet() {
     if (!record) {
         throw new Error('No local wallet registered');
     }
-    if (!record.encryptedBlob) {
-        throw new Error('Legacy wallet format detected. Please migrate from seed phrase.');
+    if (walletRecordNeedsMigration(record)) {
+        throw new Error(
+            'This wallet uses the previous passkey format, which is no longer supported. Please recover it from your seed phrase.'
+        );
     }
 
-    unlockedPrivateKey = await decryptPrivateKey(record.encryptedBlob, record.credentialId);
+    const holder = { value: /** @type {string | null} */ (null) };
+    try {
+        holder.value = await decryptPrivateKey(record.encryptedBlob, record.credentialId);
+        await transferKeyToWorker(holder);
+    } finally {
+        holder.value = null;
+    }
+
     await saveLocalWallet({ ...record, lastUsedAt: new Date().toISOString() });
-    resetAutoLock();
-    void storeSessionInSW();
     return { address: record.address };
 }
 
 export async function getLocalWalletStatus() {
     const record = await getLocalWalletRecord();
-    if (record && record.encryptedPrivateKey && !record.encryptedBlob) {
+    const session = await walletWorkerStatus();
+
+    if (record && walletRecordNeedsMigration(record)) {
         return {
             exists: true,
             address: record.address,
@@ -242,32 +183,70 @@ export async function getLocalWalletStatus() {
     return {
         exists: Boolean(record),
         address: record?.address || null,
-        unlocked: Boolean(unlockedPrivateKey),
+        unlocked: Boolean(session.unlocked),
         needsMigration: false,
         passkeyProtected: Boolean(record?.passkeyProtected ?? record?.credentialId)
     };
 }
 
+/**
+ * EIP-191 signature produced inside the worker.
+ * @param {string} message
+ * @returns {Promise<`0x${string}`>}
+ */
 export async function signWithLocalWallet(message) {
-    if (!unlockedPrivateKey) {
-        throw new Error('Local wallet is locked');
-    }
-    resetAutoLock();
-    extendSessionInSW();
-    const viemAccounts = await loadViemAccounts();
-    const account = viemAccounts.privateKeyToAccount(unlockedPrivateKey);
-    return account.signMessage({ message });
-}
-
-export async function removeLocalWallet() {
-    clearInMemorySession();
-    await deleteLocalWallet();
+    return workerSignMessage(message);
 }
 
 /**
- * Returns the current in-memory unlocked private key, or null if locked.
- * @returns {string | null}
+ * secp256k1/SHA-256 compact signature used by the Direct Messenger transport.
+ * @param {string} message
  */
-export function getUnlockedPrivateKey() {
-    return unlockedPrivateKey;
+export async function eciesSignWithLocalWallet(message) {
+    return workerEciesSign(message);
+}
+
+/**
+ * ECIES decryption performed inside the worker.
+ * @param {string} ciphertext hex payload
+ */
+export async function eciesDecryptWithLocalWallet(ciphertext) {
+    return workerEciesDecrypt(ciphertext);
+}
+
+/**
+ * The wallet's uncompressed secp256k1 public key. Public material only — this
+ * is not, and cannot be turned into, the private key.
+ * @returns {Promise<string | null>}
+ */
+export async function getLocalWalletPublicKey() {
+    try {
+        const { publicKey } = await workerGetPublicKey();
+        return publicKey;
+    } catch (_) {
+        return null;
+    }
+}
+
+/** @returns {Promise<boolean>} */
+export async function isLocalWalletUnlocked() {
+    const status = await walletWorkerStatus();
+    return Boolean(status.unlocked);
+}
+
+/**
+ * Signing/decryption handle handed to services that must not see the key.
+ * @returns {{ getPublicKey: () => Promise<string|null>, signMessage: (m: string) => Promise<string>, eciesDecrypt: (c: string) => Promise<string> }}
+ */
+export function createLocalWalletSigner() {
+    return {
+        getPublicKey: getLocalWalletPublicKey,
+        signMessage: eciesSignWithLocalWallet,
+        eciesDecrypt: eciesDecryptWithLocalWallet
+    };
+}
+
+export async function removeLocalWallet() {
+    await clearLocalWalletSession();
+    await deleteLocalWallet();
 }
