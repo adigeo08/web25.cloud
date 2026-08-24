@@ -11,6 +11,27 @@ const GUEST_PUB_KEY = getPublicKeyFromPrivateKey(GUEST_PRIV_KEY);
 const HOST_ADDRESS = evmAddressFromPublicKey(HOST_PUB_KEY);
 const GUEST_ADDRESS = evmAddressFromPublicKey(GUEST_PUB_KEY);
 
+/**
+ * Stand-in for the dedicated wallet worker: ChannelsService is only ever given
+ * a capability handle, never the private key itself.
+ */
+function walletSigner(privateKey) {
+    return {
+        getPublicKey: async () => (privateKey ? getPublicKeyFromPrivateKey(privateKey) : null),
+        signMessage: async (message) => {
+            if (!privateKey) throw new Error('Wallet is locked.');
+            return signMessage(message, privateKey);
+        },
+        eciesDecrypt: async (ciphertext) => {
+            if (!privateKey) throw new Error('Wallet is locked.');
+            return eciesDecrypt(ciphertext, privateKey);
+        }
+    };
+}
+
+/** A locked wallet: every capability rejects. */
+const LOCKED_SIGNER = walletSigner(null);
+
 class MockDataChannel {
     constructor() {
         this.readyState = 'connecting';
@@ -142,7 +163,7 @@ test('verifySignature rejects wrong public key', async () => {
 // ─── ChannelsService — signaling protocol ────────────────────────────────
 
 test('createHostOffer generates signal with {description, evmAddress, publicKey} and default STUN config', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -167,7 +188,7 @@ test('createAnswerFromOffer decodes offer, verifies host identity, stores peerPu
         evmAddress: HOST_ADDRESS,
         publicKey: HOST_PUB_KEY
     });
-    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(GUEST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -192,14 +213,14 @@ test('createAnswerFromOffer rejects mismatched publicKey/evmAddress', async () =
         evmAddress: '0x0000000000000000000000000000000000000001',
         publicKey: HOST_PUB_KEY   // real key but wrong address
     });
-    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(GUEST_PRIV_KEY) });
     await assert.rejects(() => service.createAnswerFromOffer('builders', badOfferCode, { address: GUEST_ADDRESS }),
         /Peer identity verification failed/
     );
 });
 
 test('applyAnswer stores guest public key and emits verified message', async () => {
-    const hostService = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const hostService = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     hostService.onUpdate((e) => events.push(e));
 
@@ -219,7 +240,7 @@ test('applyAnswer stores guest public key and emits verified message', async () 
 });
 
 test('applyAnswer rejects mismatched publicKey/evmAddress', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
 
     const badAnswerCode = JSON.stringify({
@@ -237,7 +258,7 @@ test('createAnswerFromOffer rejects offer with publicKey but no evmAddress (part
         publicKey: HOST_PUB_KEY,
         evmAddress: null
     });
-    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(GUEST_PRIV_KEY) });
     await assert.rejects(
         () => service.createAnswerFromOffer('builders', partialOfferCode, { address: GUEST_ADDRESS }),
         /Missing peer identity/
@@ -250,7 +271,7 @@ test('createAnswerFromOffer rejects offer with evmAddress but no publicKey (part
         publicKey: null,
         evmAddress: HOST_ADDRESS
     });
-    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(GUEST_PRIV_KEY) });
     await assert.rejects(
         () => service.createAnswerFromOffer('builders', partialOfferCode, { address: GUEST_ADDRESS }),
         /Missing peer identity/
@@ -258,7 +279,7 @@ test('createAnswerFromOffer rejects offer with evmAddress but no publicKey (part
 });
 
 test('applyAnswer rejects answer with publicKey but no evmAddress (partial identity)', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
 
     const partialAnswerCode = JSON.stringify({
@@ -270,7 +291,7 @@ test('applyAnswer rejects answer with publicKey but no evmAddress (partial ident
 });
 
 test('applyAnswer rejects answer with evmAddress but no publicKey (partial identity)', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
 
     const partialAnswerCode = JSON.stringify({
@@ -285,7 +306,7 @@ test('createAnswerFromOffer rejects offer with missing identity fields', async (
     const missingIdentityOfferCode = JSON.stringify({
         description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64')
     });
-    const service = new ChannelsService({ getPrivateKey: () => GUEST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(GUEST_PRIV_KEY) });
     await assert.rejects(
         () => service.createAnswerFromOffer('builders', missingIdentityOfferCode, { address: GUEST_ADDRESS }),
         /Missing peer identity/
@@ -293,7 +314,7 @@ test('createAnswerFromOffer rejects offer with missing identity fields', async (
 });
 
 test('applyAnswer rejects answer with missing identity fields', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
 
     const missingIdentityAnswerCode = JSON.stringify({
@@ -302,29 +323,29 @@ test('applyAnswer rejects answer with missing identity fields', async () => {
     await assert.rejects(() => service.applyAnswer(missingIdentityAnswerCode), /Missing peer identity/);
 });
 
-test('createHostOffer rejects when local wallet private key is unavailable', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => null });
+test('createHostOffer rejects when the signing worker cannot supply an identity', async () => {
+    const service = new ChannelsService({ signer: LOCKED_SIGNER });
     await assert.rejects(
         () => service.createHostOffer('builders', { address: HOST_ADDRESS }),
-        /wallet is locked or private key is unavailable/
+        /wallet is locked or the signing worker is unavailable/
     );
 });
 
-test('createAnswerFromOffer rejects when local wallet private key is unavailable', async () => {
+test('createAnswerFromOffer rejects when the signing worker cannot supply an identity', async () => {
     const offerCode = JSON.stringify({
         description: Buffer.from(JSON.stringify({ type: 'offer', sdp: 'abc' }), 'utf8').toString('base64'),
         evmAddress: HOST_ADDRESS,
         publicKey: HOST_PUB_KEY
     });
-    const service = new ChannelsService({ getPrivateKey: () => null });
+    const service = new ChannelsService({ signer: LOCKED_SIGNER });
     await assert.rejects(
         () => service.createAnswerFromOffer('builders', offerCode, { address: GUEST_ADDRESS }),
-        /wallet is locked or private key is unavailable/
+        /wallet is locked or the signing worker is unavailable/
     );
 });
 
 test('onmessage emits error event for garbled ciphertext instead of silently dropping it', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -344,13 +365,13 @@ test('onmessage emits error event for garbled ciphertext instead of silently dro
 // ─── ChannelsService — messaging ─────────────────────────────────────────
 
 test('sendChatMessage requires open data channel', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     assert.throws(() => service.sendChatMessage('hello', { address: HOST_ADDRESS }), /Connection is not ready yet/);
 });
 
 test('open channel emits connected + local system message', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -364,7 +385,7 @@ test('open channel emits connected + local system message', async () => {
 });
 
 test('sendChatMessage emits local event and sends ECIES-encrypted payload', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -391,7 +412,7 @@ test('sendChatMessage emits local event and sends ECIES-encrypted payload', asyn
 });
 
 test('transmit sends ECIES-encrypted + signed payload when peerPublicKey is set', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
     service.peerAddress = GUEST_ADDRESS;
@@ -409,7 +430,7 @@ test('transmit sends ECIES-encrypted + signed payload when peerPublicKey is set'
 });
 
 test('transmit rejects when verified peer identity is missing', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -423,7 +444,7 @@ test('transmit rejects when verified peer identity is missing', async () => {
 });
 
 test('onmessage decrypts ECIES payload, verifies signature, and calls handleInbound', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -453,7 +474,7 @@ test('onmessage decrypts ECIES payload, verifies signature, and calls handleInbo
 });
 
 test('onmessage emits error event when signature verification fails', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -477,7 +498,7 @@ test('onmessage emits error event when signature verification fails', async () =
 });
 
 test('onmessage rejects payload before peer identity is verified', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -492,7 +513,7 @@ test('onmessage rejects payload before peer identity is verified', async () => {
 });
 
 test('handleInbound deduplicates repeated inbound messages', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
 
     const events = [];
@@ -506,7 +527,7 @@ test('handleInbound deduplicates repeated inbound messages', async () => {
 });
 
 test('leaveChannel resets room state including peerPublicKey and emits left', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 
@@ -525,7 +546,7 @@ test('leaveChannel resets room state including peerPublicKey and emits left', as
 });
 
 test('sendFile emits file-send-start and transmits ECIES-encrypted file-info + file-chunk messages', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     await service.createHostOffer('builders', { address: HOST_ADDRESS });
     service.peerPublicKey = GUEST_PUB_KEY; // set AFTER createHostOffer to avoid leaveChannel reset
     service.peerAddress = GUEST_ADDRESS;
@@ -561,7 +582,7 @@ test('sendFile emits file-send-start and transmits ECIES-encrypted file-info + f
 });
 
 test('handleInbound reassembles file-info + file-chunk into file-ready event', async () => {
-    const service = new ChannelsService({ getPrivateKey: () => HOST_PRIV_KEY });
+    const service = new ChannelsService({ signer: walletSigner(HOST_PRIV_KEY) });
     const events = [];
     service.onUpdate((e) => events.push(e));
 

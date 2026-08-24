@@ -3,8 +3,6 @@
 import { passkeySupported } from '../../auth/SecureKeyStore.js';
 import { AUTH_STATUS } from '../../auth/AuthState.js';
 import { renderIdentityBadge } from './IdentityBadge.js';
-import { getUnlockedPrivateKey } from '../../auth/LocalWalletService.js';
-import { getPublicKeyFromPrivateKey } from '../../channels/ecies.js';
 
 export function renderAuthPanel(state) {
     renderIdentityBadge(state);
@@ -20,23 +18,17 @@ export function renderAuthPanel(state) {
     const fullPubkey = document.getElementById('identity-full-pubkey');
     const copyPubkeyBtn = document.getElementById('copy-pubkey-btn');
 
-    const privateKey = getUnlockedPrivateKey();
-    const isUnlocked = Boolean(state.localWalletUnlocked && state.address && privateKey);
+    // The private key lives in the signing worker; the panel only ever sees the
+    // public key that AuthController pulled from it.
+    const publicKey = state.publicKey || null;
+    const isUnlocked = Boolean(state.localWalletUnlocked && state.address && publicKey);
 
     if (keysPanel) {
         keysPanel.classList.toggle('hidden', !isUnlocked);
     }
 
     if (isUnlocked && state.address) {
-        let derivedPubKey = '';
-
-        try {
-            derivedPubKey = getPublicKeyFromPrivateKey(
-                /** @type {string} */ (privateKey)
-            );
-        } catch (_) {
-            derivedPubKey = '';
-        }
+        const derivedPubKey = publicKey;
 
         if (fullAddress) {
             fullAddress.textContent = state.address;

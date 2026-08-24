@@ -118,7 +118,7 @@ When peer A imports a magnet from peer B:
 5. Verify `envelope.to.evmAddress === localAddress` (recipient binding).
 6. Recompute SHA256 for `dm-bootstrap.json` and match manifest file entry.
 7. Verify `createdAt` not too far in the future (max 2 min skew) and `expiresAt > now`.
-8. Decrypt `envelope.encrypted.ciphertext` using local private key.
+8. Decrypt `envelope.encrypted.ciphertext` via the dedicated wallet worker's `ECIES_DECRYPT` operation (`decryptFn`); the private key never reaches this module or the main thread.
 9. Verify `innerPayload.from.evmAddress === envelope.from.evmAddress`.
 10. Verify `evmAddressFromPublicKey(innerPayload.from.eciesPublicKey) === innerPayload.from.evmAddress`.
 11. Verify inner timestamps.
@@ -162,7 +162,9 @@ When peer A imports a magnet from peer B:
 | **Expiry** | Short TTL (15 min default); `expiresAt` enforced on both envelope and inner payload |
 | **Session correlation** | `sessionId` / `replyToSessionId` inside ciphertext; not in torrent name or plaintext |
 
-**No private keys** ever enter the torrent, envelope, UI, logs, or tests.
+**No private keys** ever enter the torrent, envelope, UI, logs, or tests. Since the wallet
+worker landed, they do not enter the bootstrap module either: callers pass a
+`decryptFn` capability handle backed by the worker.
 
 ## 7) Migration from v1
 

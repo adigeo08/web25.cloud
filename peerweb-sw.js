@@ -29,11 +29,13 @@ const MEDIA_CACHE_MAX_BYTES = 300 * 1024 * 1024;
 let mediaCacheTotalBytes = 0;
 
 /**
- * In-memory session state.  Persists across page refreshes (as long as the
- * service worker process is alive) but is never written to disk.
- * @type {{ privateKey: string, expiresAt: number } | null}
+ * The service worker deliberately holds no wallet state.
+ *
+ * Earlier versions cached the decrypted EVM private key here and handed it back
+ * over SESSION_STORE / SESSION_QUERY. That whole channel is gone: the key now
+ * lives only inside the dedicated wallet worker, and the SW has no message that
+ * can produce, store or transport it.
  */
-let sessionState = null;
 
 // Listen for messages from main thread
 self.addEventListener('message', (event) => {
@@ -84,32 +86,11 @@ self.addEventListener('message', (event) => {
             break;
 
         case 'SESSION_STORE':
-            if (data.privateKey) {
-                sessionState = {
-                    privateKey: data.privateKey,
-                    expiresAt: Date.now() + (data.ttlMs || 15 * 60 * 1000)
-                };
-            }
-            break;
-
         case 'SESSION_EXTEND':
-            if (sessionState && sessionState.expiresAt > Date.now()) {
-                sessionState.expiresAt = Date.now() + (data.ttlMs || 15 * 60 * 1000);
-            }
-            break;
-
         case 'SESSION_QUERY':
-            if (sessionState && sessionState.expiresAt > Date.now()) {
-                event.source.postMessage({ type: 'SESSION_RESPONSE', privateKey: sessionState.privateKey });
-            } else {
-                sessionState = null;
-                event.source.postMessage({ type: 'SESSION_RESPONSE', privateKey: null });
-            }
-            break;
-
         case 'SESSION_CLEAR':
-            sessionState = null;
-            console.log('[PeerWeb SW] Session cleared');
+            // Removed: the service worker never holds wallet key material.
+            console.warn('[PeerWeb SW] Rejected removed wallet session message:', type);
             break;
     }
 
@@ -360,6 +341,36 @@ function isExternalUrl(url) {
     }
 }
 
+/**
+ * Isolation headers applied to every /peerweb-site/ response.
+ *
+ * Torrent content is untrusted code: a valid .torrentchain signature proves who
+ * published a site, not that the site may act on the user's behalf. The CSP
+ * `sandbox` directive forces any document served from this path into an opaque
+ * origin, so even a direct top-level navigation to /peerweb-site/... can never
+ * reach the wallet's IndexedDB, the Web25 localStorage, the signing worker or
+ * the privileged service-worker messaging of the real web25.cloud origin.
+ *
+ * `allow-same-origin` is deliberately absent — adding it would hand the site
+ * back exactly the privileges this boundary exists to remove.
+ */
+const SITE_SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups';
+
+/**
+ * @param {Response} response
+ * @returns {Response}
+ */
+function withSiteIsolationHeaders(response) {
+    const headers = new Headers(response.headers);
+    headers.set('Content-Security-Policy', SITE_SANDBOX_CSP);
+    headers.set('X-Content-Type-Options', 'nosniff');
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+    });
+}
+
 // Helper function to check if this is a PeerWeb internal resource
 function isPeerWebInternalResource(url) {
     try {
@@ -391,7 +402,7 @@ self.addEventListener('fetch', (event) => {
     // Only handle PeerWeb internal resources
     if (isPeerWebInternalResource(event.request.url)) {
         console.log('[PeerWeb SW] Intercepting PeerWeb internal resource:', url.pathname);
-        event.respondWith(handlePeerWebRequest(event.request));
+        event.respondWith(handlePeerWebRequest(event.request).then(withSiteIsolationHeaders));
         return;
     }
 
@@ -748,6 +759,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parseRangeHeader,
         createMediaResponse,
-        isMediaPath
+        isMediaPath,
+        withSiteIsolationHeaders,
+        SITE_SANDBOX_CSP
     };
 }
