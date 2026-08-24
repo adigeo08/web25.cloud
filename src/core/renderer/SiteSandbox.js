@@ -182,7 +182,8 @@ export default class SiteSandbox {
         try {
             this.port.postMessage(message, transfer);
         } catch (_) {
-            this.port.postMessage(ok ? { id, ok: true, result: null } : message);
+            // Fallback: retry without a transfer list (structured clone will copy).
+            this.port.postMessage(message);
         }
     }
 }
