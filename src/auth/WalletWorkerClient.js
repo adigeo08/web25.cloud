@@ -67,6 +67,8 @@ function ensureWorker() {
         // A crashed worker means the key is gone — treat it as a hard lock.
         rejectAllPending('Wallet worker crashed; the wallet is locked.');
         lockListeners.forEach((listener) => listener('worker-error'));
+        worker?.terminate();
+        worker = null;
     });
 
     return worker;
