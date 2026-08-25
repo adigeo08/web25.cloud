@@ -77,17 +77,35 @@ wallet signature. Tests count the signing calls.
 
 ## 3. The event
 
-Kind `2003`, per NIP-35. The category is exactly:
+Kind `2003`, per NIP-35.
+
+### Choosing a category DTAN can index
+
+DTAN resolves `tcat` against a **fixed category tree** — `video`, `audio`,
+`application`, `game`, `porn`, `other` (see `src/const.ts` in
+[v0l/dtan](https://github.com/v0l/dtan)). An invented path matches nothing
+there, so the original `tcat:web25.cloud,websites` produced entries that DTAN
+accepted but never surfaced under any filter: published, and invisible.
+
+A WEB25 site is a bundled web application, so the honest fit among the
+categories that actually index is `application`. The WEB25 identity moves to a
+marker beside it rather than into the category:
 
 ```text
-tcat:web25.cloud,websites
+["i", "tcat:application"]     category DTAN indexes
+["i", "web25:website"]        precise WEB25 marker
+["t", "web25"]                what discovery filters on
 ```
+
+NIP-35 explicitly allows several `i` tags (`tcat`, `imdb`, `tmdb`, …), so the
+category and the marker coexist without either displacing the other.
 
 ```json
 [
   ["title", "<site name>"],
   ["x", "<final BitTorrent infohash>"],
-  ["i", "tcat:web25.cloud,websites"],
+  ["i", "tcat:application"],
+  ["i", "web25:website"],
 
   ["t", "web25"], ["t", "website"], ["t", "static-site"],
 
@@ -135,10 +153,15 @@ publisher while proving another.
 | Constant | Purpose |
 | --- | --- |
 | `DEFAULT_NOSTR_DM_RELAYS` | private Direct Messenger traffic |
-| `DEFAULT_NOSTR_REGISTRY_RELAYS` | public registry - `wss://relay.dtan.xyz` first, then the generic relays for redundancy |
+| `DEFAULT_NOSTR_REGISTRY_RELAYS` | public registry — `wss://relay.dtan.xyz` only |
 
-No single relay is authoritative. A DTAN outage cannot fail a deployment, and
-cannot make an already-published site undiscoverable.
+The lists are **disjoint on purpose**: a public website listing is never
+published into the pool that carries private DM traffic.
+
+The trade-off is deliberate and worth stating plainly: discovery now depends on
+one relay being reachable. It is only discovery — a site stays live, seeding and
+loadable by infohash whatever the registry does, and a failed publish leaves a
+retry available.
 
 ## 5. Publication, failure and retry
 
@@ -164,7 +187,9 @@ only - no key material), so a retry still works after a reload.
 ## 6. Discovery
 
 `Web25RegistryService.buildRegistryFilter()` queries `kind: 2003` with
-`#i = ["tcat:web25.cloud,websites"]` and nothing else. Every event arriving from
+`#t = ["web25"]` and nothing else. Filtering moved from `#i` to `#t` because
+the category is now DTAN's shared `application` — it cannot select WEB25 entries
+any more, and every relay indexes single-letter `t` tags. Every event arriving from
 the pool has already been re-verified locally (shape, id binding, BIP-340
 signature) and re-matched against the requested filter; this layer adds the
 WEB25 structural validation, drops anything that is not a well-formed website

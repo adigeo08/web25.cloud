@@ -921,10 +921,186 @@ footer {
 
 .dm-lede {
     max-width: 46rem;
-    margin: 0 auto 1.5rem;
-    text-align: center;
+    margin: 0 0 1.5rem;
+    text-align: left;
     opacity: 0.85;
-    line-height: 1.55;
+    line-height: 1.6;
+}
+
+/* ── Direct Messenger: contacts sidebar ── */
+
+.dm-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 17rem) minmax(0, 1fr);
+    gap: 1.25rem;
+    align-items: start;
+}
+
+.dm-main {
+    min-width: 0;
+}
+
+.dm-contacts {
+    min-width: 0;
+    padding: 0.9rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(2, 7, 11, 0.5);
+}
+
+.dm-contacts-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.dm-contacts-title {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.dm-contacts-count {
+    font-size: 0.72rem;
+    opacity: 0.6;
+}
+
+.dm-contacts-filter {
+    margin: 0.6rem 0;
+    font-size: 0.8rem;
+}
+
+.dm-contacts-list {
+    display: grid;
+    gap: 0.35rem;
+    max-height: 22rem;
+    overflow-y: auto;
+}
+
+.dm-contacts-empty {
+    margin: 0;
+    font-size: 0.78rem;
+    opacity: 0.65;
+    line-height: 1.5;
+}
+
+.dm-contacts-hint {
+    margin: 0.7rem 0 0;
+    font-size: 0.72rem;
+    opacity: 0.55;
+    line-height: 1.45;
+}
+
+.dm-contact {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dm-contact:hover {
+    border-color: var(--line);
+    background: rgba(85, 230, 255, 0.05);
+}
+
+.dm-contact.is-selected {
+    border-color: rgba(85, 230, 255, 0.55);
+    background: rgba(85, 230, 255, 0.09);
+}
+
+.dm-contact-body {
+    display: grid;
+    min-width: 0;
+}
+
+.dm-contact-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dm-contact-identity {
+    font-family: monospace;
+    font-size: 0.68rem;
+    opacity: 0.6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dm-presence-dot {
+    flex: 0 0 auto;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: #4a5a63;
+}
+
+.dm-presence-dot.is-online {
+    background: #6ce26c;
+    box-shadow: 0 0 6px rgba(108, 226, 108, 0.7);
+}
+
+/* ── Direct Messenger: single connection status ── */
+
+.dm-chat-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+}
+
+.dm-chat-head .status-chip {
+    margin: 0;
+}
+
+.dm-peer-label {
+    margin: 0;
+    font-size: 0.8rem;
+    opacity: 0.7;
+}
+
+.dm-chat-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+.dm-search-result-presence {
+    margin: 0.35rem 0 0;
+    font-size: 0.76rem;
+    opacity: 0.75;
+}
+
+.dm-search-result-presence.is-online {
+    color: #6ce26c;
+    opacity: 1;
+}
+
+@media (max-width: 820px) {
+    .dm-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dm-contacts-list {
+        max-height: 14rem;
+    }
 }
 
 .dm-search {

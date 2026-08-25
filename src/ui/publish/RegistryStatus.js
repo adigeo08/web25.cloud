@@ -9,8 +9,11 @@
 
 import { NOSTR_REGISTRY_CONFIG } from '../../config/nostr.config.js';
 
-/** Human-readable form of the WEB25 category. */
-export const WEB25_CATEGORY_LABEL = 'WEB25.cloud / Websites';
+/**
+ * Human-readable form of what the entry is actually published under: DTAN's
+ * `application` category, marked as a WEB25 website.
+ */
+export const WEB25_CATEGORY_LABEL = 'Applications · WEB25 website';
 
 /**
  * @param {{ state: 'idle'|'signing'|'publishing'|'published'|'failed'|'skipped',

@@ -153,7 +153,11 @@ export function buildRegistryEventTemplate({
     const tags = [
         ['title', title],
         ['x', artifact.infoHash],
-        ['i', NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY]
+        // DTAN indexes against a fixed category tree, so the `tcat` value has to
+        // be one it knows. The WEB25 marker rides alongside it as a second `i`
+        // tag, which NIP-35 explicitly allows.
+        ['i', NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY],
+        ['i', NOSTR_REGISTRY_CONFIG.WEB25_MARKER]
     ];
 
     for (const hashtag of NOSTR_REGISTRY_CONFIG.WEB25_HASHTAGS) tags.push(['t', hashtag]);
@@ -197,7 +201,14 @@ export function buildRegistryEventTemplate({
 export function isWeb25RegistryEvent(event) {
     if (!event || event.kind !== NOSTR_REGISTRY_CONFIG.TORRENT_EVENT_KIND) return false;
     if (!Array.isArray(event.tags)) return false;
-    return allTagValues(event.tags, 'i').includes(NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY);
+
+    // Either marker identifies a WEB25 entry. The `t` hashtag is what discovery
+    // filters on because every relay indexes it; the `i` marker is the precise
+    // form. The `tcat` category is deliberately *not* used to identify us — it
+    // is a general DTAN category shared with every other application torrent.
+    const markers = allTagValues(event.tags, 'i');
+    if (markers.includes(NOSTR_REGISTRY_CONFIG.WEB25_MARKER)) return true;
+    return allTagValues(event.tags, 't').includes(NOSTR_REGISTRY_CONFIG.WEB25_PRIMARY_HASHTAG);
 }
 
 /**
@@ -243,6 +254,7 @@ export function parseRegistryEvent(event, { relayUrl = '', npubEncode = null } =
         trackers: allTagValues(tags, 'tracker'),
         torrentFiles,
 
+        category: firstTagValue(tags, 'i'),
         web25Schema: proof.schema,
         web25Publisher: proof.publisher,
         web25ChainId: proof.chainId,

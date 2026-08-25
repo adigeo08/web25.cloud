@@ -40,11 +40,13 @@ import {
     clearChannelsComposer,
     clearChannelsMessages,
     clearDmSearch,
-    renderChannelsStatus,
-    renderDmTransport,
+    renderDmConnectionState,
     showDmStep,
     updateDmNostrIdentity
 } from '../../ui/channels/ChannelsPanel.js';
+import { bindContactsPanel, bindSaveContact, renderContacts, renderSearchPresence } from '../../ui/channels/ContactsPanel.js';
+import { NostrPresenceService, INTENT } from '../../channels/NostrPresenceService.js';
+import { filterContacts, listContacts, saveContact } from '../../channels/ContactsStore.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
@@ -295,6 +297,35 @@ export function setupChannels() {
     });
     this.channelsService.setNostrFallback(this.nostrDmSession.createFallback());
 
+    // Presence and intent are a separate layer on purpose: seeing somebody
+    // online never starts a handshake, and no SDP exists until both sides ask.
+    this.presenceService = new NostrPresenceService({
+        pool: this.nostrPool,
+        signer,
+        onPresenceChange: () => this.refreshContactList(),
+        onIntentChange: (peer, state) => this.handleIntentChange(peer, state),
+        onMutualIntent: (peer) => void this.startMutualConversation(peer),
+        onError: (error) => this.log(`Nostr presence: ${error.message}`)
+    });
+    this.nostrDmSession.onChatRequest = (peer) => {
+        this.presenceService.receiveChatRequest(peer);
+        return undefined;
+    };
+    this.dmContacts = [];
+    this.dmContactFilter = '';
+    this.dmSelectedPeer = '';
+
+    bindContactsPanel({
+        // Opening a contact expresses intent; it does not connect.
+        onSelect: (contact) => void this.requestChatWith(contact.nostrPublicKey, contact.name),
+        onFilter: (query) => {
+            this.dmContactFilter = query;
+            this.refreshContactList();
+        }
+    });
+    bindSaveContact(() => void this.saveCurrentPeerAsContact());
+    void this.refreshContactList();
+
     bindChannelsPanel({
         onSearch: async (query) => {
             // Resolving the address is local and always works; the profile
@@ -330,43 +361,19 @@ export function setupChannels() {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
                 return false;
             }
-
-            try {
-                this.showDirectMessageProgress('Connecting to Nostr relays…');
-                clearChannelsMessages();
-                await this.nostrDmSession.start({ localAddress: identity.address });
-
-                const offerSessionId = createDirectMessageSessionId();
-                const sharedRoom = directMessageRoomFromSession(offerSessionId);
-                this.showDirectMessageProgress('Creating WebRTC offer…');
-                const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
-
-                this.showDirectMessageProgress('Publishing encrypted invitation…');
-                const { bootstrap } = await this.nostrDmSession.sendInvitation({
-                    identity,
-                    eciesPublicKey: signal.publicKey,
-                    role: 'offer',
-                    webrtcDescription: signal.description,
-                    recipient: result.nostrPublicKey,
-                    sessionId: offerSessionId
-                });
-                this.dmOfferSessionId = bootstrap.session.sessionId;
-                this.toast.success('Encrypted invitation sent. Waiting for your peer…', 'Direct Messenger');
-                return true;
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
-                return false;
-            } finally {
-                this.hideDirectMessageProgress();
-            }
+            return this.requestChatWith(result.nostrPublicKey, result.profile?.displayName || result.profile?.name || '');
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
             // Stay subscribed: leaving a conversation should not stop the user
             // being reachable at their npub.
             this.nostrDmSession?.clearPeer();
+            if (this.dmSelectedPeer) this.presenceService?.clearIntent(this.dmSelectedPeer);
+            this.dmSelectedPeer = '';
             this.dmOfferSessionId = null;
             clearDmSearch();
+            renderDmConnectionState('idle');
+            showDmStep('dm-choose-role');
         },
         onSend: async (text) => {
             try {
@@ -389,32 +396,19 @@ export function setupChannels() {
     });
 
     this.channelsService.onUpdate((event) => {
-        if (event.type === 'transport') {
-            renderDmTransport(event.transport);
-            // The relay fallback is a working conversation too: show the chat
-            // pane for it, not just for an established WebRTC connection.
-            if (event.transport === 'nostr' || event.transport === 'webrtc') showDmStep('dm-chat-active');
+        // One indicator, one source of truth. `transport`, `connected`,
+        // `peer-count` and `disconnected` all fold into this single state
+        // inside ChannelsService, so nothing else renders connection status.
+        if (event.type === 'connection-state') {
+            renderDmConnectionState(event.state, { peerLabel: this.dmPeerLabel() });
             return;
         }
-        if (event.type === 'connecting') {
-            renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
-        } else if (event.type === 'connected') {
-            renderChannelsStatus({
-                connected: true,
-                channel: this.channelsService.currentChannel,
-                peers: this.channelsService.currentPeerCount || 1
-            });
-        } else if (event.type === 'left') {
-            renderChannelsStatus({ connected: false });
+        if (event.type === 'transport' || event.type === 'connecting' || event.type === 'connected' ||
+            event.type === 'disconnected' || event.type === 'peer-count') {
+            return;
+        }
+        if (event.type === 'left') {
             clearChannelsMessages();
-        } else if (event.type === 'disconnected') {
-            renderChannelsStatus({ connected: false });
-        } else if (event.type === 'peer-count') {
-            renderChannelsStatus({
-                connected: Boolean(this.channelsService.currentChannel),
-                channel: this.channelsService.currentChannel,
-                peers: event.count || this.channelsService.currentPeerCount || 0
-            });
         } else if (event.type === 'message') {
             appendChannelsMessage(event.message, event.local === true);
         } else if (event.type === 'file-incoming' || event.type === 'file-progress') {
@@ -440,11 +434,21 @@ export async function handleNostrInvitation(bootstrap, context) {
 
     try {
         if (bootstrap.role === 'offer') {
+            // An offer is not consent. Anyone can address this npub, so an
+            // invitation from somebody the local user has not selected is
+            // recorded as intent and left there — no answer, no handshake.
+            const sender = `${context.senderNostrPublicKey}`.toLowerCase();
+            if (this.presenceService && this.presenceService.intentState(sender) !== INTENT.MUTUAL) {
+                this.presenceService.receiveChatRequest(sender);
+                this.log(`Holding a Direct Messenger invitation from ${sender}: intent is not mutual yet.`);
+                return;
+            }
+
             // An open conversation is not interrupted by an unsolicited third
-            // party: relays are public, so anyone can address this npub.
+            // party either.
             const boundPeer = this.nostrDmSession.peerNostrPublicKey;
-            if (this.channelsService.currentChannel && boundPeer && boundPeer !== context.senderNostrPublicKey) {
-                this.log(`Ignoring a Direct Messenger invitation from ${context.senderNostrPublicKey} during an active session.`);
+            if (this.channelsService.currentChannel && boundPeer && boundPeer !== sender) {
+                this.log(`Ignoring a Direct Messenger invitation from ${sender} during an active session.`);
                 return;
             }
 
@@ -455,13 +459,14 @@ export async function handleNostrInvitation(bootstrap, context) {
                 publicKey: bootstrap.from.eciesPublicKey
             };
             const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
-            this.nostrDmSession.setPeer(context.senderNostrPublicKey);
+            this.nostrDmSession.setPeer(sender);
+            this.dmSelectedPeer = sender;
             await this.nostrDmSession.sendInvitation({
                 identity,
                 eciesPublicKey: answerSignal.publicKey,
                 role: 'answer',
                 webrtcDescription: answerSignal.description,
-                recipient: context.senderNostrPublicKey,
+                recipient: sender,
                 // The peer's full ECIES key is known now, so the answer gets the
                 // Web25 ECIES envelope on top of the NIP-44 gift wrap.
                 recipientEciesPublicKey: bootstrap.from.eciesPublicKey,
@@ -478,10 +483,168 @@ export async function handleNostrInvitation(bootstrap, context) {
                 publicKey: bootstrap.from.eciesPublicKey
             });
             this.nostrDmSession.setPeer(context.senderNostrPublicKey);
+            this.dmSelectedPeer = `${context.senderNostrPublicKey}`.toLowerCase();
             this.toast.success('Peer answered. Establishing the direct connection…', 'Direct Messenger');
         }
     } catch (error) {
         this.toast.error(error.message, 'Direct Messenger');
+    }
+}
+
+/** Short label for whoever the current conversation is with. */
+export function dmPeerLabel() {
+    const peer = this.dmSelectedPeer;
+    if (!peer) return '';
+    const contact = (this.dmContacts || []).find((entry) => entry.nostrPublicKey === peer);
+    if (contact?.name) return contact.name;
+    return `${peer.slice(0, 8)}…`;
+}
+
+/** Reload contacts from IndexedDB and repaint the list with live presence. */
+export async function refreshContactList() {
+    try {
+        this.dmContacts = await listContacts();
+    } catch (error) {
+        this.log(`Contacts unavailable: ${error.message}`);
+        this.dmContacts = [];
+    }
+
+    // Watch exactly the contacts on screen; presence for anyone else is noise.
+    this.presenceService?.watch(this.dmContacts.map((contact) => contact.nostrPublicKey));
+
+    renderContacts(filterContacts(this.dmContacts, this.dmContactFilter), {
+        isOnline: (pubkey) => Boolean(this.presenceService?.isOnline(pubkey)),
+        selectedKey: this.dmSelectedPeer
+    });
+}
+
+/**
+ * Express intent to talk to a peer.
+ *
+ * This is all that selecting a contact or a search result does. No WebRTC
+ * offer is created and no SDP exists yet; the conversation begins only when the
+ * peer has selected us back.
+ *
+ * @param {string} nostrPublicKey
+ * @param {string} [suggestedName]
+ */
+export async function requestChatWith(nostrPublicKey, suggestedName = '') {
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) {
+        this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
+        return false;
+    }
+
+    try {
+        await this.nostrDmSession.start({ localAddress: identity.address });
+        this.dmSelectedPeer = `${nostrPublicKey}`.toLowerCase();
+        this.dmPendingContactName = suggestedName;
+
+        const state = await this.presenceService.sendChatRequest(this.dmSelectedPeer, (peer, kind, content) =>
+            this.nostrDmSession.sendGiftWrapped(peer, kind, content)
+        );
+
+        renderSearchPresence(this.presenceService.isOnline(this.dmSelectedPeer));
+        await this.refreshContactList();
+
+        if (state === INTENT.MUTUAL) {
+            // They had already asked; this completes the pair.
+            this.toast.success('Both of you want to talk — connecting…', 'Direct Messenger');
+            return true;
+        }
+
+        this.channelsService.setPreConnectionState('awaiting-peer');
+        renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel() });
+        this.toast.info('Request sent. The chat opens once they select you too.', 'Direct Messenger');
+        return true;
+    } catch (error) {
+        this.toast.error(error.message, 'Direct Messenger');
+        return false;
+    }
+}
+
+/**
+ * Reflect an intent change in the UI without connecting anything.
+ * @param {string} peer
+ * @param {string} state
+ */
+export function handleIntentChange(peer, state) {
+    if (state === INTENT.RECEIVED && peer !== this.dmSelectedPeer) {
+        // Somebody asked for us. Surfacing it is as far as this goes — the
+        // local user still has to select them before anything is negotiated.
+        this.toast.info('Someone would like to chat. Search or select them to accept.', 'Chat request');
+    }
+    void this.refreshContactList();
+}
+
+/**
+ * Intent is now mutual, so a handshake may finally begin.
+ *
+ * Exactly one side offers, chosen deterministically, or both would offer at
+ * once and neither would answer.
+ *
+ * @param {string} peer
+ */
+export async function startMutualConversation(peer) {
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) return;
+
+    this.dmSelectedPeer = `${peer}`.toLowerCase();
+    this.nostrDmSession.setPeer(this.dmSelectedPeer);
+    this.channelsService.setPreConnectionState('handshake');
+    renderDmConnectionState('handshake', { peerLabel: this.dmPeerLabel() });
+
+    if (!this.presenceService.shouldInitiate(this.dmSelectedPeer)) {
+        // The other side offers; our invitation will arrive over Nostr.
+        return;
+    }
+
+    try {
+        clearChannelsMessages();
+        const offerSessionId = createDirectMessageSessionId();
+        const sharedRoom = directMessageRoomFromSession(offerSessionId);
+        const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
+
+        const { bootstrap } = await this.nostrDmSession.sendInvitation({
+            identity,
+            eciesPublicKey: signal.publicKey,
+            role: 'offer',
+            webrtcDescription: signal.description,
+            recipient: this.dmSelectedPeer,
+            sessionId: offerSessionId
+        });
+        this.dmOfferSessionId = bootstrap.session.sessionId;
+    } catch (error) {
+        this.toast.error(error.message, 'Direct Messenger');
+    }
+}
+
+/** Save whoever the current conversation is with, under a name of your choosing. */
+export async function saveCurrentPeerAsContact() {
+    const peer = this.dmSelectedPeer;
+    if (!peer) {
+        this.toast.warning('Open a conversation first.', 'Contacts');
+        return false;
+    }
+
+    const suggested = this.dmPendingContactName || '';
+    const name = window.prompt('Name for this contact (stored only in this browser):', suggested);
+    if (name === null) return false;
+
+    try {
+        await saveContact({
+            nostrPublicKey: peer,
+            npub: npubEncode(peer),
+            // The EVM address is known only once an invitation was verified.
+            evmAddress: this.channelsService.peerAddress || null,
+            name
+        });
+        await this.refreshContactList();
+        this.toast.success('Contact saved locally.', 'Contacts');
+        return true;
+    } catch (error) {
+        this.toast.error(error.message, 'Contacts');
+        return false;
     }
 }
 
@@ -817,17 +980,23 @@ export function setupAuthAwareUi(state) {
         npub: nostrReachable ? state.npub || null : null,
         enabled: state.nostrEnabled !== false
     });
-    renderDmTransport(this.channelsService?.transport || 'disconnected');
+    renderDmConnectionState(this.channelsService?.connectionState || 'idle', { peerLabel: this.dmPeerLabel?.() || '' });
 
     // An identity that is reachable at its npub subscribes the inbox, so an
     // inbound invitation arrives without the user having to send one first.
     // Removing the Nostr identity unsubscribes it again.
     if (nostrReachable && this.nostrDmSession && !this.nostrDmSession.started) {
-        void this.nostrDmSession.start({ localAddress: state.address }).catch((error) => {
-            this.log(`Nostr inbox unavailable: ${error.message}`);
-        });
+        void this.nostrDmSession
+            .start({ localAddress: state.address })
+            .then(() => this.presenceService?.start({ localNostrPublicKey: state.nostrPublicKey }))
+            .then(() => this.refreshContactList())
+            .catch((error) => {
+                this.log(`Nostr inbox unavailable: ${error.message}`);
+            });
     } else if (!nostrReachable && this.nostrDmSession?.started) {
         this.nostrDmSession.stop();
+        // Removing the Nostr identity also stops announcing presence.
+        this.presenceService?.stop();
         void this.channelsService?.leaveChannel();
     }
 

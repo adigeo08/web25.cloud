@@ -324,7 +324,7 @@
                                         </p>
                                         <div id="result-registry-row" class="deploy-registry-row hidden">
                                             <p><strong>Nostr identity:</strong> <code id="result-npub">Unavailable</code></p>
-                                            <p><strong>Category:</strong> <code id="result-registry-category">WEB25.cloud / Websites</code></p>
+                                            <p><strong>Category:</strong> <code id="result-registry-category">Applications · WEB25 website</code></p>
                                             <p>
                                                 <strong>Registry:</strong>
                                                 <span id="result-registry-status" class="status-chip status-pending">Pending</span>
@@ -433,13 +433,35 @@
                 <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload card-base">
 
+                        <div class="dm-layout">
+                        <aside class="dm-contacts" aria-label="Contacts">
+                            <div class="dm-contacts-head">
+                                <p class="dm-contacts-title">Contacts</p>
+                                <span id="dm-contacts-count" class="dm-contacts-count">0</span>
+                            </div>
+                            <input
+                                id="dm-contacts-filter"
+                                type="text"
+                                class="hash-input dm-contacts-filter"
+                                placeholder="Filter contacts…"
+                                autocomplete="off"
+                            />
+                            <div id="dm-contacts-list" class="dm-contacts-list"></div>
+                            <p class="dm-contacts-hint">
+                                Names are stored only in this browser and are never published.
+                            </p>
+                        </aside>
+
+                        <div class="dm-main">
                         <!-- SUB-PANEL 1: Find someone to message -->
                         <div id="dm-choose-role">
                             <h3>💬 Direct Messenger</h3>
                             <p class="dm-lede">
-                                Enter someone's Nostr address to start an encrypted chat.
-                                Messages go peer-to-peer over WebRTC, and fall back to Nostr relays
-                                if a direct connection can't be made.
+                                Enter someone's Nostr address to start an encrypted chat. The invitation is
+                                sent privately through Nostr, then your browsers try to connect directly over
+                                WebRTC. If that doesn't work, messages keep flowing through Nostr instead.
+                                Either way, invitations and messages are end-to-end encrypted — relays only
+                                ever carry sealed envelopes they can't read.
                             </p>
 
                             <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
@@ -484,8 +506,9 @@
                                         <p id="dm-search-result-name" class="dm-search-result-name"></p>
                                         <p id="dm-search-result-npub" class="dm-search-result-npub"></p>
                                         <p id="dm-search-result-about" class="dm-search-result-about"></p>
+                                        <p id="dm-search-result-presence" class="dm-search-result-presence"></p>
                                     </div>
-                                    <button id="channels-nostr-invite-btn" class="btn btn-primary">Start chat</button>
+                                    <button id="channels-nostr-invite-btn" class="btn btn-primary">Request chat</button>
                                 </div>
 
                                 <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
@@ -494,9 +517,9 @@
 
                         <!-- SUB-PANEL 2: Chat Active -->
                         <div id="dm-chat-active" class="hidden">
-                            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem">
-                                <p id="channels-status" class="status-chip status-pending" style="margin: 0">Disconnected</p>
-                                <p id="dm-transport-chip" class="status-chip status-pending" style="margin: 0">Disconnected</p>
+                            <div class="dm-chat-head">
+                                <p id="dm-connection-status" class="status-chip status-pending">Not connected</p>
+                                <p id="dm-peer-label" class="dm-peer-label"></p>
                             </div>
                             <div id="channels-messages" class="channels-messages"></div>
                             <div class="hash-input-group" style="margin-top: 0.75rem">
@@ -511,7 +534,12 @@
                                 <button id="channels-send-btn" class="btn btn-primary">Send</button>
                             </div>
                             <div id="channels-files" style="margin-top: 0.5rem"></div>
-                            <button id="channels-leave-btn" class="btn btn-secondary" style="margin-top: 1rem">Disconnect</button>
+                            <div class="dm-chat-actions">
+                                <button id="dm-save-contact-btn" class="btn btn-secondary btn-sm">➕ Save as contact</button>
+                                <button id="channels-leave-btn" class="btn btn-secondary btn-sm">Disconnect</button>
+                            </div>
+                        </div>
+                        </div>
                         </div>
 
                     </section>
@@ -539,7 +567,7 @@
                         <div id="browse-registry-mode" class="hidden">
                             <p>
                                 Discover WEB25 websites published to public Nostr relays under
-                                <code>WEB25.cloud / Websites</code>. The registry only says a site exists —
+                                <code>Applications</code> with a <code>web25</code> marker. The registry only says a site exists —
                                 content is downloaded over BitTorrent and verified from its
                                 <code>.torrentchain</code> before it renders.
                             </p>
@@ -629,9 +657,10 @@
                             Nostr relays — no magnet links or key pasting.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🔍 Search by <code>npub</code>, then start the chat</div>
+                            <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
                             <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
                             <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
+                            <div class="feature">🤝 A chat opens only when both sides have asked</div>
                             <div class="feature">🪪 Peer verification from public key to EVM address</div>
                             <div class="feature">✍️ Per-message signatures verified on receive</div>
                             <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
@@ -640,7 +669,7 @@
                             WebRTC stays the preferred transport. If a direct connection cannot be
                             established, messages fall back to the relays — still signed and ECIES-encrypted
                             exactly as before, with NIP-44 on top. The chat header says which path is in use:
-                            <strong>P2P · WebRTC</strong> or <strong>Relay fallback · Nostr</strong>.
+                            <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
                         </p>
 
                         <br /><br />
@@ -663,12 +692,12 @@
                         <h3>🛰️ Publishing to the registry (NIP-35 / DTAN)</h3>
                         <p>
                             Once a site bundle is signed, seeded and live, it can also be published as a public
-                            NIP-35 torrent event under the category <code>WEB25.cloud / Websites</code>. This is
+                            NIP-35 torrent event under DTAN’s <code>application</code> category, marked <code>web25</code>. This is
                             a second, separate Nostr use case from the private Direct Messenger — registry
                             events carry public metadata only.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🗂️ Category <code>tcat:web25.cloud,websites</code></div>
+                            <div class="feature">🗂️ <code>tcat:application</code> + marker <code>web25:website</code></div>
                             <div class="feature">🔗 Carries the final BitTorrent infohash and the real torrent entries</div>
                             <div class="feature">📦 In gzip mode that is <code>.torrentchain</code> + <code>site.bundle.json.gz</code></div>
                             <div class="feature">🪪 Mirrors the <code>.torrentchain</code> EVM proof for pre-download checks</div>
@@ -689,7 +718,7 @@
                         <p>
                             The Browse tab has a second mode, <strong>Search WEB25 Registry</strong>, next to the
                             existing load-by-hash flow. It queries <code>kind: 2003</code> events in
-                            <code>tcat:web25.cloud,websites</code> and nothing else.
+                            the <code>web25</code> hashtag, and nothing else.
                         </p>
                         <div class="feature-grid">
                             <div class="feature">🔍 Search by site name, infohash, EVM publisher, or <code>npub</code></div>

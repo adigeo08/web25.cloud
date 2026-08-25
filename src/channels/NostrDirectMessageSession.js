@@ -18,6 +18,7 @@ import { normalizeNostrPublicKey } from '../nostr/nip19.js';
 import {
     createNostrChatEvent,
     createNostrDMInvitation,
+    createNostrGiftWrappedRumor,
     openNostrGiftWrap,
     subscribeNostrInbox,
     verifyNostrDMInvitation
@@ -30,16 +31,26 @@ export class NostrDirectMessageSession {
      *   signer: any,
      *   onInvitation?: (bootstrap: any, context: { senderNostrPublicKey: string }) => void|Promise<void>,
      *   onChatEnvelope?: (wire: string, context: { senderNostrPublicKey: string }) => void|Promise<void>,
+     *   onChatRequest?: (senderNostrPublicKey: string) => void|Promise<void>,
      *   onError?: (error: Error) => void,
      *   config?: typeof NOSTR_CONFIG
      * }} options
      */
-    constructor({ pool, signer, onInvitation = null, onChatEnvelope = null, onError = null, config = NOSTR_CONFIG }) {
+    constructor({
+        pool,
+        signer,
+        onInvitation = null,
+        onChatEnvelope = null,
+        onChatRequest = null,
+        onError = null,
+        config = NOSTR_CONFIG
+    }) {
         this.pool = pool;
         this.signer = signer;
         this.config = config;
         this.onInvitation = onInvitation;
         this.onChatEnvelope = onChatEnvelope;
+        this.onChatRequest = onChatRequest;
         this.onError = onError;
 
         this.localNostrPublicKey = '';
@@ -146,6 +157,29 @@ export class NostrDirectMessageSession {
     }
 
     /**
+     * Send an arbitrary gift-wrapped rumor to a peer.
+     *
+     * Used for chat requests, which must travel the same private path as
+     * everything else in the DM layer: a relay sees only a wrap addressed to a
+     * `#p` tag, never who asked whom.
+     *
+     * @param {string} peerPublicKey
+     * @param {number} kind
+     * @param {string} content
+     */
+    async sendGiftWrapped(peerPublicKey, kind, content) {
+        const { event } = await createNostrGiftWrappedRumor({
+            signer: this.signer,
+            recipient: peerPublicKey,
+            kind,
+            content
+        });
+        const result = await this.pool.publish(event);
+        if (result.accepted.length === 0) throw new Error('No Nostr relay accepted the message.');
+        return event;
+    }
+
+    /**
      * Build, wrap and publish a WebRTC invitation.
      *
      * @param {{ identity: { address: string }, eciesPublicKey: string,
@@ -205,6 +239,17 @@ export class NostrDirectMessageSession {
         }
 
         const { rumor, senderNostrPublicKey } = opened;
+
+        if (rumor.kind === this.config.WEB25_CHAT_REQUEST_KIND) {
+            // Intent only. Nothing is negotiated here — a handshake starts
+            // solely when the local user has also selected this peer.
+            try {
+                await this.onChatRequest?.(senderNostrPublicKey);
+            } catch (error) {
+                this._fail(error);
+            }
+            return;
+        }
 
         if (rumor.kind === this.config.NIP17_CHAT_KIND) {
             if (!this.peerNostrPublicKey || senderNostrPublicKey !== this.peerNostrPublicKey) return;

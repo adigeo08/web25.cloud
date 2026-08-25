@@ -27,16 +27,16 @@ export const DEFAULT_NOSTR_DM_RELAYS = DEFAULT_NOSTR_RELAYS;
 /**
  * Relays used for the public WEB25 website registry (NIP-35 kind 2003).
  *
- * `relay.dtan.xyz` is the specialised torrent-index relay this registry targets
- * first; the generic relays follow for redundancy so a DTAN outage cannot make
- * a published site undiscoverable. The two purposes are kept in separate pools
- * even though they share the same relay client: registry events are public, DM
- * events are not, and nothing should ever cross between them.
+ * Deliberately only the specialised torrent-index relay: registry entries are
+ * a torrent index, and the general relays in `DEFAULT_NOSTR_RELAYS` carry the
+ * private Direct Messenger traffic. Keeping the lists disjoint means a public
+ * website listing is never published into the DM relay pool.
+ *
+ * The trade-off is accepted on purpose: discovery depends on this one relay
+ * being reachable. It is only discovery — a site stays live, seeding and
+ * loadable by infohash whatever the registry does.
  */
-export const DEFAULT_NOSTR_REGISTRY_RELAYS = Object.freeze([
-    'wss://relay.dtan.xyz',
-    ...DEFAULT_NOSTR_RELAYS
-]);
+export const DEFAULT_NOSTR_REGISTRY_RELAYS = Object.freeze(['wss://relay.dtan.xyz']);
 
 export const NOSTR_CONFIG = Object.freeze({
     /** Per-relay socket open timeout. */
@@ -60,6 +60,27 @@ export const NOSTR_CONFIG = Object.freeze({
 
     /** Kind of the NIP-59 rumor carrying a Web25 WebRTC invitation. */
     WEB25_SIGNALING_KIND: 25510,
+    /**
+     * Kind of the NIP-59 rumor carrying a chat request — "I would like to talk
+     * to you". Private and gift-wrapped like everything else in the DM path,
+     * and deliberately separate from the invitation: intent carries no SDP.
+     */
+    WEB25_CHAT_REQUEST_KIND: 25511,
+
+    /**
+     * NIP-38 user status, used as a presence beacon. Addressable, so a peer can
+     * be asked "are you around?" without both sides being subscribed at the
+     * same moment.
+     */
+    PRESENCE_KIND: 30315,
+    /** `d` tag namespacing our presence away from a user's general status. */
+    PRESENCE_IDENTIFIER: 'web25-dm',
+    /** Presence is republished on this interval while the messenger is open. */
+    PRESENCE_REPUBLISH_MS: 60 * 1000,
+    /** A presence beacon older than this is treated as offline. */
+    PRESENCE_TTL_MS: 3 * 60 * 1000,
+    /** A chat request older than this no longer counts towards mutual intent. */
+    CHAT_REQUEST_TTL_MS: 30 * 60 * 1000,
     /** NIP-17 private chat message kind, used for the encrypted relay fallback. */
     NIP17_CHAT_KIND: 14,
 
@@ -90,13 +111,33 @@ export const NOSTR_REGISTRY_CONFIG = Object.freeze({
     TORRENT_EVENT_KIND: 2003,
 
     /**
-     * The WEB25 website category, as a NIP-35 `i` tag.
-     * Namespace `web25.cloud`, category `websites`.
+     * NIP-35 category, as an `i` tag.
+     *
+     * DTAN resolves categories against a fixed tree — `video`, `audio`,
+     * `application`, `game`, `porn`, `other` — so an invented path like
+     * `tcat:web25.cloud,websites` matches no filter there and the entry is
+     * effectively invisible in the DTAN ecosystem. A WEB25 site is a bundled
+     * web application, so `application` is the honest fit among the categories
+     * that actually index.
      */
-    WEB25_CATEGORY: 'tcat:web25.cloud,websites',
+    WEB25_CATEGORY: 'tcat:application',
 
-    /** Generic hashtags added alongside the category. */
+    /**
+     * WEB25-specific marker, kept in the `i` namespace alongside the category.
+     * NIP-35 allows several `i` tags (`tcat`, `imdb`, `tmdb`, …), so this
+     * identifies a WEB25 entry precisely without displacing the category DTAN
+     * needs.
+     */
+    WEB25_MARKER: 'web25:website',
+
+    /**
+     * Hashtags. `web25` is the one discovery filters on — `t` tags are indexed
+     * by every relay, so this is what makes WEB25 entries findable without
+     * relying on a custom category being understood.
+     */
     WEB25_HASHTAGS: Object.freeze(['web25', 'website', 'static-site']),
+    /** The hashtag a registry query filters on. */
+    WEB25_PRIMARY_HASHTAG: 'web25',
 
     /** Namespaced tags mirroring the `.torrentchain` proof into the event. */
     PROOF_TAGS: Object.freeze({

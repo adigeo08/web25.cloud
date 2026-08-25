@@ -191,6 +191,31 @@ export async function createNostrChatEvent({ signer, recipient, wire }) {
 }
 
 /**
+ * Gift-wrap an arbitrary rumor for a recipient.
+ *
+ * The generic form of the chat/invitation helpers above, used for control
+ * messages such as chat requests. Confidentiality and sender authenticity come
+ * from the same NIP-44/NIP-59 layers.
+ *
+ * @param {{ signer: any, recipient: string, kind: number, content: string, tags?: string[][] }} params
+ */
+export async function createNostrGiftWrappedRumor({ signer, recipient, kind, content, tags = [] }) {
+    const recipientNostrPublicKey = normalizeNostrPublicKey(recipient);
+    const local = await requireLocalNostrIdentity(signer);
+
+    const event = await giftWrapRumor({
+        signer,
+        recipientNostrPublicKey,
+        senderNostrPublicKey: local.nostrPublicKey,
+        kind,
+        content,
+        tags
+    });
+
+    return { event, recipientNostrPublicKey };
+}
+
+/**
  * Open the gift wrap and classify what is inside.
  *
  * @param {{ signer: any, giftWrap: any, localNostrPublicKey: string }} params

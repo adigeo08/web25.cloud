@@ -96,7 +96,8 @@ test('a failed registry publication still leaves the deployment complete', () =>
     assert.ok(step > 6, 'a registry failure must never roll the deployment back');
 });
 
-test('the deploy result labels the category exactly as published', () => {
-    assert.equal(NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY, 'tcat:web25.cloud,websites');
-    assert.equal(WEB25_CATEGORY_LABEL, 'WEB25.cloud / Websites');
+test('the deploy result labels the category the entry is actually published under', () => {
+    assert.equal(NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY, 'tcat:application');
+    assert.equal(NOSTR_REGISTRY_CONFIG.WEB25_MARKER, 'web25:website');
+    assert.equal(WEB25_CATEGORY_LABEL, 'Applications · WEB25 website');
 });

@@ -31,6 +31,31 @@ export const DM_TRANSPORT = /** @type {const} */ ({
     NOSTR: 'nostr'
 });
 
+/**
+ * The single connection state shown to the user.
+ *
+ * There is deliberately one of these rather than a transport flag next to a
+ * peer-count flag: two indicators could disagree, and the user only needs one
+ * answer to "does this conversation work?". Transport is a detail of the final
+ * state, not a competing status.
+ */
+export const DM_CONNECTION = /** @type {const} */ ({
+    /** No conversation selected. */
+    IDLE: 'idle',
+    /** Intent sent, waiting for the peer to select us back. */
+    AWAITING_PEER: 'awaiting-peer',
+    /** Mutual intent; the encrypted invitation is being exchanged over Nostr. */
+    HANDSHAKE: 'handshake',
+    /** Handshake done, negotiating the direct connection. */
+    CONNECTING_WEBRTC: 'connecting-webrtc',
+    /** Working, peer to peer. */
+    CONNECTED_WEBRTC: 'connected-webrtc',
+    /** Working, carried by the relays. */
+    CONNECTED_NOSTR: 'connected-nostr',
+    /** Was working, now not. */
+    DISCONNECTED: 'disconnected'
+});
+
 const DEFAULT_RTC_CONFIG = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
@@ -145,8 +170,56 @@ export default class ChannelsService {
         this._transportConfig = transportConfig;
         /** Current message transport. WebRTC is always preferred. */
         this.transport = DM_TRANSPORT.DISCONNECTED;
+        /** The one state the UI renders. Derived, never set from two places. */
+        this.connectionState = DM_CONNECTION.IDLE;
         this._connectTimer = null;
         this._disconnectTimer = null;
+    }
+
+    /**
+     * Recompute and emit the single connection state.
+     *
+     * Every transport change funnels through here, so the UI can never be shown
+     * two contradictory flags.
+     *
+     * @param {string} [reason]
+     */
+    _syncConnectionState(reason = '') {
+        const next = this._deriveConnectionState();
+        if (next === this.connectionState) return;
+        this.connectionState = next;
+        this.emit({ type: 'connection-state', state: next, transport: this.transport, reason });
+    }
+
+    /** @returns {string} one of `DM_CONNECTION` */
+    _deriveConnectionState() {
+        if (this.dataChannel?.readyState === 'open') return DM_CONNECTION.CONNECTED_WEBRTC;
+
+        switch (this.transport) {
+            case DM_TRANSPORT.NOSTR:
+                // The relay path only counts as connected once there is a peer
+                // to carry messages to.
+                return this.hasVerifiedPeerIdentity() ? DM_CONNECTION.CONNECTED_NOSTR : DM_CONNECTION.DISCONNECTED;
+            case DM_TRANSPORT.CONNECTING:
+                return DM_CONNECTION.CONNECTING_WEBRTC;
+            case DM_TRANSPORT.WEBRTC:
+                return DM_CONNECTION.CONNECTED_WEBRTC;
+            default:
+                return this.currentChannel ? DM_CONNECTION.DISCONNECTED : DM_CONNECTION.IDLE;
+        }
+    }
+
+    /**
+     * States the conversation passes through before any transport exists.
+     * Driven by the presence/intent layer, which owns everything up to the
+     * point where an invitation is actually exchanged.
+     *
+     * @param {'idle'|'awaiting-peer'|'handshake'} state
+     */
+    setPreConnectionState(state) {
+        if (this.connectionState === state) return;
+        this.connectionState = state;
+        this.emit({ type: 'connection-state', state, transport: this.transport, reason: 'signalling' });
     }
 
     /**
@@ -170,6 +243,7 @@ export default class ChannelsService {
         if (this.transport === transport) return;
         this.transport = transport;
         this.emit({ type: 'transport', transport, reason });
+        this._syncConnectionState(reason);
     }
 
     _clearTransportTimers() {
@@ -431,6 +505,12 @@ export default class ChannelsService {
         this.messageIds.clear();
 
         this._setTransport(DM_TRANSPORT.DISCONNECTED, 'left');
+        // Same dedupe as every other transition: leaving an already-idle
+        // service must not emit a redundant state change.
+        if (this.connectionState !== DM_CONNECTION.IDLE) {
+            this.connectionState = DM_CONNECTION.IDLE;
+            this.emit({ type: 'connection-state', state: DM_CONNECTION.IDLE, transport: this.transport, reason: 'left' });
+        }
         this.emit({ type: 'peer-count', count: 0 });
         this.emit({ type: 'left' });
     }
@@ -524,6 +604,7 @@ export default class ChannelsService {
         channel.onopen = () => {
             this.currentPeerCount = 1;
             this._promoteToWebrtc();
+            this._syncConnectionState('datachannel-open');
             this.emit({ type: 'peer-count', count: 1 });
             this.emit({ type: 'connected', channel: this.currentChannel });
             this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);

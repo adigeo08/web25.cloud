@@ -115,10 +115,42 @@ test('the event carries the final torrent infohash in the x tag', () => {
     assert.equal(firstTagValue(template.tags, 'x'), INFOHASH);
 });
 
-test('the event carries exactly the WEB25 website category', () => {
+test('the category is one DTAN actually indexes', () => {
     const template = buildRegistryEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
-    assert.deepEqual(allTagValues(template.tags, 'i'), ['tcat:web25.cloud,websites']);
-    assert.equal(NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY, 'tcat:web25.cloud,websites');
+
+    // DTAN resolves `tcat` against a fixed tree — video, audio, application,
+    // game, porn, other. An invented path matches no filter there, so the entry
+    // would never surface in the DTAN ecosystem.
+    const DTAN_TOP_LEVEL_CATEGORIES = ['video', 'audio', 'application', 'game', 'porn', 'other'];
+    const tcat = allTagValues(template.tags, 'i').find((value) => value.startsWith('tcat:'));
+
+    assert.equal(tcat, 'tcat:application');
+    assert.ok(DTAN_TOP_LEVEL_CATEGORIES.includes(tcat.slice('tcat:'.length).split(',')[0]));
+    assert.ok(!tcat.includes('web25.cloud'), 'the custom category is gone');
+});
+
+test('a WEB25 marker rides alongside the shared category', () => {
+    const template = buildRegistryEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const markers = allTagValues(template.tags, 'i');
+
+    // NIP-35 allows several `i` tags, so the category DTAN needs and the marker
+    // WEB25 needs can coexist.
+    assert.ok(markers.includes('tcat:application'));
+    assert.ok(markers.includes('web25:website'));
+    assert.equal(NOSTR_REGISTRY_CONFIG.WEB25_MARKER, 'web25:website');
+});
+
+test('the event matches the NIP-35 tag vocabulary', () => {
+    const template = buildRegistryEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const NIP35_TAGS = new Set(['title', 'x', 'file', 'tracker', 'i', 't']);
+
+    // Everything outside the NIP-35 vocabulary must be a namespaced WEB25 tag,
+    // so a generic client can parse the event and ignore the rest.
+    for (const [name] of template.tags) {
+        assert.ok(NIP35_TAGS.has(name) || name.startsWith('web25-'), `unexpected tag name: ${name}`);
+    }
+    assert.equal(template.kind, 2003);
+    assert.equal(typeof template.content, 'string');
 });
 
 test('the event carries the generic WEB25 hashtags', () => {
@@ -272,11 +304,7 @@ test('unrelated torrents in other categories are ignored', () => {
     const foreign = signRegistryEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [
-            ['title', 'Some Linux ISO'],
-            ['x', INFOHASH],
-            ['i', 'tcat:software,linux']
-        ],
+        tags: [['title', 'Some Linux ISO'], ['x', INFOHASH], ['i', 'tcat:video,movie']],
         content: ''
     });
 
@@ -284,11 +312,40 @@ test('unrelated torrents in other categories are ignored', () => {
     assert.equal(parseRegistryEvent(foreign), null);
 });
 
+test('someone else\'s application torrent is not mistaken for a WEB25 site', () => {
+    // Now that WEB25 shares DTAN's `application` category, the category alone
+    // must not identify us — only the WEB25 marker or hashtag may.
+    const neighbour = signRegistryEvent({
+        kind: 2003,
+        created_at: 1800000000,
+        tags: [['title', 'Some Windows App'], ['x', INFOHASH], ['i', 'tcat:application'], ['t', 'windows']],
+        content: ''
+    });
+
+    assert.equal(isWeb25RegistryEvent(neighbour), false);
+    assert.equal(parseRegistryEvent(neighbour), null);
+});
+
+test('either the WEB25 marker or the web25 hashtag identifies an entry', () => {
+    const base = { kind: 2003, created_at: 1800000000, content: '' };
+    const byMarker = signRegistryEvent({
+        ...base,
+        tags: [['title', 'A'], ['x', INFOHASH], ['i', 'tcat:application'], ['i', 'web25:website']]
+    });
+    const byHashtag = signRegistryEvent({
+        ...base,
+        tags: [['title', 'B'], ['x', INFOHASH], ['i', 'tcat:application'], ['t', 'web25']]
+    });
+
+    assert.equal(isWeb25RegistryEvent(byMarker), true);
+    assert.equal(isWeb25RegistryEvent(byHashtag), true);
+});
+
 test('events of the wrong kind are ignored even in the right category', () => {
     const wrongKind = signRegistryEvent({
         kind: 1,
         created_at: 1800000000,
-        tags: [['title', 'Not a torrent'], ['x', INFOHASH], ['i', 'tcat:web25.cloud,websites']],
+        tags: [['title', 'Not a torrent'], ['x', INFOHASH], ['i', 'web25:website']],
         content: ''
     });
 
@@ -300,19 +357,19 @@ test('structurally broken entries are dropped rather than listed', () => {
     const noHash = signRegistryEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'No hash'], ['i', 'tcat:web25.cloud,websites']],
+        tags: [['title', 'No hash'], ['t', 'web25']],
         content: ''
     });
     const badHash = signRegistryEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'Bad hash'], ['x', 'not-a-hash'], ['i', 'tcat:web25.cloud,websites']],
+        tags: [['title', 'Bad hash'], ['x', 'not-a-hash'], ['t', 'web25']],
         content: ''
     });
     const noTitle = signRegistryEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['x', INFOHASH], ['i', 'tcat:web25.cloud,websites']],
+        tags: [['x', INFOHASH], ['t', 'web25']],
         content: ''
     });
 
@@ -408,7 +465,7 @@ test('a plain NIP-35 torrent in our category is listed but never verifiable', as
     const event = signRegistryEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'No WEB25 proof'], ['x', INFOHASH], ['i', 'tcat:web25.cloud,websites']],
+        tags: [['title', 'No WEB25 proof'], ['x', INFOHASH], ['t', 'web25']],
         content: ''
     });
 

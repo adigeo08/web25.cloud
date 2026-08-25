@@ -33,7 +33,9 @@ The UI is organized into:
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
-  - Transport state shown plainly: `P2P · WebRTC` or `Relay fallback · Nostr`
+  - A chat opens only on mutual intent — seeing someone online never connects you
+  - Local contacts in IndexedDB, with presence shown per contact
+  - One connection indicator: `Connected · WebRTC` or `Connected · Nostr`, green either way
   - Identity-bound encrypted/signed message exchange
   - Nostr relay fallback when WebRTC cannot be established
 
@@ -260,6 +262,27 @@ NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
 
+### 8b) Presence, mutual intent and local contacts
+
+Seeing somebody online is not permission to call them, so presence and
+conversation are separate states:
+
+```text
+presence  ->  "reachable right now"   public, coarse, NIP-38 beacon
+intent    ->  "I want to talk to you" private, gift-wrapped, one peer
+```
+
+- selecting a contact or a search result sends a **chat request** only — it
+  carries no SDP and starts no handshake
+- a WebRTC offer is created solely once intent is **mutual**, and exactly one
+  side offers (chosen deterministically, so the two never glare)
+- an invitation from somebody you have not selected is held as intent, never
+  answered
+- contacts live in their own IndexedDB database with a friendly name you choose;
+  names are local-only and never published
+
+---
+
 ### 9) Public WEB25 website registry (NIP-35 / DTAN)
 
 A second, separate Nostr use case. Every deployed website can also be published
@@ -270,15 +293,16 @@ Direct Messenger  ->  private signalling + encrypted fallback (NIP-17/44/59)
 Registry          ->  public website discovery (NIP-35 kind 2003)
 ```
 
-- category is exactly `tcat:web25.cloud,websites` (`WEB25.cloud / Websites`)
+- category is `tcat:application` — one DTAN actually indexes — with the WEB25
+  marker `web25:website` and a `web25` hashtag alongside it
 - the event carries the final BitTorrent infohash, the real torrent entries and
   the real tracker list
 - the existing `.torrentchain` EVM proof is mirrored into the event, so a
   browser can show `Verified publisher: 0x...` before downloading
 - **no second EVM signature**: the site was already signed when
   `.torrentchain` was created; only a Nostr signature is added
-- registry relays default to `wss://relay.dtan.xyz` plus the generic relays;
-  no single relay is authoritative
+- registry entries go only to `wss://relay.dtan.xyz`; the general relays carry
+  private DM traffic and never receive a public website listing
 - registry publication never blocks or invalidates a deployment, and a retry
   resubmits the identical signed event (same id, `created_at` and signature)
 
@@ -292,7 +316,7 @@ Live / Seeding` next to `Registry: Published to 3 / 4 relays`, or
 and per-relay publication results.
 
 **Discovery** (Browse tab). *Search WEB25 Registry* queries `kind: 2003` events
-carrying `tcat:web25.cloud,websites` and nothing else. You can search the
+carrying the `web25` hashtag, and nothing else. You can search the
 results by site name, infohash, EVM publisher address, or `npub` / Nostr
 pubkey. Each row shows the site name, EVM publisher, Nostr identity, publish
 date, infohash and a verification state:
@@ -459,7 +483,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - STUN: `stun:stun.l.google.com:19302`
 - Nostr relays (configurable in `src/config/nostr.config.js`):
   - Direct Messenger: `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
-  - Website registry: `wss://relay.dtan.xyz` plus the relays above
+  - Website registry: `wss://relay.dtan.xyz` only — the two lists are disjoint
 
 ---
 

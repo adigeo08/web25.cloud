@@ -175,7 +175,11 @@ export class Web25RegistryService {
     buildRegistryFilter({ since = undefined, limit = undefined } = {}) {
         return {
             kinds: [this.config.TORRENT_EVENT_KIND],
-            '#i': [this.config.WEB25_CATEGORY],
+            // Filter on the `t` hashtag rather than the category: `tcat` is now
+            // the general DTAN `application` category, shared with every other
+            // application torrent, so it cannot select WEB25 entries. Single-
+            // letter tags are indexed by every relay, so `#t` is reliable.
+            '#t': [this.config.WEB25_PRIMARY_HASHTAG],
             since: since ?? Math.floor(this.now() / 1000) - this.config.QUERY_LOOKBACK_SECONDS,
             limit: limit ?? this.config.QUERY_LIMIT
         };

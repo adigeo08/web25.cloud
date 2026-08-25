@@ -13,15 +13,20 @@ import { bindCopyButton } from '../ClipboardButton.js';
 const DM_STEPS = ['dm-choose-role', 'dm-chat-active'];
 
 /**
- * Transport labels shown in the chat header. Deliberately plain: the user only
- * needs to know whether the conversation is peer-to-peer or going through a
- * public relay.
+ * The one connection indicator.
+ *
+ * Both working states are green: once a conversation works, the transport is a
+ * detail, not a warning. There is deliberately no second flag that could say
+ * something different at the same time.
  */
-export const DM_TRANSPORT_LABELS = {
-    connecting: { text: 'Connecting…', className: 'status-chip status-pending' },
-    webrtc: { text: 'P2P · WebRTC', className: 'status-chip status-success' },
-    nostr: { text: 'Relay fallback · Nostr', className: 'status-chip status-pending' },
-    disconnected: { text: 'Disconnected', className: 'status-chip status-pending' }
+export const DM_CONNECTION_LABELS = {
+    idle: { text: 'Not connected', className: 'status-chip status-pending' },
+    'awaiting-peer': { text: 'Waiting for them to accept…', className: 'status-chip status-pending' },
+    handshake: { text: 'Nostr handshake completed', className: 'status-chip status-pending' },
+    'connecting-webrtc': { text: 'Connecting via WebRTC…', className: 'status-chip status-pending' },
+    'connected-webrtc': { text: 'Connected · WebRTC', className: 'status-chip status-success' },
+    'connected-nostr': { text: 'Connected · Nostr', className: 'status-chip status-success' },
+    disconnected: { text: 'Disconnected', className: 'status-chip status-error' }
 };
 
 export function showDmStep(step) {
@@ -212,32 +217,24 @@ export function updateDmNostrIdentity({ npub, enabled = true }) {
 }
 
 /**
- * @param {string} transport one of `connecting`, `webrtc`, `nostr`, `disconnected`
+ * Render the single connection status.
+ *
+ * @param {string} state one of `DM_CONNECTION_LABELS`
+ * @param {{ peerLabel?: string }} [options]
  */
-export function renderDmTransport(transport) {
-    const el = document.getElementById('dm-transport-chip');
-    if (!el) return;
-    const label = DM_TRANSPORT_LABELS[transport] || DM_TRANSPORT_LABELS.disconnected;
-    el.textContent = label.text;
-    el.className = label.className;
-}
+export function renderDmConnectionState(state, { peerLabel = '' } = {}) {
+    const el = document.getElementById('dm-connection-status');
+    if (el) {
+        const label = DM_CONNECTION_LABELS[state] || DM_CONNECTION_LABELS.idle;
+        el.textContent = label.text;
+        el.className = label.className;
+    }
 
-export function renderChannelsStatus({ channel = '', peers = 0, connected = false }) {
-    const status = document.getElementById('channels-status');
-    if (!status) return;
-    if (!connected) {
-        status.textContent = 'Disconnected';
-        status.className = 'status-chip status-pending';
-        return;
-    }
-    if (connected && peers < 1) {
-        status.textContent = 'Connecting…';
-        status.className = 'status-chip status-pending';
-        return;
-    }
-    status.textContent = `Connected · peers: ${peers}`;
-    status.className = 'status-chip status-success';
-    showDmStep('dm-chat-active');
+    const peerEl = document.getElementById('dm-peer-label');
+    if (peerEl) peerEl.textContent = peerLabel;
+
+    // Anything past waiting means there is a conversation pane worth showing.
+    if (state !== 'idle' && state !== 'awaiting-peer') showDmStep('dm-chat-active');
 }
 
 export function clearChannelsMessages() {

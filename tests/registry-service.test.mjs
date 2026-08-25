@@ -157,9 +157,16 @@ function signedRegistryEvent(privateKey = WALLET_PRIV.slice(2)) {
 
 // ─── 1. Configuration ────────────────────────────────────────────────────
 
-test('the registry relay list leads with DTAN and keeps generic relays for redundancy', () => {
-    assert.equal(DEFAULT_NOSTR_REGISTRY_RELAYS[0], 'wss://relay.dtan.xyz');
-    assert.ok(DEFAULT_NOSTR_REGISTRY_RELAYS.length > 1, 'no single relay may be required');
+test('registry entries go only to the DTAN relay, never to the DM pool', async () => {
+    const { DEFAULT_NOSTR_DM_RELAYS } = await import('../src/config/nostr.config.js');
+
+    assert.deepEqual([...DEFAULT_NOSTR_REGISTRY_RELAYS], ['wss://relay.dtan.xyz']);
+    for (const relay of DEFAULT_NOSTR_DM_RELAYS) {
+        assert.ok(
+            !DEFAULT_NOSTR_REGISTRY_RELAYS.includes(relay),
+            `public registry entries must not be published to the DM relay ${relay}`
+        );
+    }
 });
 
 // ─── 2. Signing through the existing wallet worker ───────────────────────
@@ -311,7 +318,7 @@ test('rebuilding instead of retrying would produce a different event — the rea
 
 // ─── 5. Discovery ────────────────────────────────────────────────────────
 
-test('the discovery query filters kind 2003 in the WEB25 website category', async () => {
+test('the discovery query filters kind 2003 on the WEB25 hashtag', async () => {
     const pool = new FakePool();
     const { service } = await serviceWith(pool);
 
@@ -319,7 +326,10 @@ test('the discovery query filters kind 2003 in the WEB25 website category', asyn
     const [filter] = pool.subscriptions[0].filters;
 
     assert.deepEqual(filter.kinds, [NOSTR_REGISTRY_CONFIG.TORRENT_EVENT_KIND]);
-    assert.deepEqual(filter['#i'], ['tcat:web25.cloud,websites']);
+    // `#t` rather than `#i`: the category is now DTAN's shared `application`,
+    // so it cannot select WEB25 entries, and every relay indexes `t` tags.
+    assert.deepEqual(filter['#t'], ['web25']);
+    assert.equal(filter['#i'], undefined);
 });
 
 test('discovered entries expose the infohash needed by the normal WEB25 loader', async () => {
@@ -347,7 +357,7 @@ test('unrelated torrents delivered by a relay are ignored', async () => {
             {
                 kind: 2003,
                 created_at: 1800000000,
-                tags: [['title', 'Linux ISO'], ['x', INFOHASH], ['i', 'tcat:software,linux']],
+                tags: [['title', 'Linux ISO'], ['x', INFOHASH], ['i', 'tcat:video,movie']],
                 content: ''
             },
             WALLET_PRIV.slice(2)

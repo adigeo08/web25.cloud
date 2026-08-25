@@ -99,25 +99,67 @@ magnet exchange and the raw ECIES key display were removed from this panel in
 favour of the address search.
 
 ```text
-A types B's npub into the search box
+A types B's npub into the search box (or picks B from contacts)
       ↓
-address resolved locally; the pool is asked for a kind-0 profile (optional)
+address resolved locally; presence and profile looked up — neither connects
       ↓
-A clicks "Start chat"
+A clicks "Request chat"  →  gift-wrapped chat request to B. No SDP yet.
       ↓
-NIP-59 gift wrap (kind 1059) published to the relay pool
-      ↓  rumor: Web25 invitation envelope with the WebRTC offer
-B's inbox subscription (#p = B) receives, unwraps and validates it
+                     ...nothing further happens until...
       ↓
-B answers with a gift-wrapped invitation carrying the WebRTC answer
+B also selects A        →  gift-wrapped chat request to A
+      ↓
+INTENT IS MUTUAL — and only now may a handshake begin
+      ↓
+one side offers (deterministic: lower pubkey), the other answers
+      ↓
+NIP-59 gift wrap (kind 1059) carrying the Web25 invitation envelope
       ↓
 both sides attempt the direct WebRTC connection
       ↓
  ┌────────────────┴────────────────┐
  DataChannel opens          no connection
       ↓                            ↓
- P2P · WebRTC              Relay fallback · Nostr
+ Connected · WebRTC         Connected · Nostr
 ```
+
+### Presence is not consent
+
+Presence and conversation are deliberately separate states:
+
+```text
+presence  ->  "reachable right now"   public, coarse, says nothing about who
+intent    ->  "I want to talk to you" private, gift-wrapped, one peer
+```
+
+Presence is a NIP-38 user status (kind 30315) under the `web25-dm` `d` tag, with
+empty content — its existence and freshness are the whole signal, so it leaks no
+status text. A beacon older than `PRESENCE_TTL_MS` is simply offline; nobody has
+to announce leaving.
+
+Selecting a contact sends a **chat request** (a gift-wrapped rumor of kind
+`WEB25_CHAT_REQUEST_KIND`) and nothing else. It carries no SDP, no ICE and no
+ECIES key. A WebRTC offer is created only once requests exist in both
+directions, and an invitation arriving from somebody the local user has not
+selected is recorded as intent and left unanswered.
+
+Exactly one side offers, chosen by comparing the two Nostr public keys, because
+both reach the mutual state at the same moment and two simultaneous offers would
+leave nobody answering.
+
+### Local contacts
+
+Contacts live in their own IndexedDB database, `web25-contacts`, keyed by Nostr
+public key:
+
+```text
+{ nostrPublicKey, npub, evmAddress | null, name, createdAt, updatedAt }
+```
+
+The friendly name is the user's own label and is **never published** — attaching
+a human name to a public key on a relay would deanonymise the contact for
+everyone. The EVM address is filled in once an invitation has been verified, so
+a contact saved from a search legitimately has only the Nostr identity.
 
 ### The address search
 
@@ -137,6 +179,23 @@ make the browser fetch an arbitrary third-party host.
 
 The one privacy cost is inherent to the protocol: the relays you are connected
 to learn which pubkey you looked up.
+
+### One connection status
+
+The UI shows a single indicator, never two that could disagree:
+
+```text
+Waiting for them to accept…   intent sent, not yet mutual
+Nostr handshake completed     mutual; invitation exchanged
+Connecting via WebRTC…        negotiating the direct connection
+Connected · WebRTC            green
+Connected · Nostr             green
+Disconnected
+```
+
+Both working states are green: once the conversation works, the transport is a
+detail of that success, not a warning. `ChannelsService` derives this one state
+from the transport, so no other component renders connection status.
 
 WebRTC remains the preferred transport. The fallback is armed only when:
 
