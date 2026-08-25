@@ -65,8 +65,8 @@ async function copyToClipboard(text) {
 
 /**
  * Flash a transient result on a copy button without losing its label.
- * @param {HTMLElement} button
- * @param {string} text
+ * @param {HTMLElement|null} button
+ * @param {() => string} readValue
  */
 function bindCopyButton(button, readValue) {
     if (!button || button.dataset.bound) return;
