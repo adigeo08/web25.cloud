@@ -14,11 +14,12 @@
  * `walletWorkerCore.js` so it can be tested without worker globals.
  */
 
-import { workerEcies } from './workerCrypto.js';
+import { workerEcies, workerNostr } from './workerCrypto.js';
 import { createWalletWorkerCore } from './walletWorkerCore.js';
 
 const core = createWalletWorkerCore({
     ecies: workerEcies,
+    nostr: workerNostr,
     onLock: (reason) => self.postMessage({ type: 'EVENT', event: 'LOCKED', reason })
 });
 

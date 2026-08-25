@@ -2,6 +2,7 @@
 
 import { eciesEncrypt, verifySignature, evmAddressFromPublicKey } from './ecies.js';
 import { createLocalWalletSigner } from '../auth/LocalWalletService.js';
+import { NOSTR_CONFIG } from '../config/nostr.config.js';
 
 /**
  * The only capabilities this service is granted over the local identity.
@@ -14,6 +15,21 @@ import { createLocalWalletSigner } from '../auth/LocalWalletService.js';
  *   eciesDecrypt: (ciphertext: string) => Promise<string>
  * }} WalletSigner
  */
+
+/**
+ * The relay fallback handed in by the bootstrap layer. It receives the *already
+ * encrypted* Web25 wire payload and is responsible only for getting those bytes
+ * to the peer; it never sees plaintext.
+ *
+ * @typedef {{ send: (wire: string) => Promise<boolean> }} NostrFallback
+ */
+
+export const DM_TRANSPORT = /** @type {const} */ ({
+    DISCONNECTED: 'disconnected',
+    CONNECTING: 'connecting',
+    WEBRTC: 'webrtc',
+    NOSTR: 'nostr'
+});
 
 const DEFAULT_RTC_CONFIG = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -93,11 +109,21 @@ function verifySignalIdentity(signal, label = 'signal') {
     }
 }
 
+/**
+ * Never keep a Node test process alive on account of a transport timer.
+ * `unref` does not exist in browsers, where this is a no-op.
+ * @param {any} timer
+ */
+function unrefTimer(timer) {
+    if (timer && typeof timer.unref === 'function') timer.unref();
+}
+
 export default class ChannelsService {
     /**
-     * @param {{ rtcConfig?: RTCConfiguration, signer?: WalletSigner|null }} [options]
+     * @param {{ rtcConfig?: RTCConfiguration, signer?: WalletSigner|null,
+     *           nostrFallback?: NostrFallback|null, transportConfig?: any }} [options]
      */
-    constructor({ rtcConfig = DEFAULT_RTC_CONFIG, signer = null } = {}) {
+    constructor({ rtcConfig = DEFAULT_RTC_CONFIG, signer = null, nostrFallback = null, transportConfig = NOSTR_CONFIG } = {}) {
         this.rtcConfig = rtcConfig;
         this.peerConnection = null;
         this.dataChannel = null;
@@ -113,6 +139,91 @@ export default class ChannelsService {
         this._fileInfos = {};
         /** @type {WalletSigner} */
         this._signer = signer || createLocalWalletSigner();
+
+        /** @type {NostrFallback|null} */
+        this._nostrFallback = nostrFallback;
+        this._transportConfig = transportConfig;
+        /** Current message transport. WebRTC is always preferred. */
+        this.transport = DM_TRANSPORT.DISCONNECTED;
+        this._connectTimer = null;
+        this._disconnectTimer = null;
+    }
+
+    /**
+     * Attach (or detach, with `null`) the Nostr relay fallback.
+     * @param {NostrFallback|null} fallback
+     */
+    setNostrFallback(fallback) {
+        this._nostrFallback = fallback || null;
+    }
+
+    /** @returns {boolean} */
+    get canUseNostrFallback() {
+        return Boolean(this._nostrFallback && typeof this._nostrFallback.send === 'function');
+    }
+
+    /**
+     * @param {string} transport
+     * @param {string} [reason]
+     */
+    _setTransport(transport, reason = '') {
+        if (this.transport === transport) return;
+        this.transport = transport;
+        this.emit({ type: 'transport', transport, reason });
+    }
+
+    _clearTransportTimers() {
+        if (this._connectTimer) clearTimeout(this._connectTimer);
+        if (this._disconnectTimer) clearTimeout(this._disconnectTimer);
+        this._connectTimer = null;
+        this._disconnectTimer = null;
+    }
+
+    /**
+     * Arm the WebRTC connection deadline. Only once it elapses without an open
+     * DataChannel does the relay fallback take over — a WebRTC attempt is given
+     * its full negotiation window first.
+     */
+    _beginConnecting() {
+        this._clearTransportTimers();
+        this._setTransport(DM_TRANSPORT.CONNECTING, 'negotiating');
+        this._connectTimer = setTimeout(() => {
+            this._connectTimer = null;
+            if (this.dataChannel?.readyState === 'open') return;
+            this._fallBack('webrtc-timeout');
+        }, this._transportConfig.WEBRTC_CONNECT_TIMEOUT_MS);
+        unrefTimer(this._connectTimer);
+    }
+
+    /** WebRTC came up (or came back): it is always the preferred transport. */
+    _promoteToWebrtc() {
+        this._clearTransportTimers();
+        this._setTransport(DM_TRANSPORT.WEBRTC, 'datachannel-open');
+    }
+
+    /** @param {string} reason */
+    _fallBack(reason) {
+        this._clearTransportTimers();
+        if (this.canUseNostrFallback) {
+            this._setTransport(DM_TRANSPORT.NOSTR, reason);
+        } else {
+            this._setTransport(DM_TRANSPORT.DISCONNECTED, reason);
+        }
+    }
+
+    /**
+     * A `disconnected` ICE state is routinely transient, so it only starts a
+     * grace period. `failed`/`closed` are terminal and fall back at once.
+     */
+    _scheduleDisconnectFallback() {
+        if (this._disconnectTimer || this.transport === DM_TRANSPORT.NOSTR) return;
+        this._disconnectTimer = setTimeout(() => {
+            this._disconnectTimer = null;
+            const state = `${this.peerConnection?.connectionState || this.peerConnection?.iceConnectionState || ''}`.toLowerCase();
+            if (this.dataChannel?.readyState === 'open' || state === 'connected' || state === 'completed') return;
+            this._fallBack('webrtc-disconnected');
+        }, this._transportConfig.WEBRTC_DISCONNECT_GRACE_MS);
+        unrefTimer(this._disconnectTimer);
     }
 
     onUpdate(listener) {
@@ -175,6 +286,7 @@ export default class ChannelsService {
         this.dataChannel = channel;
 
         const payload = await this.createOfferSignalPayload(localIdentity);
+        this._beginConnecting();
         this.emit({ type: 'connecting', channel: normalized });
         return payload;
     }
@@ -215,6 +327,7 @@ export default class ChannelsService {
         this.messageIds.clear();
         this.createPeerConnection();
         const answerPayload = await this.createAnswerSignalPayloadFromOfferPayload(offerPayload, localIdentity);
+        this._beginConnecting();
         this.emit({ type: 'connecting', channel: normalized });
         return answerPayload;
     }
@@ -292,6 +405,7 @@ export default class ChannelsService {
     }
 
     async leaveChannel() {
+        this._clearTransportTimers();
         try {
             if (this.dataChannel) {
                 this.dataChannel.onopen = null;
@@ -316,12 +430,22 @@ export default class ChannelsService {
         this.peerAddress = '';
         this.messageIds.clear();
 
+        this._setTransport(DM_TRANSPORT.DISCONNECTED, 'left');
         this.emit({ type: 'peer-count', count: 0 });
         this.emit({ type: 'left' });
     }
 
+    /**
+     * A conversation is sendable when the DataChannel is open, or when the
+     * Nostr relay fallback is armed.
+     * @returns {boolean}
+     */
+    canSend() {
+        return this.dataChannel?.readyState === 'open' || this.canUseNostrFallback;
+    }
+
     sendChatMessage(text, identity) {
-        if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Connection is not ready yet.');
+        if (!this.canSend()) throw new Error('Connection is not ready yet.');
         const clean = `${text || ''}`.trim();
         if (!clean) return;
 
@@ -341,7 +465,7 @@ export default class ChannelsService {
     }
 
     sendSystemMessage(kind, data, identity = null) {
-        if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
+        if (!this.canSend()) return;
         const payload = {
             type: 'system',
             id: `sys-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -370,10 +494,23 @@ export default class ChannelsService {
             const state = `${peer.connectionState || peer.iceConnectionState || ''}`.toLowerCase();
             if (state === 'connected' || state === 'completed') {
                 this.currentPeerCount = 1;
+                if (this._disconnectTimer) {
+                    clearTimeout(this._disconnectTimer);
+                    this._disconnectTimer = null;
+                }
+                // If the peer connection recovered while the relay was carrying
+                // the conversation, go straight back to the preferred transport.
+                if (this.dataChannel?.readyState === 'open') this._promoteToWebrtc();
                 this.emit({ type: 'peer-count', count: 1 });
                 this.emit({ type: 'connected', channel: this.currentChannel });
-            } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+            } else if (state === 'disconnected') {
+                // Transient by nature — never fall back on this state alone.
                 this.currentPeerCount = 0;
+                this._scheduleDisconnectFallback();
+                this.emit({ type: 'peer-count', count: 0 });
+            } else if (state === 'failed' || state === 'closed') {
+                this.currentPeerCount = 0;
+                this._fallBack(`webrtc-${state}`);
                 this.emit({ type: 'peer-count', count: 0 });
             }
         };
@@ -386,6 +523,7 @@ export default class ChannelsService {
     bindDataChannel(channel) {
         channel.onopen = () => {
             this.currentPeerCount = 1;
+            this._promoteToWebrtc();
             this.emit({ type: 'peer-count', count: 1 });
             this.emit({ type: 'connected', channel: this.currentChannel });
             this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);
@@ -393,47 +531,82 @@ export default class ChannelsService {
 
         channel.onclose = () => {
             this.currentPeerCount = 0;
+            this._fallBack('datachannel-closed');
             this.emit({ type: 'peer-count', count: 0 });
-            this.emit({ type: 'disconnected' });
+            if (this.transport !== DM_TRANSPORT.NOSTR) this.emit({ type: 'disconnected' });
         };
 
-        channel.onmessage = async (event) => {
-            try {
-                if (!this.hasVerifiedPeerIdentity()) {
-                    this.emit({ type: 'error', error: new Error('Cannot accept message: verified peer identity is required.') });
-                    return;
-                }
-                const raw = `${event?.data || ''}`;
-                let envelope;
-                try {
-                    envelope = await this._signer.eciesDecrypt(raw);
-                } catch (error) {
-                    // Surfaces the worker's own reason: a locked/expired session
-                    // or a ciphertext that failed to decrypt.
-                    const reason = error instanceof Error ? error.message : String(error);
-                    this.emit({ type: 'error', error: new Error(`Cannot decrypt message: ${reason}`) });
-                    return;
-                }
-                const { plaintext, signature } = JSON.parse(envelope);
-                if (typeof plaintext !== 'string' || typeof signature !== 'string') {
-                    throw new Error('Malformed encrypted message envelope.');
-                }
-                const valid = await verifySignature(plaintext, signature, this.peerPublicKey);
-                if (!valid) {
-                    this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
-                    return;
-                }
-                const payload = JSON.parse(plaintext);
-                this.handleInbound(payload, false);
-            } catch (err) {
-                this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
-            }
+        channel.onmessage = (event) => {
+            void this.handleEncryptedWire(`${event?.data || ''}`, DM_TRANSPORT.WEBRTC);
         };
     }
 
+    /**
+     * The single inbound path for a Web25 wire payload, shared by the WebRTC
+     * DataChannel and the Nostr relay fallback.
+     *
+     * Whatever the transport, the same rules apply: the peer identity must be
+     * verified, the ciphertext must decrypt inside the wallet worker, and the
+     * inner signature must check out before anything is rendered. A relay is
+     * just another untrusted pipe.
+     *
+     * @param {string} raw hex ECIES payload
+     * @param {string} [source]
+     * @returns {Promise<boolean>} whether the message was accepted
+     */
+    async handleEncryptedWire(raw, source = DM_TRANSPORT.WEBRTC) {
+        try {
+            if (!this.hasVerifiedPeerIdentity()) {
+                this.emit({ type: 'error', error: new Error('Cannot accept message: verified peer identity is required.') });
+                return false;
+            }
+            let envelope;
+            try {
+                envelope = await this._signer.eciesDecrypt(`${raw || ''}`);
+            } catch (error) {
+                // Surfaces the worker's own reason: a locked/expired session
+                // or a ciphertext that failed to decrypt.
+                const reason = error instanceof Error ? error.message : String(error);
+                this.emit({ type: 'error', error: new Error(`Cannot decrypt message: ${reason}`) });
+                return false;
+            }
+            const { plaintext, signature } = JSON.parse(envelope);
+            if (typeof plaintext !== 'string' || typeof signature !== 'string') {
+                throw new Error('Malformed encrypted message envelope.');
+            }
+            const valid = await verifySignature(plaintext, signature, this.peerPublicKey);
+            if (!valid) {
+                this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
+                return false;
+            }
+            const payload = JSON.parse(plaintext);
+            // Stable per-message ids mean the same message arriving over both
+            // transports, or from several relays, is rendered exactly once.
+            this.handleInbound(payload, false, source);
+            return true;
+        } catch (err) {
+            this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+            return false;
+        }
+    }
+
+    /**
+     * Inbound entry point for the Nostr relay fallback. The argument is the
+     * same Web25 ciphertext the DataChannel would have carried.
+     * @param {string} wire
+     */
+    receiveNostrEnvelope(wire) {
+        return this.handleEncryptedWire(wire, DM_TRANSPORT.NOSTR);
+    }
+
+    /**
+     * Serialize → sign → ECIES-encrypt, then hand the ciphertext to whichever
+     * transport is available. The security model is identical either way: the
+     * transport only ever sees the encrypted envelope.
+     */
     async transmit(payload) {
         try {
-            if (!this.dataChannel || this.dataChannel.readyState !== 'open') return false;
+            if (!this.canSend()) return false;
             if (!this.hasVerifiedPeerIdentity()) {
                 this.emit({ type: 'error', error: new Error('Cannot send message: verified peer identity is required.') });
                 return false;
@@ -449,21 +622,52 @@ export default class ChannelsService {
             }
             const envelope = JSON.stringify({ plaintext, signature });
             const wire = await eciesEncrypt(envelope, this.peerPublicKey);
-            this.dataChannel.send(wire);
-            return true;
+            return await this._deliver(wire);
         } catch (err) {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
             return false;
         }
     }
 
-    handleInbound(payload, isLocal = false) {
+    /**
+     * WebRTC first, always. The relay is used only when the DataChannel is not
+     * open — never as a silent parallel path.
+     * @param {string} wire
+     * @returns {Promise<boolean>}
+     */
+    async _deliver(wire) {
+        if (this.dataChannel?.readyState === 'open') {
+            this.dataChannel.send(wire);
+            if (this.transport !== DM_TRANSPORT.WEBRTC) this._promoteToWebrtc();
+            return true;
+        }
+
+        if (!this.canUseNostrFallback) return false;
+
+        try {
+            const sent = await this._nostrFallback.send(wire);
+            if (sent) {
+                if (this.transport !== DM_TRANSPORT.NOSTR) this._setTransport(DM_TRANSPORT.NOSTR, 'webrtc-unavailable');
+                return true;
+            }
+            this.emit({ type: 'error', error: new Error('No Nostr relay accepted the message.') });
+            return false;
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            this.emit({ type: 'error', error: new Error(`Relay fallback failed: ${reason}`) });
+            return false;
+        }
+    }
+
+    handleInbound(payload, isLocal = false, source = '') {
         if (!payload || payload.channel !== this.currentChannel) return;
+        // Stable message ids: a duplicate arriving over the other transport, or
+        // from a second relay, is dropped here rather than rendered twice.
         if (payload.id && this.messageIds.has(payload.id)) return;
         if (payload.id) this.messageIds.add(payload.id);
 
-        if (payload.type === 'chat') this.emit({ type: 'message', message: payload, local: isLocal });
-        if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal });
+        if (payload.type === 'chat') this.emit({ type: 'message', message: payload, local: isLocal, source });
+        if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal, source });
 
         if (payload.type === 'file-info') {
             if (!this._fileBuffers) this._fileBuffers = {};
@@ -497,6 +701,8 @@ export default class ChannelsService {
      * @param {{ address?: string } | null} identity
      */
     async sendFile(file, identity) {
+        // File transfer stays on the DataChannel: chunked transfers over public
+        // relays would be abusive and are deliberately not offered.
         if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Connection is not ready yet.');
 
         const CHUNK_SIZE = 16 * 1024;

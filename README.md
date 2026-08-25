@@ -27,10 +27,15 @@ The UI is organized into:
   - Seed signed output
 - **Browse / Load**
   - Existing torrent hash loading flow remains available
-- **Direct Messenger (WebRTC data channels)**
-  - Manual host/guest offer-answer signaling
-  - Peer count and session state updates
+  - Separate **Search WEB25 Registry** mode querying Nostr/DTAN for published sites
+  - Search by site name, infohash, EVM publisher address or `npub`
+  - Each result shows its publisher verification state; **Open** reuses the same hash loader
+- **Direct Messenger (WebRTC data channels + Nostr)**
+  - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
+  - Encrypted invitations travel as NIP-59 gift wraps through public relays
+  - Transport state shown plainly: `P2P · WebRTC` or `Relay fallback · Nostr`
   - Identity-bound encrypted/signed message exchange
+  - Nostr relay fallback when WebRTC cannot be established
 
 ### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault + IndexedDB)
 
@@ -202,18 +207,124 @@ To avoid regressions from verified → pending after refresh:
 
 ### 7) P2P Direct Messenger over WebRTC (identity-bound)
 
-Direct Messenger follows manual offer/answer signaling with asymmetric crypto on secp256k1:
+Direct Messenger binds every peer to an EVM identity with asymmetric crypto on secp256k1:
 
-- host creates offer with mandatory `evmAddress` + `publicKey`
-- guest verifies host identity (`publicKey → keccak256 → address`)
-- guest replies with answer carrying mandatory `evmAddress` + `publicKey`
-- host verifies guest identity and opens data channel
-- DM setup requires an unlocked local wallet private key on both peers
+- offers and answers carry mandatory `evmAddress` + `publicKey`
+- each side verifies the other (`publicKey → keccak256 → address`) before any message
+- DM setup requires an unlocked local wallet on both peers
 - STUN used for ICE discovery: `stun:stun.l.google.com:19302`
 - outbound messages are always encrypted for recipient (ECIES) + signed by sender
 - inbound messages are always decrypted locally + signature-verified
 - invalid signatures are rejected
 - no plaintext DM fallback is allowed
+
+---
+
+### 8) Nostr identity, signalling and relay fallback
+
+One local secp256k1 key backs three identities — EVM, ECIES and Nostr — with no
+second seed and no second private key:
+
+```text
+local wallet private key (dedicated worker only)
+   ├─ EVM identity     0x…
+   ├─ ECIES identity   04…
+   └─ Nostr identity   npub1…
+```
+
+The Identity page shows all three side by side, each with its own copy button.
+The Nostr section carries its own **Add / Delete Nostr Identity** action, while
+Lock / Delete Wallet / Add Passkey stay grouped with the wallet status.
+
+Add and Delete control *reachability*, not a key: deleting unsubscribes the
+gift-wrapped inbox and hides the address, adding it back derives the same
+`npub`. Only the string `on`/`off` is persisted per wallet in `localStorage` —
+no key material. It cannot make an already-shared `npub` unknowable.
+
+- conversations start by searching a recipient `npub` (a raw hex key works too);
+  the pool is asked for a public kind-0 profile so the user can confirm the peer
+  before starting, but a missing profile never blocks messaging
+- the encrypted WebRTC offer/answer travel as NIP-59 gift wraps through a
+  configurable pool of public relays, straight from the browser
+- SDP, ICE data, EVM address and ECIES key are never publicly readable
+- WebRTC stays the preferred transport; the relay path is used only when a
+  connection cannot be established, and WebRTC is preferred again as soon as the
+  DataChannel reopens
+- fallback messages keep the existing Web25 signed + ECIES envelope *and* add
+  NIP-44 on top; relays are just another untrusted pipe
+- Nostr private-key operations happen inside the wallet worker and fail when the
+  wallet is locked; no `nsec` is ever produced or persisted
+
+NIPs used: **NIP-01**, **NIP-19**, **NIP-44 v2**, **NIP-59**, **NIP-17**.
+NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
+
+---
+
+### 9) Public WEB25 website registry (NIP-35 / DTAN)
+
+A second, separate Nostr use case. Every deployed website can also be published
+as a public NIP-35 torrent event, so WEB25 sites become discoverable:
+
+```text
+Direct Messenger  ->  private signalling + encrypted fallback (NIP-17/44/59)
+Registry          ->  public website discovery (NIP-35 kind 2003)
+```
+
+- category is exactly `tcat:web25.cloud,websites` (`WEB25.cloud / Websites`)
+- the event carries the final BitTorrent infohash, the real torrent entries and
+  the real tracker list
+- the existing `.torrentchain` EVM proof is mirrored into the event, so a
+  browser can show `Verified publisher: 0x...` before downloading
+- **no second EVM signature**: the site was already signed when
+  `.torrentchain` was created; only a Nostr signature is added
+- registry relays default to `wss://relay.dtan.xyz` plus the generic relays;
+  no single relay is authoritative
+- registry publication never blocks or invalidates a deployment, and a retry
+  resubmits the identical signed event (same id, `created_at` and signature)
+
+**Publishing** (Deploy tab). The registry step runs after the site is already
+live and seeding, and the two outcomes are reported separately — `Deployment:
+Live / Seeding` next to `Registry: Published to 3 / 4 relays`, or
+`Registry: Not published · Retry`. The deploy wizard names which key signs what
+(`Sign .torrentchain · EVM`, then `Sign & publish registry · Nostr`), and
+*View technical details* breaks the artifact into six sections: WEB25 bundle,
+`.torrentchain` payload, EVM signature, torrent artifact, NIP-35 registry event,
+and per-relay publication results.
+
+**Discovery** (Browse tab). *Search WEB25 Registry* queries `kind: 2003` events
+carrying `tcat:web25.cloud,websites` and nothing else. You can search the
+results by site name, infohash, EVM publisher address, or `npub` / Nostr
+pubkey. Each row shows the site name, EVM publisher, Nostr identity, publish
+date, infohash and a verification state:
+
+| State | Meaning |
+| --- | --- |
+| `verified` | the mirrored EVM signature recovers to the claimed publisher |
+| `invalid` | the metadata is well-formed but the signature does not hold |
+| `malformed` | the WEB25 metadata is broken or self-inconsistent |
+| `unverified` | there is no WEB25 proof to check |
+
+A valid Nostr signature alone never means `verified` — that only says who wrote
+the registry entry. **Open** hands the infohash to the existing loader, so there
+is one website loading implementation and the `.torrentchain` render gate is
+unchanged. Registry availability never affects loading by hash.
+
+Trust model:
+
+```text
+DTAN / Nostr        -> tells users that a website exists
+BitTorrent infohash -> identifies the distributed artifact
+.torrentchain       -> proves the contents and the publisher
+EVM signature       -> proves the WEB25 publisher identity
+Nostr signature     -> proves who published the registry entry
+```
+
+Registry metadata is an early signal only. The final load path is unchanged:
+download, read `.torrentchain`, verify the EVM signature and bundle hash, then
+render in the sandbox. When a site is opened from a registry result, the claim is
+additionally compared against the manifest that actually arrived; any
+disagreement is surfaced and the registry claim is withdrawn, because the
+downloaded manifest always wins. See `docs/web25-nostr-registry.md`.
 
 ---
 
@@ -252,7 +363,23 @@ src/
 │   └── PeerWebCache.js
 ├── channels/
 │   ├── ChannelsService.js
+│   ├── DirectMessageBootstrapCore.js
+│   ├── DirectMessageTorrentBootstrap.js
+│   ├── NostrDirectMessageBootstrap.js
+│   ├── NostrDirectMessageSession.js
 │   └── ecies.js
+├── registry/
+│   ├── Web25RegistryEvent.js
+│   └── Web25RegistryService.js
+├── nostr/
+│   ├── NostrIdentityPreference.js
+│   ├── NostrProfileLookup.js
+│   ├── NostrRelayPool.js
+│   ├── bech32.js
+│   ├── nip19.js
+│   ├── nip59.js
+│   ├── nostr.js
+│   └── nostrCore.js
 ├── core/
 │   ├── cache/
 │   │   └── SignatureStateVersion.js
@@ -330,6 +457,9 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 
 - WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
 - STUN: `stun:stun.l.google.com:19302`
+- Nostr relays (configurable in `src/config/nostr.config.js`):
+  - Direct Messenger: `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
+  - Website registry: `wss://relay.dtan.xyz` plus the relays above
 
 ---
 

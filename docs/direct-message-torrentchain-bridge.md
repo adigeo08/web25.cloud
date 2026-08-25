@@ -1,5 +1,15 @@
 # Direct Message P2P bootstrap via `.torrentchain` + magnet links
 
+> **Status note.** This document describes the WebTorrent transport for the
+> Direct Messenger bootstrap. The protocol, the modules
+> (`DirectMessageTorrentBootstrap.js`, `DirectMessageBootstrapCore.js`) and their
+> tests are all current and unchanged. What changed is the UI: the Direct
+> Messenger panel now addresses conversations by Nostr `npub`, and the manual
+> magnet exchange sections were removed from it. See
+> [`nostr-direct-messenger.md`](./nostr-direct-messenger.md) for the flow the app
+> uses today. The envelope, TTL, session-id, reply-id and replay rules below are
+> shared by both transports.
+
 ## 1) Existing mechanisms analysis
 
 ### A. Static deploy path (`WebTorrent` + `.torrentchain`)
@@ -25,7 +35,7 @@
 
 ### B. Direct Message path (`WebRTC` + STUN + ECIES)
 
-- `ChannelsService` currently does manual signaling with JSON "signal code" that embeds:
+- `ChannelsService` originally did manual signaling with a JSON "signal code" that embeds:
   - base64 SDP description (`offer` or `answer`);
   - peer `evmAddress`;
   - peer secp256k1 public key.

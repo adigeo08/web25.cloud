@@ -15,7 +15,11 @@ export const WALLET_WORKER_OPS = /** @type {const} */ ({
     SIGN_MESSAGE: 'SIGN_MESSAGE',
     GET_PUBLIC_KEY: 'GET_PUBLIC_KEY',
     ECIES_DECRYPT: 'ECIES_DECRYPT',
-    ECIES_SIGN: 'ECIES_SIGN'
+    ECIES_SIGN: 'ECIES_SIGN',
+    NOSTR_GET_PUBLIC_KEY: 'NOSTR_GET_PUBLIC_KEY',
+    NOSTR_SIGN_EVENT: 'NOSTR_SIGN_EVENT',
+    NOSTR_NIP44_ENCRYPT: 'NOSTR_NIP44_ENCRYPT',
+    NOSTR_NIP44_DECRYPT: 'NOSTR_NIP44_DECRYPT'
 });
 
 /** Session TTL and inactivity timeout for an unlocked wallet. */
@@ -26,8 +30,21 @@ const UNAUTHENTICATED_OPS = /** @type {Set<string>} */ (new Set([WALLET_WORKER_O
 
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
 const HEX_RE = /^[0-9a-fA-F]*$/;
+const NOSTR_PUBKEY_RE = /^[0-9a-f]{64}$/;
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_MESSAGE_LENGTH = 128 * 1024;
 const MAX_CIPHERTEXT_LENGTH = 4 * 1024 * 1024;
+
+/** NIP-44 v2 caps the plaintext at 65535 bytes. */
+const MAX_NIP44_PLAINTEXT_LENGTH = 65535;
+/** Base64 of the largest legal NIP-44 payload, with headroom for padding. */
+const MAX_NIP44_PAYLOAD_LENGTH = 90000;
+/** Bounds on the event template the worker is willing to sign. */
+const MAX_EVENT_CONTENT_LENGTH = MAX_NIP44_PAYLOAD_LENGTH;
+const MAX_EVENT_TAGS = 64;
+const MAX_EVENT_TAG_ITEMS = 32;
+const MAX_EVENT_TAG_ITEM_LENGTH = 1024;
+const MAX_EVENT_TIMESTAMP = 4102444800; // 2100-01-01, well past any real use
 
 export class WalletWorkerProtocolError extends Error {
     constructor(message) {
@@ -98,6 +115,7 @@ function validatePayload(type, payload) {
         case WALLET_WORKER_OPS.LOCK:
         case WALLET_WORKER_OPS.STATUS:
         case WALLET_WORKER_OPS.GET_PUBLIC_KEY:
+        case WALLET_WORKER_OPS.NOSTR_GET_PUBLIC_KEY:
             return {};
 
         case WALLET_WORKER_OPS.SIGN_MESSAGE:
@@ -127,7 +145,78 @@ function validatePayload(type, payload) {
             return { ciphertext };
         }
 
+        case WALLET_WORKER_OPS.NOSTR_SIGN_EVENT: {
+            // Deliberately not a generic signer: only a well-formed Nostr event
+            // template is accepted, and the worker computes the id itself so a
+            // caller cannot get a signature over bytes of its own choosing.
+            const kind = payload.kind;
+            if (!Number.isInteger(kind) || kind < 0 || kind > 65535) {
+                throw new WalletWorkerProtocolError('NOSTR_SIGN_EVENT requires an integer kind between 0 and 65535.');
+            }
+
+            const createdAt = payload.created_at;
+            if (!Number.isInteger(createdAt) || createdAt < 0 || createdAt > MAX_EVENT_TIMESTAMP) {
+                throw new WalletWorkerProtocolError('NOSTR_SIGN_EVENT requires a plausible integer created_at.');
+            }
+
+            const content = payload.content;
+            if (typeof content !== 'string' || content.length > MAX_EVENT_CONTENT_LENGTH) {
+                throw new WalletWorkerProtocolError('NOSTR_SIGN_EVENT content must be a string within the size limit.');
+            }
+
+            const tags = payload.tags === undefined ? [] : payload.tags;
+            if (!Array.isArray(tags) || tags.length > MAX_EVENT_TAGS) {
+                throw new WalletWorkerProtocolError('NOSTR_SIGN_EVENT tags must be an array within the size limit.');
+            }
+            const normalizedTags = [];
+            for (const tag of tags) {
+                if (!Array.isArray(tag) || tag.length === 0 || tag.length > MAX_EVENT_TAG_ITEMS) {
+                    throw new WalletWorkerProtocolError('NOSTR_SIGN_EVENT tags must be non-empty string arrays.');
+                }
+                for (const item of tag) {
+                    if (typeof item !== 'string' || item.length > MAX_EVENT_TAG_ITEM_LENGTH) {
+                        throw new WalletWorkerProtocolError('NOSTR_SIGN_EVENT tag entries must be bounded strings.');
+                    }
+                }
+                normalizedTags.push([...tag]);
+            }
+
+            return { kind, created_at: createdAt, tags: normalizedTags, content };
+        }
+
+        case WALLET_WORKER_OPS.NOSTR_NIP44_ENCRYPT: {
+            const plaintext = payload.plaintext;
+            if (typeof plaintext !== 'string' || plaintext.length === 0 || plaintext.length > MAX_NIP44_PLAINTEXT_LENGTH) {
+                throw new WalletWorkerProtocolError('NOSTR_NIP44_ENCRYPT requires a non-empty plaintext within the NIP-44 size limit.');
+            }
+            return { plaintext, peerPublicKey: requireNostrPublicKey(payload.peerPublicKey, type) };
+        }
+
+        case WALLET_WORKER_OPS.NOSTR_NIP44_DECRYPT: {
+            const nip44Payload = payload.payload;
+            if (typeof nip44Payload !== 'string' || nip44Payload.length === 0 || nip44Payload.length > MAX_NIP44_PAYLOAD_LENGTH) {
+                throw new WalletWorkerProtocolError('NOSTR_NIP44_DECRYPT requires a base64 NIP-44 payload within the size limit.');
+            }
+            if (!BASE64_RE.test(nip44Payload)) {
+                throw new WalletWorkerProtocolError('NOSTR_NIP44_DECRYPT payload is not valid base64.');
+            }
+            return { payload: nip44Payload, peerPublicKey: requireNostrPublicKey(payload.peerPublicKey, type) };
+        }
+
         default:
             throw new WalletWorkerProtocolError(`Unsupported wallet worker operation: ${type}`);
     }
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} type
+ * @returns {string}
+ */
+function requireNostrPublicKey(value, type) {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (!NOSTR_PUBKEY_RE.test(normalized)) {
+        throw new WalletWorkerProtocolError(`${type} requires a 32-byte hex Nostr public key.`);
+    }
+    return normalized;
 }

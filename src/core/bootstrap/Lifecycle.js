@@ -2,7 +2,13 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import AuthController from '../../auth/AuthController.js';
-import { bindPublishActions, renderDeployStage, setPublishButtonsState } from '../../ui/publish/PublishPanel.js';
+import {
+    bindPublishActions,
+    renderDeployArtifactDetails,
+    renderDeployStage,
+    renderDeploymentStatus,
+    setPublishButtonsState
+} from '../../ui/publish/PublishPanel.js';
 import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
@@ -10,9 +16,22 @@ import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.j
 import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
+import { bindRegistryRetry, renderRegistryStatus, renderRegistryTechnicalDetails } from '../../ui/publish/RegistryStatus.js';
+import {
+    bindRegistryPanel,
+    filterRegistryResults,
+    renderRegistryQueryStatus,
+    renderRegistryResults,
+    showBrowseMode
+} from '../../ui/browse/RegistryPanel.js';
+import { Web25RegistryService } from '../../registry/Web25RegistryService.js';
 import ChannelsService from '../../channels/ChannelsService.js';
-import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
-import { createLocalWalletSigner, eciesDecryptWithLocalWallet } from '../../auth/LocalWalletService.js';
+import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
+import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
+import { verifyNostrEvent, normalizeNostrPublicKey, npubEncode, shortNpub } from '../../nostr/nostr.js';
+import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
+import { DEFAULT_NOSTR_DM_RELAYS } from '../../config/nostr.config.js';
+import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -20,10 +39,11 @@ import {
     bindFileInput,
     clearChannelsComposer,
     clearChannelsMessages,
+    clearDmSearch,
     renderChannelsStatus,
-    setLocalAnswerCode,
-    setLocalOfferCode,
-    updateDmOwnPubkey
+    renderDmTransport,
+    showDmStep,
+    updateDmNostrIdentity
 } from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
@@ -79,15 +99,232 @@ export async function initAuth() {
     hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
     this.setupChannels();
+    this.setupRegistry();
+}
+
+/**
+ * Public WEB25 website registry (NIP-35), kept entirely separate from the
+ * Direct Messenger's private Nostr traffic: its own relay pool, its own
+ * service, and only public metadata on the wire.
+ */
+export function setupRegistry() {
+    this.registryService = new Web25RegistryService({ signer: this.dmSigner || createLocalWalletSigner() });
+    this.registryPublication = null;
+    this.lastRegistryEvent = null;
+    this.registryResults = [];
+    /** Registry entry a pending load came from, checked against .torrentchain. */
+    this.pendingRegistryClaim = null;
+    this.lastRegistryClaimComparison = null;
+
+    bindRegistryRetry(() => void this.retryRegistryPublish());
+
+    bindRegistryPanel({
+        onModeChange: (mode) => {
+            if (mode === 'registry' && this.registryResults.length === 0) void this.searchRegistry('');
+        },
+        onSearch: (query) => void this.searchRegistry(query),
+        // Discovery hands the infohash to the one existing loader; there is no
+        // second website loading path. The claim travels with it so the loader
+        // can check it against the .torrentchain that actually arrives.
+        onOpen: (infohash) => {
+            this.pendingRegistryClaim = this.registryResults.find((entry) => entry.infohash === infohash) || null;
+            this.loadSite(infohash);
+        }
+    });
+    showBrowseMode('hash');
+}
+
+/**
+ * Query the registry relays and render the results.
+ * @param {string} query
+ */
+export async function searchRegistry(query) {
+    renderRegistryQueryStatus('Querying WEB25 registry relays…', 'pending');
+    try {
+        if (this.registryResults.length === 0) {
+            this.registryResults = await this.registryService.query();
+        }
+        const filtered = filterRegistryResults(this.registryResults, query);
+        renderRegistryResults(filtered);
+
+        const connected = this.registryService.relayStatus.filter((entry) => entry.status === 'connected').length;
+        const total = this.registryService.relayStatus.length;
+        renderRegistryQueryStatus(
+            `${filtered.length} site${filtered.length === 1 ? '' : 's'} · ${connected}/${total} registry relays reachable`,
+            'ok'
+        );
+    } catch (error) {
+        // Registry trouble never touches the hash-loading path next to it.
+        renderRegistryResults([]);
+        renderRegistryQueryStatus(`Registry unavailable: ${error.message}. Loading by hash still works.`, 'error');
+    }
+}
+
+/**
+ * Publish the finished deployment to the public registry.
+ *
+ * Runs only after the deployment is already successful, and can never
+ * invalidate it: a failure here is reported as a registry failure and leaves
+ * the site live and seeding.
+ */
+export async function publishRegistryEntry() {
+    const candidate = this.lastPublishCandidate;
+    const signature = this.lastSignature;
+    if (!candidate?.torrent || !signature?.signature) return;
+
+    let npub = null;
+    try {
+        const identity = await this.registryService.signer.getNostrIdentity();
+        npub = identity?.npub || null;
+    } catch (_) {
+        npub = null;
+    }
+
+    this.registryPublication = null;
+    renderRegistryStatus({ state: 'signing', npub });
+    renderDeployStage('Registry · building event', 'Creating the NIP-35 kind 2003 event for this torrent');
+    updateDeployProgress({ label: 'Creating NIP-35 registry event', percent: 25, state: 'running' });
+    this.refreshDeployUiState();
+
+    try {
+        // One signed event per artifact: built once here, reused verbatim by
+        // every retry so a resubmission is never a second torrent entry.
+        updateDeployProgress({ label: 'Signing registry event with your Nostr identity', percent: 55, state: 'running' });
+        this.lastRegistryEvent = await this.registryService.createSignedRegistryEvent({
+            torrent: candidate.torrent,
+            chainArtifact: signature,
+            siteName: candidate.siteName,
+            trackers: this.trackers
+        });
+    } catch (error) {
+        this.lastRegistryEvent = null;
+        this.registryPublication = { ok: false, error: error.message, accepted: [], rejected: {}, attempted: 0, eventId: null };
+        renderRegistryStatus({ state: 'skipped', npub, error: error.message });
+        renderRegistryTechnicalDetails({ event: null, publication: this.registryPublication });
+        // The site is deployed and seeding regardless of what happened here.
+        renderDeployStage('Deployment complete', `Live and seeding · registry entry not created: ${error.message}`);
+        updateDeployProgress({ label: 'Live and seeding · registry skipped', percent: 100, state: 'success' });
+        this.refreshDeployUiState();
+        return;
+    }
+
+    renderRegistryStatus({ state: 'publishing', npub });
+    renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: null });
+    renderDeployStage('Registry · publishing', 'Sending the signed event to DTAN and the other registry relays');
+    updateDeployProgress({ label: 'Publishing to registry relays', percent: 80, state: 'running' });
+
+    await this.sendRegistryEvent(npub);
+}
+
+/**
+ * Send (or resend) the already-signed registry event.
+ * @param {string|null} npub
+ */
+export async function sendRegistryEvent(npub = null) {
+    const event = this.lastRegistryEvent;
+    if (!event) return;
+
+    const publication = await this.registryService.publishSignedEvent(event);
+    this.registryPublication = publication;
+
+    renderRegistryStatus({
+        state: publication.ok ? 'published' : 'failed',
+        accepted: publication.accepted,
+        attempted: publication.attempted || this.registryService.relayStatus.length,
+        error: publication.error,
+        npub,
+        eventId: publication.eventId
+    });
+    renderRegistryTechnicalDetails({
+        event,
+        publication,
+        relayStatus: this.registryService.relayStatus
+    });
+
+    this.persistDeploySession();
+    this.refreshDeployUiState();
+
+    if (publication.ok) {
+        renderDeployStage(
+            'Deployment complete',
+            `Live and seeding · listed in WEB25.cloud / Websites on ${publication.accepted.length} relay(s)`
+        );
+        updateDeployProgress({ label: 'Live, seeding and discoverable', percent: 100, state: 'success' });
+        this.toast.success(`Listed in the WEB25 registry on ${publication.accepted.length} relay(s).`, 'Registry');
+    } else {
+        renderDeployStage('Deployment complete', 'Live and seeding · registry entry not published, retry available');
+        updateDeployProgress({ label: 'Live and seeding · registry not published', percent: 100, state: 'success' });
+        this.toast.warning(
+            'Your site is live and seeding. The registry entry did not publish — you can retry it.',
+            'Registry not published'
+        );
+    }
+}
+
+/** Resubmit the exact same signed event: same id, created_at and signature. */
+export async function retryRegistryPublish() {
+    if (!this.lastRegistryEvent) {
+        this.toast.warning('There is no signed registry event to retry.', 'Registry');
+        return;
+    }
+    let npub = null;
+    try {
+        npub = (await this.registryService.signer.getNostrIdentity())?.npub || null;
+    } catch (_) {
+        npub = null;
+    }
+    renderRegistryStatus({ state: 'publishing', npub });
+    await this.sendRegistryEvent(npub);
 }
 
 export function setupChannels() {
     // The service is granted a signing handle, never the private key itself.
-    this.channelsService = new ChannelsService({ signer: createLocalWalletSigner() });
+    const signer = createLocalWalletSigner();
+    this.dmSigner = signer;
+    this.channelsService = new ChannelsService({ signer });
     this.dmOfferSessionId = null;
 
+    // Browser → public relays, directly. No proxy, no Web25 relay.
+    this.nostrPool = new NostrRelayPool({ relays: DEFAULT_NOSTR_DM_RELAYS, verifyEvent: verifyNostrEvent });
+    this.nostrDmSession = new NostrDirectMessageSession({
+        pool: this.nostrPool,
+        signer,
+        onInvitation: (bootstrap, context) => this.handleNostrInvitation(bootstrap, context),
+        onChatEnvelope: (wire) => this.channelsService.receiveNostrEnvelope(wire),
+        onError: (error) => this.log(`Nostr Direct Messenger: ${error.message}`)
+    });
+    this.channelsService.setNostrFallback(this.nostrDmSession.createFallback());
+
     bindChannelsPanel({
-        onCreateOffer: async ({ recipientPublicKey }) => {
+        onSearch: async (query) => {
+            // Resolving the address is local and always works; the profile
+            // lookup is a best-effort convenience on top of it.
+            let nostrPublicKey;
+            try {
+                nostrPublicKey = normalizeNostrPublicKey(query);
+            } catch (error) {
+                throw new Error(error.message);
+            }
+
+            const identity = this.authController.getActiveIdentity();
+            if (!identity?.address) {
+                throw new Error('Unlock your wallet to search for a Nostr address.');
+            }
+
+            let profile = null;
+            try {
+                await this.nostrDmSession.start({ localAddress: identity.address });
+                profile = await lookupNostrProfile({ pool: this.nostrPool, publicKey: nostrPublicKey });
+            } catch (error) {
+                // A relay that will not answer is not a failed search: the
+                // address is still valid and messageable.
+                this.log(`Nostr profile lookup unavailable: ${error.message}`);
+            }
+
+            const npub = npubEncode(nostrPublicKey);
+            return { nostrPublicKey, npub, shortNpub: shortNpub(npub), profile };
+        },
+        onStartChat: async (result) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
@@ -95,116 +332,41 @@ export function setupChannels() {
             }
 
             try {
-                this.showDirectMessageProgress('Generating encrypted invite…');
+                this.showDirectMessageProgress('Connecting to Nostr relays…');
                 clearChannelsMessages();
-                setLocalAnswerCode('');
+                await this.nostrDmSession.start({ localAddress: identity.address });
+
                 const offerSessionId = createDirectMessageSessionId();
                 const sharedRoom = directMessageRoomFromSession(offerSessionId);
+                this.showDirectMessageProgress('Creating WebRTC offer…');
                 const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
-                this.showDirectMessageProgress('Seeding Direct Message magnet…');
-                const created = await createDirectMessageBootstrapTorrent({
-                    client: this.client,
-                    trackers: this.trackers,
+
+                this.showDirectMessageProgress('Publishing encrypted invitation…');
+                const { bootstrap } = await this.nostrDmSession.sendInvitation({
                     identity,
-                    recipientPublicKey,
+                    eciesPublicKey: signal.publicKey,
                     role: 'offer',
                     webrtcDescription: signal.description,
-                    eciesPublicKey: signal.publicKey,
+                    recipient: result.nostrPublicKey,
                     sessionId: offerSessionId
                 });
-                this.dmOfferSessionId = created.bootstrap.session.sessionId;
-                setLocalOfferCode(created.magnetURI);
-                this.toast.success('Share the offer magnet link with your peer.', 'Offer magnet generated');
+                this.dmOfferSessionId = bootstrap.session.sessionId;
+                this.toast.success('Encrypted invitation sent. Waiting for your peer…', 'Direct Messenger');
                 return true;
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');
                 return false;
-            } finally {
-                this.hideDirectMessageProgress();
-            }
-        },
-        onCreateAnswer: async ({ offerMagnet }) => {
-            const identity = this.authController.getActiveIdentity();
-            if (!identity?.address) {
-                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                return false;
-            }
-
-            try {
-                this.showDirectMessageProgress('Loading peer magnet…');
-                clearChannelsMessages();
-                const offerBootstrap = await loadDirectMessageBootstrapFromMagnet({
-                    client: this.client,
-                    magnetURI: offerMagnet,
-                    localAddress: identity.address,
-                    decryptFn: eciesDecryptWithLocalWallet,
-                    trackers: this.trackers
-                });
-                this.showDirectMessageProgress('Verifying .torrentchain identity…');
-                const offerPayload = {
-                    description: offerBootstrap.webrtc.description,
-                    evmAddress: offerBootstrap.from.evmAddress,
-                    publicKey: offerBootstrap.from.eciesPublicKey
-                };
-                this.showDirectMessageProgress('Applying WebRTC offer…');
-                const derivedRoom = directMessageRoomFromSession(offerBootstrap?.session?.sessionId);
-                const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
-                this.showDirectMessageProgress('Creating WebRTC answer…');
-                const created = await createDirectMessageBootstrapTorrent({
-                    client: this.client,
-                    trackers: this.trackers,
-                    identity,
-                    recipientPublicKey: offerBootstrap.from.eciesPublicKey,
-                    role: 'answer',
-                    webrtcDescription: answerSignal.description,
-                    eciesPublicKey: answerSignal.publicKey,
-                    replyToSessionId: offerBootstrap.session.sessionId
-                });
-                setLocalAnswerCode(created.magnetURI);
-                this.toast.success('Send the answer magnet link back to the host.', 'Answer magnet generated');
-                return true;
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
-                return false;
-            } finally {
-                this.hideDirectMessageProgress();
-            }
-        },
-        onApplyAnswer: async (answerCode) => {
-            try {
-                const identity = this.authController.getActiveIdentity();
-                if (!identity?.address) {
-                    this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                    return;
-                }
-                this.showDirectMessageProgress('Loading peer magnet…');
-                const answerBootstrap = await loadDirectMessageBootstrapFromMagnet({
-                    client: this.client,
-                    magnetURI: answerCode,
-                    localAddress: identity.address,
-                    decryptFn: eciesDecryptWithLocalWallet,
-                    expectedReplyToSessionId: this.dmOfferSessionId || null,
-                    trackers: this.trackers
-                });
-                this.showDirectMessageProgress('Verifying .torrentchain identity…');
-                await this.channelsService.applyRemoteAnswerPayload({
-                    description: answerBootstrap.webrtc.description,
-                    evmAddress: answerBootstrap.from.evmAddress,
-                    publicKey: answerBootstrap.from.eciesPublicKey
-                });
-                this.showDirectMessageProgress('Waiting for encrypted peer connection…');
-                this.toast.success('Answer accepted. Waiting for data channel open...', 'Direct Messenger');
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
             } finally {
                 this.hideDirectMessageProgress();
             }
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
-            setLocalOfferCode('');
-            setLocalAnswerCode('');
+            // Stay subscribed: leaving a conversation should not stop the user
+            // being reachable at their npub.
+            this.nostrDmSession?.clearPeer();
             this.dmOfferSessionId = null;
+            clearDmSearch();
         },
         onSend: async (text) => {
             try {
@@ -227,12 +389,15 @@ export function setupChannels() {
     });
 
     this.channelsService.onUpdate((event) => {
+        if (event.type === 'transport') {
+            renderDmTransport(event.transport);
+            // The relay fallback is a working conversation too: show the chat
+            // pane for it, not just for an established WebRTC connection.
+            if (event.transport === 'nostr' || event.transport === 'webrtc') showDmStep('dm-chat-active');
+            return;
+        }
         if (event.type === 'connecting') {
             renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
-        } else if (event.type === 'local-offer') {
-            setLocalOfferCode(event.code || '');
-        } else if (event.type === 'local-answer') {
-            setLocalAnswerCode(event.code || '');
         } else if (event.type === 'connected') {
             renderChannelsStatus({
                 connected: true,
@@ -262,6 +427,64 @@ export function setupChannels() {
     });
 }
 
+/**
+ * An invitation arrived through the relay pool.
+ *
+ * An `offer` is answered automatically with a gift-wrapped answer; an `answer`
+ * completes the handshake for an offer this page sent. Both were already
+ * validated (identity binding, TTL, replay) before reaching here.
+ */
+export async function handleNostrInvitation(bootstrap, context) {
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) return;
+
+    try {
+        if (bootstrap.role === 'offer') {
+            // An open conversation is not interrupted by an unsolicited third
+            // party: relays are public, so anyone can address this npub.
+            const boundPeer = this.nostrDmSession.peerNostrPublicKey;
+            if (this.channelsService.currentChannel && boundPeer && boundPeer !== context.senderNostrPublicKey) {
+                this.log(`Ignoring a Direct Messenger invitation from ${context.senderNostrPublicKey} during an active session.`);
+                return;
+            }
+
+            const derivedRoom = directMessageRoomFromSession(bootstrap.session.sessionId);
+            const offerPayload = {
+                description: bootstrap.webrtc.description,
+                evmAddress: bootstrap.from.evmAddress,
+                publicKey: bootstrap.from.eciesPublicKey
+            };
+            const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
+            this.nostrDmSession.setPeer(context.senderNostrPublicKey);
+            await this.nostrDmSession.sendInvitation({
+                identity,
+                eciesPublicKey: answerSignal.publicKey,
+                role: 'answer',
+                webrtcDescription: answerSignal.description,
+                recipient: context.senderNostrPublicKey,
+                // The peer's full ECIES key is known now, so the answer gets the
+                // Web25 ECIES envelope on top of the NIP-44 gift wrap.
+                recipientEciesPublicKey: bootstrap.from.eciesPublicKey,
+                replyToSessionId: bootstrap.session.sessionId
+            });
+            this.toast.success('Encrypted invitation accepted; connecting…', 'Direct Messenger');
+            return;
+        }
+
+        if (bootstrap.role === 'answer') {
+            await this.channelsService.applyRemoteAnswerPayload({
+                description: bootstrap.webrtc.description,
+                evmAddress: bootstrap.from.evmAddress,
+                publicKey: bootstrap.from.eciesPublicKey
+            });
+            this.nostrDmSession.setPeer(context.senderNostrPublicKey);
+            this.toast.success('Peer answered. Establishing the direct connection…', 'Direct Messenger');
+        }
+    } catch (error) {
+        this.toast.error(error.message, 'Direct Messenger');
+    }
+}
+
 export function showDirectMessageProgress(message) {
     this.showUploadProgress(message);
 }
@@ -275,7 +498,21 @@ export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
     const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
     setPublishButtonsState({ canSign: hasFiles, canDeploy: hasFiles && hasSignature });
-    updateDeployWizard({ hasFiles, hasSignature, hasDeployResult: Boolean(this.lastDeployResult) });
+    updateDeployWizard({
+        hasFiles,
+        hasSignature,
+        hasDeployResult: Boolean(this.lastDeployResult),
+        registryState: this.registryStateLabel()
+    });
+}
+
+/** @returns {'idle'|'publishing'|'published'|'failed'|'skipped'} */
+export function registryStateLabel() {
+    if (!this.registryPublication) return this.lastRegistryEvent ? 'publishing' : 'idle';
+    if (this.registryPublication.ok) return 'published';
+    // No event id means the event was never created — nothing was published and
+    // nothing can be retried, which is a different outcome from a failed send.
+    return this.registryPublication.eventId ? 'failed' : 'skipped';
 }
 
 export function invalidateSignedState(message = 'Signature invalidated') {
@@ -419,6 +656,11 @@ export async function signStagedPayload() {
 
     renderSignatureStatus(signature);
     renderPublishReview(signature.payload);
+    renderDeployArtifactDetails({
+        payload: signature.payload,
+        signature,
+        bundleMode: usingGzipBundle ? 'gzip' : 'files'
+    });
 
     const output = document.getElementById('publish-output');
     if (output) {
@@ -508,8 +750,19 @@ export async function deploySignedArtifact() {
 
     this.lastDeployResult = { hash, url, signedBy: identity.address };
     this.persistDeploySession();
+    renderDeploymentStatus('seeding');
     updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live and seeding from memory');
+    this.refreshDeployUiState();
+
+    // The deployment is already complete and valid at this point. Registry
+    // publication is a separate, best-effort outcome: it is awaited only so the
+    // UI can report it, and it can never unwind the deploy above.
+    try {
+        await this.publishRegistryEntry();
+    } catch (error) {
+        this.log(`Registry publication failed: ${error.message}`);
+    }
 }
 
 export function setupAuthAwareUi(state) {
@@ -557,9 +810,26 @@ export function setupAuthAwareUi(state) {
     if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
 
-    // Update DM panel "My Public Key" display. The public key is supplied by the
-    // signing worker via auth state; the private key never reaches this thread.
-    updateDmOwnPubkey(isAuthenticated ? state.publicKey || null : null);
+    // The DM panel shows the Nostr address only. All of it is public material
+    // supplied by the signing worker; the private key never reaches this thread.
+    const nostrReachable = isAuthenticated && state.nostrEnabled !== false;
+    updateDmNostrIdentity({
+        npub: nostrReachable ? state.npub || null : null,
+        enabled: state.nostrEnabled !== false
+    });
+    renderDmTransport(this.channelsService?.transport || 'disconnected');
+
+    // An identity that is reachable at its npub subscribes the inbox, so an
+    // inbound invitation arrives without the user having to send one first.
+    // Removing the Nostr identity unsubscribes it again.
+    if (nostrReachable && this.nostrDmSession && !this.nostrDmSession.started) {
+        void this.nostrDmSession.start({ localAddress: state.address }).catch((error) => {
+            this.log(`Nostr inbox unavailable: ${error.message}`);
+        });
+    } else if (!nostrReachable && this.nostrDmSession?.started) {
+        this.nostrDmSession.stop();
+        void this.channelsService?.leaveChannel();
+    }
 
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
@@ -571,6 +841,7 @@ export function setupAuthAwareUi(state) {
         if (this.channelsService?.currentChannel) {
             this.channelsService.leaveChannel();
         }
+        this.nostrDmSession?.stop();
         return;
     }
 
@@ -901,6 +1172,11 @@ export function persistDeploySession() {
             deployed: Boolean(this.lastDeployResult),
             deployResult: this.lastDeployResult || null,
             signedBy,
+            // The signed NIP-35 event, so a retry after a reload resubmits the
+            // very same event rather than minting a second registry entry.
+            // Public metadata only — it carries no key material of any kind.
+            registryEvent: this.lastRegistryEvent || null,
+            registryPublication: this.registryPublication || null,
             savedAt: Date.now()
         };
         localStorage.setItem(DEPLOY_SESSION_STORAGE_KEY, JSON.stringify(payload));
@@ -957,6 +1233,20 @@ export async function restoreDeploySession() {
             signedTorrentFile: signedTorrentBuffer
         };
         this.lastDeployResult = savedSession.deployResult || null;
+        // Restore the signed registry event so Retry resubmits it unchanged.
+        this.lastRegistryEvent = savedSession.registryEvent || null;
+        this.registryPublication = savedSession.registryPublication || null;
+        if (this.lastRegistryEvent) {
+            renderRegistryStatus({
+                state: this.registryPublication?.ok ? 'published' : 'failed',
+                accepted: this.registryPublication?.accepted || [],
+                attempted: this.registryPublication?.attempted || 0,
+                error: this.registryPublication?.error || null,
+                npub: null,
+                eventId: this.lastRegistryEvent.id
+            });
+            renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: this.registryPublication });
+        }
 
         renderSignatureStatus(this.lastSignature);
         renderPublishReview(this.lastSignature.payload || null);

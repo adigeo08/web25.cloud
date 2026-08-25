@@ -9,6 +9,7 @@
  */
 
 import { validateWalletRequest, WALLET_WORKER_OPS, WALLET_SESSION_TTL_MS } from './walletWorkerProtocol.js';
+import { npubEncode } from '../nostr/nip19.js';
 
 /**
  * @param {{
@@ -19,13 +20,20 @@ import { validateWalletRequest, WALLET_WORKER_OPS, WALLET_SESSION_TTL_MS } from 
  *     signMessage: (message: string, key: string) => Promise<string>,
  *     eciesDecrypt: (ciphertext: string, key: string) => Promise<string>
  *   },
+ *   nostr?: {
+ *     getNostrPublicKey: (key: string) => string,
+ *     signEvent: (template: object, key: string) => object,
+ *     nip44ConversationKey: (key: string, peerPublicKey: string) => Uint8Array,
+ *     nip44Encrypt: (plaintext: string, conversationKey: Uint8Array) => string,
+ *     nip44Decrypt: (payload: string, conversationKey: Uint8Array) => string
+ *   } | null,
  *   ttlMs?: number,
  *   now?: () => number,
  *   onLock?: (reason: string) => void
  * }} deps
  */
-export function createWalletWorkerCore({ ecies, ttlMs = WALLET_SESSION_TTL_MS, now = Date.now, onLock = null }) {
-    /** @type {{ privateKey: string, publicKey: string, address: string, expiresAt: number } | null} */
+export function createWalletWorkerCore({ ecies, nostr = null, ttlMs = WALLET_SESSION_TTL_MS, now = Date.now, onLock = null }) {
+    /** @type {{ privateKey: string, publicKey: string, address: string, nostrPublicKey: string, npub: string, expiresAt: number } | null} */
     let session = null;
     /** @type {ReturnType<typeof setTimeout> | null} */
     let expiryTimer = null;
@@ -68,6 +76,19 @@ export function createWalletWorkerCore({ ecies, ttlMs = WALLET_SESSION_TTL_MS, n
         return session;
     }
 
+    function requireNostr() {
+        if (!nostr) throw new Error('Nostr support is unavailable in this wallet worker build.');
+        return nostr;
+    }
+
+    /** Every Nostr private-key operation goes through the same lock check. */
+    function requireNostrSession() {
+        requireNostr();
+        const active = requireSession();
+        if (!active.nostrPublicKey) throw new Error('Nostr identity is unavailable for this session.');
+        return active;
+    }
+
     function statusPayload() {
         const alive = Boolean(session && session.expiresAt > now());
         if (session && !alive) clearSession();
@@ -89,10 +110,16 @@ export function createWalletWorkerCore({ ecies, ttlMs = WALLET_SESSION_TTL_MS, n
                 clearSession();
                 const publicKey = ecies.getPublicKeyFromPrivateKey(payload.privateKey);
                 const address = ecies.evmAddressFromPublicKey(publicKey);
+                // One key, three identities. The Nostr public key is the x
+                // coordinate of the very same secp256k1 point — there is no
+                // second seed and no second private key anywhere.
+                const nostrPublicKey = nostr ? nostr.getNostrPublicKey(payload.privateKey) : '';
                 session = {
                     privateKey: payload.privateKey,
                     publicKey,
                     address,
+                    nostrPublicKey,
+                    npub: nostrPublicKey ? npubEncode(nostrPublicKey) : '',
                     expiresAt: now() + payload.ttlMs
                 };
                 scheduleExpiry(payload.ttlMs);
@@ -129,6 +156,47 @@ export function createWalletWorkerCore({ ecies, ttlMs = WALLET_SESSION_TTL_MS, n
             case WALLET_WORKER_OPS.ECIES_DECRYPT: {
                 const active = requireSession();
                 const plaintext = await ecies.eciesDecrypt(payload.ciphertext, active.privateKey);
+                touchSession();
+                return { plaintext };
+            }
+
+            case WALLET_WORKER_OPS.NOSTR_GET_PUBLIC_KEY: {
+                const active = requireNostrSession();
+                touchSession();
+                // Public material only: the x-only public key and its NIP-19
+                // form. There is no operation that returns an `nsec`.
+                return { nostrPublicKey: active.nostrPublicKey, npub: active.npub };
+            }
+
+            case WALLET_WORKER_OPS.NOSTR_SIGN_EVENT: {
+                const active = requireNostrSession();
+                const event = requireNostr().signEvent(
+                    {
+                        kind: payload.kind,
+                        created_at: payload.created_at,
+                        tags: payload.tags,
+                        content: payload.content
+                    },
+                    active.privateKey
+                );
+                touchSession();
+                return { event };
+            }
+
+            case WALLET_WORKER_OPS.NOSTR_NIP44_ENCRYPT: {
+                const active = requireNostrSession();
+                const nostrApi = requireNostr();
+                const conversationKey = nostrApi.nip44ConversationKey(active.privateKey, payload.peerPublicKey);
+                const result = nostrApi.nip44Encrypt(payload.plaintext, conversationKey);
+                touchSession();
+                return { payload: result };
+            }
+
+            case WALLET_WORKER_OPS.NOSTR_NIP44_DECRYPT: {
+                const active = requireNostrSession();
+                const nostrApi = requireNostr();
+                const conversationKey = nostrApi.nip44ConversationKey(active.privateKey, payload.peerPublicKey);
+                const plaintext = nostrApi.nip44Decrypt(payload.payload, conversationKey);
                 touchSession();
                 return { plaintext };
             }
