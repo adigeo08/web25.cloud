@@ -1,11 +1,11 @@
 // @ts-check
 /**
- * NIP-35 torrent events for the public WEB25 website registry.
+ * NIP-35 torrent events for the NosNS website directory.
  *
  * This module is pure: it builds an unsigned event template from a finished
  * deployment, and parses/validates an event that came back from a relay. It
  * performs no signing, no networking and no wallet access — that belongs to
- * `Web25RegistryService.js`.
+ * `NosNSService.js`.
  *
  * Trust model, which the whole file is written around:
  *
@@ -14,15 +14,28 @@
  *   `.torrentchain`   → what the artifact contains and who published the site
  *   EVM signature     → proof of that publisher
  *
- * The registry mirrors the EVM proof so a browser can show "Verified publisher:
- * 0x…" *before* downloading, but that is only an early signal. The downloaded
- * `.torrentchain` stays authoritative, and a registry entry that disagrees with
- * it is to be treated as untrusted.
+ * The directory mirrors the EVM proof so a browser can show "Verified
+ * publisher: 0x…" *before* downloading, but that is only an early signal. The
+ * downloaded `.torrentchain` stays authoritative, and a directory entry that
+ * disagrees with it is to be treated as untrusted.
+ *
+ * NosNS identification is the torrent name suffix and nothing else. The
+ * mirrored `web25-*` tags are proof metadata, so an entry with the right suffix
+ * but no WEB25 proof is still a NosNS website — shown as unverified.
  */
 
-import { NOSTR_REGISTRY_CONFIG } from '../config/nostr.config.js';
+import { NOSNS_CONFIG } from '../config/nostr.config.js';
+import {
+    NOSNS_EVENT_KIND,
+    NOSNS_DEFAULT_CATEGORY,
+    ensureNosnsTorrentName,
+    isNosnsTorrentName,
+    isValidDtanCategory,
+    normalizeDtanCategory,
+    nosnsDisplayName
+} from './NosNSProtocol.js';
 
-const { PROOF_TAGS } = NOSTR_REGISTRY_CONFIG;
+const { PROOF_TAGS } = NOSNS_CONFIG;
 
 const INFOHASH_RE = /^[0-9a-f]{40}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -92,7 +105,7 @@ export function describeTorrentArtifact(torrent, fallbackTrackers = []) {
     const name = text(torrent?.name) || 'web25-site';
     const rawFiles = Array.isArray(torrent?.files) ? torrent.files : [];
 
-    const files = rawFiles.slice(0, NOSTR_REGISTRY_CONFIG.MAX_FILE_TAGS).map((file) => {
+    const files = rawFiles.slice(0, NOSNS_CONFIG.MAX_FILE_TAGS).map((file) => {
         const raw = text(file?.path) || text(file?.name);
         // WebTorrent prefixes multi-file paths with the torrent name; the
         // registry should advertise the entry, not the container.
@@ -128,11 +141,12 @@ function escapeRegExp(value) {
  * }} params
  * @returns {{ kind: number, created_at: number, tags: string[][], content: string }}
  */
-export function buildRegistryEventTemplate({
+export function buildNosnsEventTemplate({
     torrent,
     chainArtifact,
     siteName = '',
     trackers = [],
+    category = NOSNS_DEFAULT_CATEGORY,
     createdAtSeconds = Math.floor(Date.now() / 1000)
 }) {
     const artifact = describeTorrentArtifact(torrent, trackers);
@@ -141,33 +155,37 @@ export function buildRegistryEventTemplate({
     const message = text(chainArtifact?.message);
     const signature = text(chainArtifact?.signature);
     if (!payload || !message || !signature) {
-        throw new Error('A signed .torrentchain artifact is required to publish a registry entry.');
+        throw new Error('A signed .torrentchain artifact is required to publish a NosNS record.');
     }
-    if (new TextEncoder().encode(message).length > NOSTR_REGISTRY_CONFIG.MAX_PROOF_MESSAGE_BYTES) {
-        throw new Error('The .torrentchain signed message is too large to mirror into a registry event.');
+    if (new TextEncoder().encode(message).length > NOSNS_CONFIG.MAX_PROOF_MESSAGE_BYTES) {
+        throw new Error('The .torrentchain signed message is too large to mirror into a NosNS record.');
     }
 
-    const title = text(siteName) || artifact.name;
+    if (!isValidDtanCategory(category)) {
+        // An unknown category is one nobody can browse to — exactly the failure
+        // the old custom WEB25 category produced.
+        throw new Error(`"${category}" is not an official DTAN category.`);
+    }
+
+    // DTAN uses the torrent name as the event title, so the two must agree —
+    // and the title is where NosNS identification lives.
+    const title = ensureNosnsTorrentName(siteName || artifact.name);
 
     /** @type {string[][]} */
     const tags = [
         ['title', title],
         ['x', artifact.infoHash],
-        // DTAN indexes against a fixed category tree, so the `tcat` value has to
-        // be one it knows. The WEB25 marker rides alongside it as a second `i`
-        // tag, which NIP-35 explicitly allows.
-        ['i', NOSTR_REGISTRY_CONFIG.WEB25_CATEGORY],
-        ['i', NOSTR_REGISTRY_CONFIG.WEB25_MARKER]
+        ['i', category]
     ];
 
-    for (const hashtag of NOSTR_REGISTRY_CONFIG.WEB25_HASHTAGS) tags.push(['t', hashtag]);
     for (const file of artifact.files) tags.push(['file', file.path, `${file.size}`]);
     for (const tracker of artifact.trackers) tags.push(['tracker', tracker]);
 
     // ── mirrored .torrentchain proof ──────────────────────────────────────
     // `web25-message` is the exact string the wallet signed and is what a
     // verifier must use; the individual tags below are conveniences that must
-    // agree with it, and `parseRegistryEvent` rejects the event if they do not.
+    // agree with it, and `parseNosnsEvent` rejects the event if they do not.
+    // None of this identifies NosNS — the suffix does.
     tags.push([PROOF_TAGS.SCHEMA, text(payload.schema)]);
     tags.push([PROOF_TAGS.PUBLISHER, text(payload.publisher).toLowerCase()]);
     tags.push([PROOF_TAGS.CHAIN_ID, `${payload.chainId ?? ''}`]);
@@ -181,34 +199,30 @@ export function buildRegistryEventTemplate({
     tags.push([PROOF_TAGS.MESSAGE, message]);
 
     return {
-        kind: NOSTR_REGISTRY_CONFIG.TORRENT_EVENT_KIND,
+        kind: NOSNS_EVENT_KIND,
         created_at: createdAtSeconds,
         tags,
-        content: `${title}\n\nA WEB25.cloud website. Content is distributed over BitTorrent; this entry is registry metadata only.`
+        content: `${nosnsDisplayName(title)}\n\nA NosNS static website. Content is distributed over BitTorrent; this entry is directory metadata only.`
     };
 }
 
 /**
- * Is this a WEB25 website registry event?
+ * Is this a NosNS website record?
  *
- * Kind and category are checked structurally. The Nostr signature is *not*
- * checked here — the relay pool has already re-verified it locally before any
- * event reaches this module.
+ * The single protocol check: a NIP-35 torrent whose title ends with the
+ * canonical suffix. No custom kind, no custom category, no classifier hashtag —
+ * a normal DTAN torrent without the suffix is simply not NosNS.
+ *
+ * The Nostr signature is *not* checked here: the relay pool has already
+ * re-verified it locally before any event reaches this module.
  *
  * @param {any} event
  * @returns {boolean}
  */
-export function isWeb25RegistryEvent(event) {
-    if (!event || event.kind !== NOSTR_REGISTRY_CONFIG.TORRENT_EVENT_KIND) return false;
+export function isNosnsEvent(event) {
+    if (!event || event.kind !== NOSNS_EVENT_KIND) return false;
     if (!Array.isArray(event.tags)) return false;
-
-    // Either marker identifies a WEB25 entry. The `t` hashtag is what discovery
-    // filters on because every relay indexes it; the `i` marker is the precise
-    // form. The `tcat` category is deliberately *not* used to identify us — it
-    // is a general DTAN category shared with every other application torrent.
-    const markers = allTagValues(event.tags, 'i');
-    if (markers.includes(NOSTR_REGISTRY_CONFIG.WEB25_MARKER)) return true;
-    return allTagValues(event.tags, 't').includes(NOSTR_REGISTRY_CONFIG.WEB25_PRIMARY_HASHTAG);
+    return isNosnsTorrentName(firstTagValue(event.tags, 'title'));
 }
 
 /**
@@ -218,14 +232,14 @@ export function isWeb25RegistryEvent(event) {
  * entry, so a relay cannot inject unrelated torrents into the listing.
  *
  * The returned `web25VerificationState` starts at `unverified` or `malformed`;
- * only `verifyRegistryProof()` can promote it to `verified`.
+ * only `verifyNosnsProof()` can promote it to `verified`.
  *
  * @param {any} event a Nostr event whose signature the pool already verified
  * @param {{ relayUrl?: string, npubEncode?: (hex: string) => string }} [options]
  * @returns {object|null}
  */
-export function parseRegistryEvent(event, { relayUrl = '', npubEncode = null } = {}) {
-    if (!isWeb25RegistryEvent(event)) return null;
+export function parseNosnsEvent(event, { relayUrl = '', npubEncode = null } = {}) {
+    if (!isNosnsEvent(event)) return null;
 
     const tags = event.tags;
     const infohash = firstTagValue(tags, 'x').toLowerCase();
@@ -236,7 +250,7 @@ export function parseRegistryEvent(event, { relayUrl = '', npubEncode = null } =
 
     const torrentFiles = (tags || [])
         .filter((tag) => Array.isArray(tag) && tag[0] === 'file' && text(tag[1]))
-        .slice(0, NOSTR_REGISTRY_CONFIG.MAX_FILE_TAGS)
+        .slice(0, NOSNS_CONFIG.MAX_FILE_TAGS)
         .map((tag) => ({ path: text(tag[1]), size: Number(tag[2]) || 0 }));
 
     const proof = readProofTags(tags);
@@ -244,7 +258,10 @@ export function parseRegistryEvent(event, { relayUrl = '', npubEncode = null } =
     /** @type {any} */
     const result = {
         eventId: event.id,
+        /** The protocol value: the real torrent name, suffix included. */
         title,
+        /** Display form only — never used as a protocol value. */
+        displayName: nosnsDisplayName(title),
         infohash,
 
         nostrPubkey: event.pubkey,
@@ -254,7 +271,7 @@ export function parseRegistryEvent(event, { relayUrl = '', npubEncode = null } =
         trackers: allTagValues(tags, 'tracker'),
         torrentFiles,
 
-        category: firstTagValue(tags, 'i'),
+        category: normalizeDtanCategory(firstTagValue(tags, 'i')),
         web25Schema: proof.schema,
         web25Publisher: proof.publisher,
         web25ChainId: proof.chainId,
@@ -316,7 +333,7 @@ function readProofTags(tags) {
     if (!EVM_ADDRESS_RE.test(publisher)) return { ...base, state: WEB25_VERIFICATION.MALFORMED };
     if (!EVM_SIGNATURE_RE.test(signature)) return { ...base, state: WEB25_VERIFICATION.MALFORMED };
     if (!message) return { ...base, state: WEB25_VERIFICATION.MALFORMED };
-    if (new TextEncoder().encode(message).length > NOSTR_REGISTRY_CONFIG.MAX_PROOF_MESSAGE_BYTES) {
+    if (new TextEncoder().encode(message).length > NOSNS_CONFIG.MAX_PROOF_MESSAGE_BYTES) {
         return { ...base, state: WEB25_VERIFICATION.MALFORMED };
     }
     if (merkleRoot && !SHA256_RE.test(merkleRoot)) return { ...base, state: WEB25_VERIFICATION.MALFORMED };
@@ -348,17 +365,17 @@ function readProofTags(tags) {
 }
 
 /**
- * Verify the mirrored EVM proof of a parsed registry result.
+ * Verify the mirrored EVM proof of a parsed NosNS record.
  *
  * A valid Nostr signature says only who wrote the registry entry. This is the
  * separate question of whether the WEB25 publisher proof inside it holds, and
  * only this can move a result to `verified`.
  *
- * @param {any} result from `parseRegistryEvent`
+ * @param {any} result from `parseNosnsEvent`
  * @param {(message: string, signature: string, address: string) => Promise<boolean>} verifyEvmSignature
  * @returns {Promise<any>} the result with an updated `web25VerificationState`
  */
-export async function verifyRegistryProof(result, verifyEvmSignature) {
+export async function verifyNosnsProof(result, verifyEvmSignature) {
     if (!result) return result;
     if (result.web25VerificationState === WEB25_VERIFICATION.MALFORMED) return result;
     if (!result.web25Publisher || !result.web25Signature || !result.web25Message) {
@@ -379,11 +396,11 @@ export async function verifyRegistryProof(result, verifyEvmSignature) {
 }
 
 /**
- * Cross-check a registry entry against the `.torrentchain` that was actually
- * downloaded. The manifest wins in every disagreement: registry metadata that
+ * Cross-check a NosNS entry against the `.torrentchain` that was actually
+ * downloaded. The manifest wins in every disagreement: directory metadata that
  * does not match it is untrusted, whatever its Nostr signature said.
  *
- * @param {any} result from `parseRegistryEvent`
+ * @param {any} result from `parseNosnsEvent`
  * @param {any} manifest the downloaded `.torrentchain` manifest
  * @returns {{ matches: boolean, mismatches: string[] }}
  */

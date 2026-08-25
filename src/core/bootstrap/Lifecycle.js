@@ -16,15 +16,25 @@ import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.j
 import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
-import { bindRegistryRetry, renderRegistryStatus, renderRegistryTechnicalDetails } from '../../ui/publish/RegistryStatus.js';
 import {
-    bindRegistryPanel,
-    filterRegistryResults,
-    renderRegistryQueryStatus,
-    renderRegistryResults,
+    bindCategoryPicker,
+    bindNosnsRetry,
+    renderNosnsRelayStatus,
+    renderNosnsStatus,
+    renderNosnsTechnicalDetails,
+    setCategoryFrozen,
+    showSelectedCategory
+} from '../../ui/publish/NosnsStatus.js';
+import {
+    bindNosnsPanel,
+    filterNosnsResults,
+    renderNosnsQueryStatus,
+    renderNosnsResults,
+    selectedBrowseCategory,
     showBrowseMode
-} from '../../ui/browse/RegistryPanel.js';
-import { Web25RegistryService } from '../../registry/Web25RegistryService.js';
+} from '../../ui/browse/NosnsPanel.js';
+import { NosNSService } from '../../nosns/NosNSService.js';
+import { NOSNS_DEFAULT_CATEGORY, NOSNS_RELAY, dtanCategoryLabel, normalizeDtanCategory } from '../../nosns/NosNSProtocol.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
@@ -49,6 +59,14 @@ import { NostrPresenceService, INTENT } from '../../channels/NostrPresenceServic
 import { filterContacts, listContacts, saveContact } from '../../channels/ContactsStore.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
+/**
+ * The chosen DTAN category, kept in its own key.
+ *
+ * The deploy session only exists once a payload has been signed, but the
+ * category is picked before that — so a refresh between picking and signing
+ * would otherwise silently reset it. Public directory metadata only.
+ */
+const NOSNS_CATEGORY_STORAGE_KEY = 'web25.nosns.category.v1';
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
@@ -101,182 +119,288 @@ export async function initAuth() {
     hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
     this.setupChannels();
-    this.setupRegistry();
+    this.setupNosns();
 }
 
 /**
- * Public WEB25 website registry (NIP-35), kept entirely separate from the
- * Direct Messenger's private Nostr traffic: its own relay pool, its own
- * service, and only public metadata on the wire.
+ * NosNS — the public WEB25 website directory over DTAN (NIP-35 kind 2003),
+ * kept entirely separate from the Direct Messenger's private Nostr traffic:
+ * its own relay, its own service, and only public metadata on the wire.
  */
-export function setupRegistry() {
-    this.registryService = new Web25RegistryService({ signer: this.dmSigner || createLocalWalletSigner() });
+export function setupNosns() {
+    this.nosnsService = new NosNSService({ signer: this.dmSigner || createLocalWalletSigner() });
     this.registryPublication = null;
     this.lastRegistryEvent = null;
+    /** Category chosen for the deployment being prepared. */
+    this.nosnsCategory = this.restoreNosnsCategory();
+    /** Query results per DTAN category, so switching back does not re-query. */
+    this.nosnsResultCache = new Map();
     this.registryResults = [];
-    /** Registry entry a pending load came from, checked against .torrentchain. */
+    this.nosnsBrowseCategory = NOSNS_DEFAULT_CATEGORY;
+    /** NosNS entry a pending load came from, checked against .torrentchain. */
     this.pendingRegistryClaim = null;
     this.lastRegistryClaimComparison = null;
 
-    bindRegistryRetry(() => void this.retryRegistryPublish());
+    bindNosnsRetry(() => void this.retryNosnsPublish());
+    // The taxonomy is local configuration, so the picker is usable immediately
+    // and stays usable whether or not the relay probe below succeeds.
+    bindCategoryPicker((category) => this.setNosnsCategory(category), this.nosnsCategory);
 
-    bindRegistryPanel({
+    bindNosnsPanel({
         onModeChange: (mode) => {
-            if (mode === 'registry' && this.registryResults.length === 0) void this.searchRegistry('');
+            if (mode === 'registry' && !this.nosnsResultCache.has(this.nosnsBrowseCategory)) {
+                void this.searchNosns('', this.nosnsBrowseCategory);
+            }
         },
-        onSearch: (query) => void this.searchRegistry(query),
+        onSearch: (query, category) => void this.searchNosns(query, category),
+        onCategoryChange: (category) => {
+            this.nosnsBrowseCategory = normalizeDtanCategory(category);
+            void this.searchNosns('', this.nosnsBrowseCategory);
+        },
         // Discovery hands the infohash to the one existing loader; there is no
         // second website loading path. The claim travels with it so the loader
         // can check it against the .torrentchain that actually arrives.
         onOpen: (infohash) => {
             this.pendingRegistryClaim = this.registryResults.find((entry) => entry.infohash === infohash) || null;
             this.loadSite(infohash);
-        }
+        },
+        initialCategory: this.nosnsBrowseCategory
     });
     showBrowseMode('hash');
+
+    // Probe early so the Deploy tab can say whether the directory is reachable
+    // before anyone spends a signature on it. A failure here is informational:
+    // it never blocks staging, signing or deploying.
+    void this.probeNosnsRelay();
 }
 
 /**
- * Query the registry relays and render the results.
- * @param {string} query
+ * Report reachability of the one NosNS directory relay.
+ *
+ * This is connectivity only. Categories are mirrored configuration and load
+ * regardless, so the two are never reported as one fact.
  */
-export async function searchRegistry(query) {
-    renderRegistryQueryStatus('Querying WEB25 registry relays…', 'pending');
+export async function probeNosnsRelay() {
+    renderNosnsRelayStatus({ relay: NOSNS_RELAY, reachable: null });
     try {
-        if (this.registryResults.length === 0) {
-            this.registryResults = await this.registryService.query();
-        }
-        const filtered = filterRegistryResults(this.registryResults, query);
-        renderRegistryResults(filtered);
-
-        const connected = this.registryService.relayStatus.filter((entry) => entry.status === 'connected').length;
-        const total = this.registryService.relayStatus.length;
-        renderRegistryQueryStatus(
-            `${filtered.length} site${filtered.length === 1 ? '' : 's'} · ${connected}/${total} registry relays reachable`,
-            'ok'
-        );
+        const status = await this.nosnsService.probe();
+        this.nosnsRelayReachable = status.reachable;
+        renderNosnsRelayStatus({ relay: status.relay, reachable: status.reachable, error: status.error || null });
     } catch (error) {
-        // Registry trouble never touches the hash-loading path next to it.
-        renderRegistryResults([]);
-        renderRegistryQueryStatus(`Registry unavailable: ${error.message}. Loading by hash still works.`, 'error');
+        this.nosnsRelayReachable = false;
+        renderNosnsRelayStatus({ relay: NOSNS_RELAY, reachable: false, error: error.message });
     }
 }
 
 /**
- * Publish the finished deployment to the public registry.
+ * Record the DTAN category for the deployment being prepared.
+ *
+ * The category is directory metadata only: it is not part of `.torrentchain`
+ * and never triggers a second EVM signature. Once the NosNS event is signed it
+ * is frozen, so a retry resubmits the very same event.
+ *
+ * @param {string} category
+ */
+export function setNosnsCategory(category) {
+    if (this.lastRegistryEvent) {
+        showSelectedCategory(this.nosnsCategory);
+        setCategoryFrozen(true);
+        return;
+    }
+    this.nosnsCategory = normalizeDtanCategory(category);
+    showSelectedCategory(this.nosnsCategory);
+    try {
+        localStorage.setItem(NOSNS_CATEGORY_STORAGE_KEY, this.nosnsCategory);
+    } catch (error) {
+        this.log(`Failed to persist NosNS category: ${error.message}`);
+    }
+    this.persistDeploySession();
+}
+
+/**
+ * Read back the category chosen before a refresh.
+ *
+ * A stored value is re-validated against the taxonomy rather than trusted, so
+ * an edited or stale key cannot put an unknown category into a signed event.
+ *
+ * @returns {string}
+ */
+export function restoreNosnsCategory() {
+    try {
+        const stored = localStorage.getItem(NOSNS_CATEGORY_STORAGE_KEY);
+        return stored ? normalizeDtanCategory(stored) : NOSNS_DEFAULT_CATEGORY;
+    } catch (_) {
+        return NOSNS_DEFAULT_CATEGORY;
+    }
+}
+
+/**
+ * Query the NosNS directory for one DTAN category and render the results.
+ *
+ * The relay is asked for a category and nothing else — no NIP-50 full-text
+ * search — and the text match is applied locally afterwards.
+ *
+ * @param {string} query
+ * @param {string} [category]
+ */
+export async function searchNosns(query, category) {
+    const tcat = normalizeDtanCategory(category || this.nosnsBrowseCategory || selectedBrowseCategory());
+    this.nosnsBrowseCategory = tcat;
+
+    const label = dtanCategoryLabel(tcat);
+    const cached = this.nosnsResultCache.get(tcat);
+
+    if (!cached) renderNosnsQueryStatus(`Querying ${label} on relay.dtan.xyz…`, 'pending');
+
+    try {
+        const results = cached || (await this.nosnsService.query({ category: tcat }));
+        this.nosnsResultCache.set(tcat, results);
+        this.registryResults = results;
+
+        const filtered = filterNosnsResults(results, query);
+        renderNosnsResults(filtered);
+
+        const connected = this.nosnsService.relayStatus.filter((entry) => entry.status === 'connected').length;
+        const total = this.nosnsService.relayStatus.length;
+        renderNosnsQueryStatus(
+            `${filtered.length} NosNS site${filtered.length === 1 ? '' : 's'} in ${label} · ${connected}/${total} directory relay reachable`,
+            'ok'
+        );
+    } catch (error) {
+        // Directory trouble never touches the hash-loading path next to it.
+        this.registryResults = [];
+        renderNosnsResults([]);
+        renderNosnsQueryStatus(`NosNS unavailable: ${error.message}. Loading by hash still works.`, 'error');
+    }
+}
+
+/**
+ * Publish the finished deployment to the NosNS directory.
  *
  * Runs only after the deployment is already successful, and can never
- * invalidate it: a failure here is reported as a registry failure and leaves
- * the site live and seeding.
+ * invalidate it: a failure here is reported as a NosNS failure and leaves the
+ * site live and seeding.
  */
-export async function publishRegistryEntry() {
+export async function publishNosnsEntry() {
     const candidate = this.lastPublishCandidate;
     const signature = this.lastSignature;
     if (!candidate?.torrent || !signature?.signature) return;
 
+    const category = normalizeDtanCategory(this.nosnsCategory);
+
     let npub = null;
     try {
-        const identity = await this.registryService.signer.getNostrIdentity();
+        const identity = await this.nosnsService.signer.getNostrIdentity();
         npub = identity?.npub || null;
     } catch (_) {
         npub = null;
     }
 
     this.registryPublication = null;
-    renderRegistryStatus({ state: 'signing', npub });
-    renderDeployStage('Registry · building event', 'Creating the NIP-35 kind 2003 event for this torrent');
-    updateDeployProgress({ label: 'Creating NIP-35 registry event', percent: 25, state: 'running' });
+    renderNosnsStatus({ state: 'signing', npub, category, title: candidate.torrent?.name || null });
+    renderDeployStage('NosNS · building event', 'Creating the NIP-35 kind 2003 event for this torrent');
+    updateDeployProgress({ label: 'Creating NIP-35 NosNS event', percent: 25, state: 'running' });
     this.refreshDeployUiState();
 
     try {
         // One signed event per artifact: built once here, reused verbatim by
         // every retry so a resubmission is never a second torrent entry.
-        updateDeployProgress({ label: 'Signing registry event with your Nostr identity', percent: 55, state: 'running' });
-        this.lastRegistryEvent = await this.registryService.createSignedRegistryEvent({
+        updateDeployProgress({ label: 'Signing NosNS event with your Nostr identity', percent: 55, state: 'running' });
+        this.lastRegistryEvent = await this.nosnsService.createSignedNosnsEvent({
             torrent: candidate.torrent,
             chainArtifact: signature,
             siteName: candidate.siteName,
-            trackers: this.trackers
+            trackers: this.trackers,
+            category
         });
+        // The category is now inside a signed event; it cannot change for this
+        // deployment without producing a different event.
+        setCategoryFrozen(true);
     } catch (error) {
         this.lastRegistryEvent = null;
         this.registryPublication = { ok: false, error: error.message, accepted: [], rejected: {}, attempted: 0, eventId: null };
-        renderRegistryStatus({ state: 'skipped', npub, error: error.message });
-        renderRegistryTechnicalDetails({ event: null, publication: this.registryPublication });
+        renderNosnsStatus({ state: 'skipped', npub, error: error.message, category });
+        renderNosnsTechnicalDetails({ event: null, publication: this.registryPublication, category });
         // The site is deployed and seeding regardless of what happened here.
-        renderDeployStage('Deployment complete', `Live and seeding · registry entry not created: ${error.message}`);
-        updateDeployProgress({ label: 'Live and seeding · registry skipped', percent: 100, state: 'success' });
+        renderDeployStage('Deployment complete', `Live and seeding · NosNS entry not created: ${error.message}`);
+        updateDeployProgress({ label: 'Live and seeding · NosNS skipped', percent: 100, state: 'success' });
         this.refreshDeployUiState();
         return;
     }
 
-    renderRegistryStatus({ state: 'publishing', npub });
-    renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: null });
-    renderDeployStage('Registry · publishing', 'Sending the signed event to DTAN and the other registry relays');
-    updateDeployProgress({ label: 'Publishing to registry relays', percent: 80, state: 'running' });
+    renderNosnsStatus({ state: 'publishing', npub, category, title: candidate.torrent?.name || null });
+    renderNosnsTechnicalDetails({ event: this.lastRegistryEvent, publication: null, category });
+    renderDeployStage('NosNS · publishing', 'Sending the signed event to relay.dtan.xyz');
+    updateDeployProgress({ label: 'Publishing to the NosNS directory relay', percent: 80, state: 'running' });
 
-    await this.sendRegistryEvent(npub);
+    await this.sendNosnsEvent(npub);
 }
 
 /**
- * Send (or resend) the already-signed registry event.
+ * Send (or resend) the already-signed NosNS event.
  * @param {string|null} npub
  */
-export async function sendRegistryEvent(npub = null) {
+export async function sendNosnsEvent(npub = null) {
     const event = this.lastRegistryEvent;
     if (!event) return;
 
-    const publication = await this.registryService.publishSignedEvent(event);
+    const category = normalizeDtanCategory(this.nosnsCategory);
+    const publication = await this.nosnsService.publishSignedEvent(event);
     this.registryPublication = publication;
 
-    renderRegistryStatus({
+    renderNosnsStatus({
         state: publication.ok ? 'published' : 'failed',
         accepted: publication.accepted,
-        attempted: publication.attempted || this.registryService.relayStatus.length,
+        attempted: publication.attempted || this.nosnsService.relayStatus.length,
         error: publication.error,
         npub,
-        eventId: publication.eventId
+        eventId: publication.eventId,
+        category,
+        title: this.lastPublishCandidate?.torrent?.name || null
     });
-    renderRegistryTechnicalDetails({
+    renderNosnsTechnicalDetails({
         event,
         publication,
-        relayStatus: this.registryService.relayStatus
+        relayStatus: this.nosnsService.relayStatus,
+        category
     });
 
     this.persistDeploySession();
     this.refreshDeployUiState();
 
     if (publication.ok) {
+        // A fresh entry invalidates the cached page for that category.
+        this.nosnsResultCache.delete(category);
         renderDeployStage(
             'Deployment complete',
-            `Live and seeding · listed in WEB25.cloud / Websites on ${publication.accepted.length} relay(s)`
+            `Live and seeding · listed in NosNS under ${dtanCategoryLabel(category)}`
         );
         updateDeployProgress({ label: 'Live, seeding and discoverable', percent: 100, state: 'success' });
-        this.toast.success(`Listed in the WEB25 registry on ${publication.accepted.length} relay(s).`, 'Registry');
+        this.toast.success(`Listed in the NosNS directory under ${dtanCategoryLabel(category)}.`, 'NosNS');
     } else {
-        renderDeployStage('Deployment complete', 'Live and seeding · registry entry not published, retry available');
-        updateDeployProgress({ label: 'Live and seeding · registry not published', percent: 100, state: 'success' });
+        renderDeployStage('Deployment complete', 'Live and seeding · NosNS entry not published, retry available');
+        updateDeployProgress({ label: 'Live and seeding · NosNS not published', percent: 100, state: 'success' });
         this.toast.warning(
-            'Your site is live and seeding. The registry entry did not publish — you can retry it.',
-            'Registry not published'
+            'Your site is live and seeding. The NosNS entry did not publish — you can retry it.',
+            'NosNS not published'
         );
     }
 }
 
-/** Resubmit the exact same signed event: same id, created_at and signature. */
-export async function retryRegistryPublish() {
+/** Resubmit the exact same signed event: same id, created_at, category and signature. */
+export async function retryNosnsPublish() {
     if (!this.lastRegistryEvent) {
-        this.toast.warning('There is no signed registry event to retry.', 'Registry');
+        this.toast.warning('There is no signed NosNS event to retry.', 'NosNS');
         return;
     }
     let npub = null;
     try {
-        npub = (await this.registryService.signer.getNostrIdentity())?.npub || null;
+        npub = (await this.nosnsService.signer.getNostrIdentity())?.npub || null;
     } catch (_) {
         npub = null;
     }
-    renderRegistryStatus({ state: 'publishing', npub });
-    await this.sendRegistryEvent(npub);
+    renderNosnsStatus({ state: 'publishing', npub, category: normalizeDtanCategory(this.nosnsCategory) });
+    await this.sendNosnsEvent(npub);
 }
 
 export function setupChannels() {
@@ -665,12 +789,12 @@ export function refreshDeployUiState() {
         hasFiles,
         hasSignature,
         hasDeployResult: Boolean(this.lastDeployResult),
-        registryState: this.registryStateLabel()
+        registryState: this.nosnsStateLabel()
     });
 }
 
 /** @returns {'idle'|'publishing'|'published'|'failed'|'skipped'} */
-export function registryStateLabel() {
+export function nosnsStateLabel() {
     if (!this.registryPublication) return this.lastRegistryEvent ? 'publishing' : 'idle';
     if (this.registryPublication.ok) return 'published';
     // No event id means the event was never created — nothing was published and
@@ -682,6 +806,12 @@ export function invalidateSignedState(message = 'Signature invalidated') {
     this.lastSignature = null;
     this.lastSignedPublish = null;
     this.clearDeploySession();
+
+    // A new artifact means a new NosNS event, so the category is editable again
+    // and the previous signed event is no longer retryable.
+    this.lastRegistryEvent = null;
+    this.registryPublication = null;
+    setCategoryFrozen(false);
 
     renderSignatureStatus(null);
     renderPublishReview(null);
@@ -918,13 +1048,13 @@ export async function deploySignedArtifact() {
     renderDeployStage('Deployment complete', 'Live and seeding from memory');
     this.refreshDeployUiState();
 
-    // The deployment is already complete and valid at this point. Registry
+    // The deployment is already complete and valid at this point. NosNS
     // publication is a separate, best-effort outcome: it is awaited only so the
     // UI can report it, and it can never unwind the deploy above.
     try {
-        await this.publishRegistryEntry();
+        await this.publishNosnsEntry();
     } catch (error) {
-        this.log(`Registry publication failed: ${error.message}`);
+        this.log(`NosNS publication failed: ${error.message}`);
     }
 }
 
@@ -1346,6 +1476,7 @@ export function persistDeploySession() {
             // Public metadata only — it carries no key material of any kind.
             registryEvent: this.lastRegistryEvent || null,
             registryPublication: this.registryPublication || null,
+            nosnsCategory: normalizeDtanCategory(this.nosnsCategory),
             savedAt: Date.now()
         };
         localStorage.setItem(DEPLOY_SESSION_STORAGE_KEY, JSON.stringify(payload));
@@ -1402,19 +1533,28 @@ export async function restoreDeploySession() {
             signedTorrentFile: signedTorrentBuffer
         };
         this.lastDeployResult = savedSession.deployResult || null;
-        // Restore the signed registry event so Retry resubmits it unchanged.
+        // Restore the signed NosNS event so Retry resubmits it unchanged.
         this.lastRegistryEvent = savedSession.registryEvent || null;
         this.registryPublication = savedSession.registryPublication || null;
+        this.nosnsCategory = normalizeDtanCategory(savedSession.nosnsCategory || this.nosnsCategory);
+        showSelectedCategory(this.nosnsCategory);
         if (this.lastRegistryEvent) {
-            renderRegistryStatus({
+            // The category is inside a signed event again, so it re-freezes.
+            setCategoryFrozen(true);
+            renderNosnsStatus({
                 state: this.registryPublication?.ok ? 'published' : 'failed',
                 accepted: this.registryPublication?.accepted || [],
                 attempted: this.registryPublication?.attempted || 0,
                 error: this.registryPublication?.error || null,
                 npub: null,
-                eventId: this.lastRegistryEvent.id
+                eventId: this.lastRegistryEvent.id,
+                category: this.nosnsCategory
             });
-            renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: this.registryPublication });
+            renderNosnsTechnicalDetails({
+                event: this.lastRegistryEvent,
+                publication: this.registryPublication,
+                category: this.nosnsCategory
+            });
         }
 
         renderSignatureStatus(this.lastSignature);

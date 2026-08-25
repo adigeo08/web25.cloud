@@ -85,7 +85,7 @@ export function renderDeployArtifactDetails({ payload = null, signature = null, 
 
 /**
  * The deployment outcome, shown separately from registry publication: a site
- * stays live and seeding whatever the registry relays did.
+ * stays live and seeding whatever the NosNS directory relay did.
  * @param {'seeding'|'pending'} state
  */
 export function renderDeploymentStatus(state) {

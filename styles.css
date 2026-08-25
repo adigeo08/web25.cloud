@@ -2961,3 +2961,48 @@ select {
     margin: 0.25rem 0;
     font-size: 0.875rem;
 }
+/* ── NosNS directory ─────────────────────────────────────────────────── */
+
+.nosns-deploy-box {
+    margin: 0.75rem 0;
+    padding: 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.nosns-category-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+}
+
+.nosns-category-row label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-dim, inherit);
+}
+
+.nosns-category-select {
+    flex: 1 1 14rem;
+    min-width: 12rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel, transparent);
+    color: inherit;
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+}
+
+.nosns-category-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+#nosns-relay-status {
+    margin-top: 0.4rem;
+}

@@ -1,8 +1,8 @@
 // @ts-check
 /**
- * Browse tab: WEB25 registry search.
+ * Browse tab: NosNS directory search.
  *
- * A second mode alongside the existing "Load by Hash" flow. Registry mode is
+ * A second mode alongside the existing "Load by Hash" flow. NosNS mode is
  * discovery only — every result is opened through the same WEB25 loader, so
  * there is exactly one website loading implementation and the `.torrentchain`
  * render gate stays authoritative.
@@ -10,7 +10,9 @@
  * Nostr availability never affects hash loading: the two modes are independent.
  */
 
-import { WEB25_VERIFICATION } from '../../registry/Web25RegistryEvent.js';
+import { WEB25_VERIFICATION } from '../../nosns/NosNSEvent.js';
+import { nosnsDisplayName } from '../../nosns/NosNSProtocol.js';
+import { populateCategorySelect, readCategorySelect } from '../nosns/CategorySelect.js';
 
 const VERIFICATION_LABELS = {
     [WEB25_VERIFICATION.VERIFIED]: { text: '✅ Publisher verified', className: 'registry-verify is-verified' },
@@ -41,12 +43,19 @@ export function showBrowseMode(mode) {
     });
 }
 
+/** @returns {string} the currently selected browse category */
+export function selectedBrowseCategory() {
+    return readCategorySelect(/** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-browse-category')));
+}
+
 /**
  * @param {{ onModeChange: (mode: 'hash'|'registry') => void,
- *           onSearch: (query: string) => void,
- *           onOpen: (infohash: string) => void }} handlers
+ *           onSearch: (query: string, category: string) => void,
+ *           onCategoryChange?: (category: string) => void,
+ *           onOpen: (infohash: string) => void,
+ *           initialCategory?: string }} handlers
  */
-export function bindRegistryPanel({ onModeChange, onSearch, onOpen }) {
+export function bindNosnsPanel({ onModeChange, onSearch, onCategoryChange, onOpen, initialCategory }) {
     document.querySelectorAll('[data-browse-mode]').forEach((button) => {
         button.addEventListener('click', () => {
             const mode = /** @type {'hash'|'registry'} */ (button.getAttribute('data-browse-mode') || 'hash');
@@ -55,10 +64,20 @@ export function bindRegistryPanel({ onModeChange, onSearch, onOpen }) {
         });
     });
 
+    const categorySelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-browse-category'));
+    if (categorySelect && !categorySelect.dataset.populated) {
+        populateCategorySelect(categorySelect, initialCategory);
+        categorySelect.dataset.populated = '1';
+    }
+    if (categorySelect && !categorySelect.dataset.bound) {
+        categorySelect.dataset.bound = '1';
+        categorySelect.addEventListener('change', () => onCategoryChange?.(readCategorySelect(categorySelect)));
+    }
+
     const searchBtn = document.getElementById('registry-search-btn');
     const searchInput = /** @type {HTMLInputElement|null} */ (document.getElementById('registry-search-input'));
 
-    const run = () => onSearch(searchInput?.value?.trim() || '');
+    const run = () => onSearch(searchInput?.value?.trim() || '', selectedBrowseCategory());
     searchBtn?.addEventListener('click', run);
     searchInput?.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') run();
@@ -79,7 +98,7 @@ export function bindRegistryPanel({ onModeChange, onSearch, onOpen }) {
  * @param {string} message
  * @param {'idle'|'pending'|'ok'|'error'} [tone]
  */
-export function renderRegistryQueryStatus(message, tone = 'idle') {
+export function renderNosnsQueryStatus(message, tone = 'idle') {
     const el = document.getElementById('registry-status');
     if (!el) return;
     el.textContent = message;
@@ -94,7 +113,7 @@ export function renderRegistryQueryStatus(message, tone = 'idle') {
  *
  * @param {any[]} results
  */
-export function renderRegistryResults(results) {
+export function renderNosnsResults(results) {
     const container = document.getElementById('registry-results');
     if (!container) return;
 
@@ -103,13 +122,13 @@ export function renderRegistryResults(results) {
     if (!results || results.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'registry-empty';
-        empty.textContent = 'No WEB25 websites matched.';
+        empty.textContent = 'No NosNS websites matched.';
         container.appendChild(empty);
         return;
     }
 
     for (const result of results) {
-        container.appendChild(renderRegistryRow(result));
+        container.appendChild(renderNosnsRow(result));
     }
 }
 
@@ -117,7 +136,7 @@ export function renderRegistryResults(results) {
  * @param {any} result
  * @returns {HTMLElement}
  */
-function renderRegistryRow(result) {
+function renderNosnsRow(result) {
     const row = document.createElement('div');
     row.className = 'registry-row';
 
@@ -126,7 +145,9 @@ function renderRegistryRow(result) {
 
     const title = document.createElement('p');
     title.className = 'registry-row-title';
-    title.textContent = result.title || 'Untitled site';
+    // Display strips the protocol suffix; `result.title` keeps the raw name.
+    title.textContent = result.displayName || nosnsDisplayName(result.title) || 'Untitled site';
+    title.title = result.title || '';
     main.appendChild(title);
 
     const meta = document.createElement('p');
@@ -160,16 +181,19 @@ function renderRegistryRow(result) {
  * Client-side filtering over the fetched result set: site name, infohash, EVM
  * publisher, or npub / Nostr pubkey.
  *
+ * NosNS deliberately does not depend on NIP-50 full-text search — the relay is
+ * asked only for a category, and the text match happens here.
+ *
  * @param {any[]} results
  * @param {string} query
  * @returns {any[]}
  */
-export function filterRegistryResults(results, query) {
+export function filterNosnsResults(results, query) {
     const needle = `${query || ''}`.trim().toLowerCase();
     if (!needle) return results;
 
     return (results || []).filter((result) =>
-        [result.title, result.infohash, result.web25Publisher, result.npub, result.nostrPubkey]
+        [result.displayName, result.title, result.infohash, result.web25Publisher, result.npub, result.nostrPubkey]
             .map((value) => `${value || ''}`.toLowerCase())
             .some((value) => value.includes(needle))
     );
