@@ -25,8 +25,12 @@ function bindCopyButton(button, readValue) {
             }, 2000);
         };
 
-        navigator.clipboard
-            .writeText(value)
+        const tryClipboard = () => {
+            if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+            return Promise.reject(new Error('Clipboard API unavailable'));
+        };
+
+        tryClipboard()
             .then(() => done('✅ Copied!'))
             .catch(() => {
                 try {
