@@ -27,6 +27,7 @@ The UI is organized into:
   - Seed signed output
 - **Browse / Load**
   - Existing torrent hash loading flow remains available
+  - Separate mode to search the public WEB25 website registry over Nostr/DTAN
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -257,6 +258,44 @@ NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
 
+### 9) Public WEB25 website registry (NIP-35 / DTAN)
+
+A second, separate Nostr use case. Every deployed website can also be published
+as a public NIP-35 torrent event, so WEB25 sites become discoverable:
+
+```text
+Direct Messenger  ->  private signalling + encrypted fallback (NIP-17/44/59)
+Registry          ->  public website discovery (NIP-35 kind 2003)
+```
+
+- category is exactly `tcat:web25.cloud,websites` (`WEB25.cloud / Websites`)
+- the event carries the final BitTorrent infohash, the real torrent entries and
+  the real tracker list
+- the existing `.torrentchain` EVM proof is mirrored into the event, so a
+  browser can show `Verified publisher: 0x...` before downloading
+- **no second EVM signature**: the site was already signed when
+  `.torrentchain` was created; only a Nostr signature is added
+- registry relays default to `wss://relay.dtan.xyz` plus the generic relays;
+  no single relay is authoritative
+- registry publication never blocks or invalidates a deployment, and a retry
+  resubmits the identical signed event (same id, `created_at` and signature)
+
+Trust model:
+
+```text
+DTAN / Nostr        -> tells users that a website exists
+BitTorrent infohash -> identifies the distributed artifact
+.torrentchain       -> proves the contents and the publisher
+EVM signature       -> proves the WEB25 publisher identity
+Nostr signature     -> proves who published the registry entry
+```
+
+Registry metadata is an early signal only. The final load path is unchanged:
+download, read `.torrentchain`, verify the EVM signature and bundle hash, then
+render in the sandbox. See `docs/web25-nostr-registry.md`.
+
+---
+
 ## Security profile (current)
 
 ### HTML sanitization (DOMPurify)
@@ -297,6 +336,9 @@ src/
 │   ├── NostrDirectMessageBootstrap.js
 │   ├── NostrDirectMessageSession.js
 │   └── ecies.js
+├── registry/
+│   ├── Web25RegistryEvent.js
+│   └── Web25RegistryService.js
 ├── nostr/
 │   ├── NostrIdentityPreference.js
 │   ├── NostrProfileLookup.js
@@ -384,7 +426,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
 - STUN: `stun:stun.l.google.com:19302`
 - Nostr relays (configurable in `src/config/nostr.config.js`):
-  `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
+  - Direct Messenger: `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
+  - Website registry: `wss://relay.dtan.xyz` plus the relays above
 
 ---
 

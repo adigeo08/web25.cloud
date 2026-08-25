@@ -10,12 +10,21 @@ import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.j
 import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
+import { bindRegistryRetry, renderRegistryStatus, renderRegistryTechnicalDetails } from '../../ui/publish/RegistryStatus.js';
+import {
+    bindRegistryPanel,
+    filterRegistryResults,
+    renderRegistryQueryStatus,
+    renderRegistryResults,
+    showBrowseMode
+} from '../../ui/browse/RegistryPanel.js';
+import { Web25RegistryService } from '../../registry/Web25RegistryService.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
 import { verifyNostrEvent, normalizeNostrPublicKey, npubEncode, shortNpub } from '../../nostr/nostr.js';
 import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
-import { DEFAULT_NOSTR_RELAYS } from '../../config/nostr.config.js';
+import { DEFAULT_NOSTR_DM_RELAYS } from '../../config/nostr.config.js';
 import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
@@ -84,6 +93,160 @@ export async function initAuth() {
     hideDeployProgress();
     this.authController.onChange((state) => this.setupAuthAwareUi(state));
     this.setupChannels();
+    this.setupRegistry();
+}
+
+/**
+ * Public WEB25 website registry (NIP-35), kept entirely separate from the
+ * Direct Messenger's private Nostr traffic: its own relay pool, its own
+ * service, and only public metadata on the wire.
+ */
+export function setupRegistry() {
+    this.registryService = new Web25RegistryService({ signer: this.dmSigner || createLocalWalletSigner() });
+    this.registryPublication = null;
+    this.lastRegistryEvent = null;
+    this.registryResults = [];
+
+    bindRegistryRetry(() => void this.retryRegistryPublish());
+
+    bindRegistryPanel({
+        onModeChange: (mode) => {
+            if (mode === 'registry' && this.registryResults.length === 0) void this.searchRegistry('');
+        },
+        onSearch: (query) => void this.searchRegistry(query),
+        // Discovery hands the infohash to the one existing loader; there is no
+        // second website loading path.
+        onOpen: (infohash) => this.loadSite(infohash)
+    });
+    showBrowseMode('hash');
+}
+
+/**
+ * Query the registry relays and render the results.
+ * @param {string} query
+ */
+export async function searchRegistry(query) {
+    renderRegistryQueryStatus('Querying WEB25 registry relays…', 'pending');
+    try {
+        if (this.registryResults.length === 0) {
+            this.registryResults = await this.registryService.query();
+        }
+        const filtered = filterRegistryResults(this.registryResults, query);
+        renderRegistryResults(filtered);
+
+        const connected = this.registryService.relayStatus.filter((entry) => entry.status === 'connected').length;
+        const total = this.registryService.relayStatus.length;
+        renderRegistryQueryStatus(
+            `${filtered.length} site${filtered.length === 1 ? '' : 's'} · ${connected}/${total} registry relays reachable`,
+            'ok'
+        );
+    } catch (error) {
+        // Registry trouble never touches the hash-loading path next to it.
+        renderRegistryResults([]);
+        renderRegistryQueryStatus(`Registry unavailable: ${error.message}. Loading by hash still works.`, 'error');
+    }
+}
+
+/**
+ * Publish the finished deployment to the public registry.
+ *
+ * Runs only after the deployment is already successful, and can never
+ * invalidate it: a failure here is reported as a registry failure and leaves
+ * the site live and seeding.
+ */
+export async function publishRegistryEntry() {
+    const candidate = this.lastPublishCandidate;
+    const signature = this.lastSignature;
+    if (!candidate?.torrent || !signature?.signature) return;
+
+    let npub = null;
+    try {
+        const identity = await this.registryService.signer.getNostrIdentity();
+        npub = identity?.npub || null;
+    } catch (_) {
+        npub = null;
+    }
+
+    this.registryPublication = null;
+    renderRegistryStatus({ state: 'signing', npub });
+    this.refreshDeployUiState();
+
+    try {
+        // One signed event per artifact: built once here, reused verbatim by
+        // every retry so a resubmission is never a second torrent entry.
+        this.lastRegistryEvent = await this.registryService.createSignedRegistryEvent({
+            torrent: candidate.torrent,
+            chainArtifact: signature,
+            siteName: candidate.siteName,
+            trackers: this.trackers
+        });
+    } catch (error) {
+        this.lastRegistryEvent = null;
+        this.registryPublication = { ok: false, error: error.message, accepted: [], rejected: {}, attempted: 0, eventId: null };
+        renderRegistryStatus({ state: 'skipped', npub, error: error.message });
+        renderRegistryTechnicalDetails({ event: null, publication: this.registryPublication });
+        this.refreshDeployUiState();
+        return;
+    }
+
+    renderRegistryStatus({ state: 'publishing', npub });
+    renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: null });
+
+    await this.sendRegistryEvent(npub);
+}
+
+/**
+ * Send (or resend) the already-signed registry event.
+ * @param {string|null} npub
+ */
+export async function sendRegistryEvent(npub = null) {
+    const event = this.lastRegistryEvent;
+    if (!event) return;
+
+    const publication = await this.registryService.publishSignedEvent(event);
+    this.registryPublication = publication;
+
+    renderRegistryStatus({
+        state: publication.ok ? 'published' : 'failed',
+        accepted: publication.accepted,
+        attempted: publication.attempted || this.registryService.relayStatus.length,
+        error: publication.error,
+        npub,
+        eventId: publication.eventId
+    });
+    renderRegistryTechnicalDetails({
+        event,
+        publication,
+        relayStatus: this.registryService.relayStatus
+    });
+
+    this.persistDeploySession();
+    this.refreshDeployUiState();
+
+    if (publication.ok) {
+        this.toast.success(`Listed in the WEB25 registry on ${publication.accepted.length} relay(s).`, 'Registry');
+    } else {
+        this.toast.warning(
+            'Your site is live and seeding. The registry entry did not publish — you can retry it.',
+            'Registry not published'
+        );
+    }
+}
+
+/** Resubmit the exact same signed event: same id, created_at and signature. */
+export async function retryRegistryPublish() {
+    if (!this.lastRegistryEvent) {
+        this.toast.warning('There is no signed registry event to retry.', 'Registry');
+        return;
+    }
+    let npub = null;
+    try {
+        npub = (await this.registryService.signer.getNostrIdentity())?.npub || null;
+    } catch (_) {
+        npub = null;
+    }
+    renderRegistryStatus({ state: 'publishing', npub });
+    await this.sendRegistryEvent(npub);
 }
 
 export function setupChannels() {
@@ -94,7 +257,7 @@ export function setupChannels() {
     this.dmOfferSessionId = null;
 
     // Browser → public relays, directly. No proxy, no Web25 relay.
-    this.nostrPool = new NostrRelayPool({ relays: DEFAULT_NOSTR_RELAYS, verifyEvent: verifyNostrEvent });
+    this.nostrPool = new NostrRelayPool({ relays: DEFAULT_NOSTR_DM_RELAYS, verifyEvent: verifyNostrEvent });
     this.nostrDmSession = new NostrDirectMessageSession({
         pool: this.nostrPool,
         signer,
@@ -307,7 +470,18 @@ export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
     const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
     setPublishButtonsState({ canSign: hasFiles, canDeploy: hasFiles && hasSignature });
-    updateDeployWizard({ hasFiles, hasSignature, hasDeployResult: Boolean(this.lastDeployResult) });
+    updateDeployWizard({
+        hasFiles,
+        hasSignature,
+        hasDeployResult: Boolean(this.lastDeployResult),
+        registryState: this.registryStateLabel()
+    });
+}
+
+/** @returns {'idle'|'publishing'|'published'|'failed'} */
+export function registryStateLabel() {
+    if (!this.registryPublication) return this.lastRegistryEvent ? 'publishing' : 'idle';
+    return this.registryPublication.ok ? 'published' : 'failed';
 }
 
 export function invalidateSignedState(message = 'Signature invalidated') {
@@ -542,6 +716,16 @@ export async function deploySignedArtifact() {
     this.persistDeploySession();
     updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live and seeding from memory');
+    this.refreshDeployUiState();
+
+    // The deployment is already complete and valid at this point. Registry
+    // publication is a separate, best-effort outcome: it is awaited only so the
+    // UI can report it, and it can never unwind the deploy above.
+    try {
+        await this.publishRegistryEntry();
+    } catch (error) {
+        this.log(`Registry publication failed: ${error.message}`);
+    }
 }
 
 export function setupAuthAwareUi(state) {
@@ -951,6 +1135,11 @@ export function persistDeploySession() {
             deployed: Boolean(this.lastDeployResult),
             deployResult: this.lastDeployResult || null,
             signedBy,
+            // The signed NIP-35 event, so a retry after a reload resubmits the
+            // very same event rather than minting a second registry entry.
+            // Public metadata only — it carries no key material of any kind.
+            registryEvent: this.lastRegistryEvent || null,
+            registryPublication: this.registryPublication || null,
             savedAt: Date.now()
         };
         localStorage.setItem(DEPLOY_SESSION_STORAGE_KEY, JSON.stringify(payload));
@@ -1007,6 +1196,20 @@ export async function restoreDeploySession() {
             signedTorrentFile: signedTorrentBuffer
         };
         this.lastDeployResult = savedSession.deployResult || null;
+        // Restore the signed registry event so Retry resubmits it unchanged.
+        this.lastRegistryEvent = savedSession.registryEvent || null;
+        this.registryPublication = savedSession.registryPublication || null;
+        if (this.lastRegistryEvent) {
+            renderRegistryStatus({
+                state: this.registryPublication?.ok ? 'published' : 'failed',
+                accepted: this.registryPublication?.accepted || [],
+                attempted: this.registryPublication?.attempted || 0,
+                error: this.registryPublication?.error || null,
+                npub: null,
+                eventId: this.lastRegistryEvent.id
+            });
+            renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: this.registryPublication });
+        }
 
         renderSignatureStatus(this.lastSignature);
         renderPublishReview(this.lastSignature.payload || null);

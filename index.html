@@ -312,12 +312,21 @@
                                     <div class="result-info">
                                         <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
                                         <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
-                                        <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
-                                        <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
+                                        <p><strong>EVM publisher:</strong> <code id="result-signed-by">Not signed</code></p>
+                                        <p><strong>WEB25 signature:</strong> <code id="result-signature-preview">N/A</code></p>
                                         <p>
                                             <strong>Signature status:</strong>
                                             <code id="result-signature-status">UNVERIFIED</code>
                                         </p>
+                                        <div id="result-registry-row" class="deploy-registry-row hidden">
+                                            <p><strong>Nostr identity:</strong> <code id="result-npub">Unavailable</code></p>
+                                            <p><strong>Category:</strong> <code id="result-registry-category">WEB25.cloud / Websites</code></p>
+                                            <p>
+                                                <strong>Registry:</strong>
+                                                <span id="result-registry-status" class="status-chip status-pending">Pending</span>
+                                                <button id="retry-registry-btn" class="btn btn-secondary btn-sm hidden">Retry Registry Publish</button>
+                                            </p>
+                                        </div>
                                     </div>
                                     <div class="result-actions">
                                         <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
@@ -347,6 +356,7 @@
                                 <span class="step-chip">4. Sign payload</span>
                                 <span class="step-chip">5. Deploy signed memory torrent</span>
                                 <span class="step-chip">6. Live and seeding</span>
+                                <span class="step-chip">7. Publish to WEB25 registry</span>
                             </div>
                             <div class="deploy-stage-box">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
@@ -359,10 +369,25 @@
                             </div>
                             <details id="deploy-tech-details">
                                 <summary>View technical details</summary>
-                                <h4>Payload Preview</h4>
+                                <h4>WEB25 bundle &amp; <code>.torrentchain</code> payload</h4>
+                                <p class="tech-note">Signed once with your EVM identity. This is the WEB25 provenance layer.</p>
                                 <pre id="publish-payload-preview" class="code-block"></pre>
-                                <h4>Deploy Output</h4>
+
+                                <h4>Torrent artifact &amp; deploy output</h4>
+                                <p class="tech-note">The BitTorrent infohash identifies the distributed artifact.</p>
                                 <pre id="publish-output" class="code-block"></pre>
+
+                                <h4>NIP-35 registry event</h4>
+                                <p class="tech-note">
+                                    Signed with the Nostr identity derived from the same wallet key. This signature proves
+                                    who published the <em>registry entry</em>; the EVM signature above proves who published
+                                    the <em>website</em>.
+                                </p>
+                                <pre id="registry-event-preview" class="code-block"></pre>
+
+                                <h4>Registry publication results</h4>
+                                <p class="tech-note">Per-relay outcome. Discovery only — never a source of authenticity.</p>
+                                <pre id="registry-publish-output" class="code-block"></pre>
                             </details>
                         </section>
 
@@ -483,13 +508,43 @@
                 <!-- ── BROWSE TAB ── -->
                 <div id="tab-browse" class="tab-panel active" role="tabpanel">
                     <section class="example cloud-console card-base">
-                        <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
-                        <p>Resolve and open any peer-hosted website through your local browser node.</p>
-                        <div class="hash-input-group">
-                            <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
-                            <button id="load-site" class="btn btn-primary">Load Site</button>
+                        <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Open a WEB25 Site</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
+
+                        <div class="browse-mode-switch" role="tablist" aria-label="How to find a site">
+                            <button class="browse-mode-btn is-active" data-browse-mode="hash" role="tab" aria-selected="true">🔗 Load by Hash</button>
+                            <button class="browse-mode-btn" data-browse-mode="registry" role="tab" aria-selected="false">🛰️ Search WEB25 Registry</button>
                         </div>
-                        <p>🎯 Just the hash — WEB25.cloud automatically adds the magnet link prefix and trackers.</p>
+
+                        <div id="browse-hash-mode">
+                            <p>Resolve and open any peer-hosted website through your local browser node.</p>
+                            <div class="hash-input-group">
+                                <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
+                                <button id="load-site" class="btn btn-primary">Load Site</button>
+                            </div>
+                            <p>🎯 Just the hash — WEB25.cloud automatically adds the magnet link prefix and trackers.</p>
+                        </div>
+
+                        <div id="browse-registry-mode" class="hidden">
+                            <p>
+                                Discover WEB25 websites published to public Nostr relays under
+                                <code>WEB25.cloud / Websites</code>. The registry only says a site exists —
+                                content is downloaded over BitTorrent and verified from its
+                                <code>.torrentchain</code> before it renders.
+                            </p>
+                            <div class="hash-input-group">
+                                <input
+                                    type="text"
+                                    id="registry-search-input"
+                                    class="hash-input"
+                                    placeholder="Site name, infohash, 0x publisher, or npub…"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                />
+                                <button id="registry-search-btn" class="btn btn-primary">🔍 Search</button>
+                            </div>
+                            <p id="registry-status" class="registry-status is-idle">Search the registry to list published WEB25 websites.</p>
+                            <div id="registry-results" class="registry-results"></div>
+                        </div>
                     </section>
 
                     <section class="debug console-widget card-base">
@@ -593,6 +648,29 @@
                         </div>
 
                         <br /><br />
+                        <h3>🛰️ Website registry (NIP-35 / DTAN)</h3>
+                        <p>
+                            Deployed websites can also be published as public NIP-35 torrent events under the
+                            category <code>WEB25.cloud / Websites</code>, making them discoverable from the
+                            Browse tab. This is a second, separate Nostr use case from the private Direct
+                            Messenger — registry events carry public metadata only.
+                        </p>
+                        <div class="feature-grid">
+                            <div class="feature">🗂️ Category <code>tcat:web25.cloud,websites</code></div>
+                            <div class="feature">🔗 Carries the final BitTorrent infohash and real torrent files</div>
+                            <div class="feature">🪪 Mirrors the <code>.torrentchain</code> EVM proof for pre-download checks</div>
+                            <div class="feature">✍️ No second EVM signature — only a Nostr signature is added</div>
+                            <div class="feature">🌐 Registry relay: <code>wss://relay.dtan.xyz</code> plus generic relays</div>
+                            <div class="feature">🧯 A registry outage never blocks or invalidates a deployment</div>
+                        </div>
+                        <p>
+                            Nostr provides registry, discovery and search. Website content is distributed over
+                            BitTorrent, and authenticity still comes from <code>.torrentchain</code> after
+                            download — a registry entry that disagrees with the downloaded manifest is treated
+                            as untrusted.
+                        </p>
+
+                        <br /><br />
                         <h3>🛡️ Security profile</h3>
                         <p>
                             WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
@@ -617,6 +695,8 @@
                             <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
                             <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
                             <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
+                            <div class="req">✅ Public website registry over NIP-35 with DTAN-compatible discovery</div>
+                            <div class="req">✅ Pre-download publisher verification from mirrored <code>.torrentchain</code> proof</div>
                             <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
                         </div>
                     </section>

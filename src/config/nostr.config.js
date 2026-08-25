@@ -8,7 +8,7 @@
  */
 
 /**
- * Default public relay pool. No single relay is required — the pool publishes
+ * General-purpose public relays. No single relay is required — a pool publishes
  * to and subscribes across all of them, tolerates the ones that are down, and
  * deduplicates whatever comes back.
  */
@@ -17,6 +17,25 @@ export const DEFAULT_NOSTR_RELAYS = Object.freeze([
     'wss://nos.lol',
     'wss://relay.nostr.band',
     'wss://relay.snort.social'
+]);
+
+/**
+ * Relays used for private Direct Messenger traffic (NIP-17/44/59 gift wraps).
+ */
+export const DEFAULT_NOSTR_DM_RELAYS = DEFAULT_NOSTR_RELAYS;
+
+/**
+ * Relays used for the public WEB25 website registry (NIP-35 kind 2003).
+ *
+ * `relay.dtan.xyz` is the specialised torrent-index relay this registry targets
+ * first; the generic relays follow for redundancy so a DTAN outage cannot make
+ * a published site undiscoverable. The two purposes are kept in separate pools
+ * even though they share the same relay client: registry events are public, DM
+ * events are not, and nothing should ever cross between them.
+ */
+export const DEFAULT_NOSTR_REGISTRY_RELAYS = Object.freeze([
+    'wss://relay.dtan.xyz',
+    ...DEFAULT_NOSTR_RELAYS
 ]);
 
 export const NOSTR_CONFIG = Object.freeze({
@@ -56,4 +75,50 @@ export const NOSTR_CONFIG = Object.freeze({
      * from these routinely, so the fallback is not armed until it elapses.
      */
     WEBRTC_DISCONNECT_GRACE_MS: 12000
+});
+
+/**
+ * Public WEB25 website registry (NIP-35).
+ *
+ * This is discovery only. A registry entry tells a browser that a site exists
+ * and who claims to have published it; the BitTorrent infohash identifies the
+ * artifact, and the `.torrentchain` inside it remains the authority on contents
+ * and publisher. Nothing here is ever trusted over a downloaded manifest.
+ */
+export const NOSTR_REGISTRY_CONFIG = Object.freeze({
+    /** NIP-35 torrent event. */
+    TORRENT_EVENT_KIND: 2003,
+
+    /**
+     * The WEB25 website category, as a NIP-35 `i` tag.
+     * Namespace `web25.cloud`, category `websites`.
+     */
+    WEB25_CATEGORY: 'tcat:web25.cloud,websites',
+
+    /** Generic hashtags added alongside the category. */
+    WEB25_HASHTAGS: Object.freeze(['web25', 'website', 'static-site']),
+
+    /** Namespaced tags mirroring the `.torrentchain` proof into the event. */
+    PROOF_TAGS: Object.freeze({
+        SCHEMA: 'web25-schema',
+        PUBLISHER: 'web25-publisher',
+        CHAIN_ID: 'web25-chain-id',
+        CREATED_AT: 'web25-created-at',
+        MERKLE_ROOT: 'web25-merkle-root',
+        BUNDLE_SHA256: 'web25-bundle-sha256',
+        BUNDLE_NAME: 'web25-bundle-name',
+        SIGNATURE: 'web25-signature',
+        MESSAGE: 'web25-message'
+    }),
+
+    /** How long a discovery query waits for relays before rendering results. */
+    QUERY_TIMEOUT_MS: 6000,
+    /** Cap on results held from one query. */
+    QUERY_LIMIT: 100,
+    /** How far back a registry query looks. */
+    QUERY_LOOKBACK_SECONDS: 365 * 24 * 60 * 60,
+    /** Hard cap on the mirrored signed message, so one event cannot be huge. */
+    MAX_PROOF_MESSAGE_BYTES: 8192,
+    /** Hard cap on `file` tags advertised for one torrent. */
+    MAX_FILE_TAGS: 64
 });

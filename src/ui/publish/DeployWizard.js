@@ -7,7 +7,9 @@
  */
 
 /**
- * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean, isError?: boolean }} DeployWizardState
+ * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean,
+ *             registryState?: 'idle'|'signing'|'publishing'|'published'|'failed'|'skipped',
+ *             isError?: boolean }} DeployWizardState
  */
 
 /** @type {NodeListOf<HTMLElement> | null} */
@@ -41,12 +43,16 @@ export function initDeployWizard() {
 export function updateDeployWizard(state) {
     if (!stepChips || stepChips.length === 0) return;
 
-    const { hasFiles, hasSignature, hasDeployResult, isError = false } = state;
+    const { hasFiles, hasSignature, hasDeployResult, registryState = 'idle', isError = false } = state;
 
-    // Determine active step (1-based, matching the 6 step chips)
-    // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign  5 – Deploy  6 – Live
+    // Determine active step (1-based, matching the 7 step chips)
+    // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign (EVM/.torrentchain)
+    // 5 – Deploy  6 – Live and seeding  7 – Publish to the WEB25 registry
+    const registryStarted = registryState !== 'idle';
     let activeStep;
-    if (hasDeployResult) {
+    if (hasDeployResult && registryStarted) {
+        activeStep = 7;
+    } else if (hasDeployResult) {
         activeStep = 6;
     } else if (hasFiles && hasSignature) {
         activeStep = 5;
@@ -72,10 +78,27 @@ export function updateDeployWizard(state) {
         }
     });
 
+    // The registry step is the only one that can complete *and* fail without
+    // invalidating the deployment, so it gets its own visual state.
+    if (stepChips.length >= 7) {
+        const registryChip = stepChips[6];
+        if (registryState === 'published') {
+            registryChip.classList.remove('step-active', 'step-locked');
+            registryChip.classList.add('step-done');
+        } else if (registryState === 'failed') {
+            registryChip.classList.remove('step-done', 'step-locked');
+            registryChip.classList.add('step-active');
+        }
+    }
+
     // Update "Next suggested action" microcopy
     if (wizardNextEl) {
         let nextText;
-        if (hasDeployResult) {
+        if (hasDeployResult && registryState === 'published') {
+            nextText = '🎉 Live and seeding, and listed in the WEB25 registry — share the link below!';
+        } else if (hasDeployResult && registryState === 'failed') {
+            nextText = '🎉 Live and seeding. The registry entry did not publish — you can retry it below.';
+        } else if (hasDeployResult) {
             nextText = '🎉 Your site is live and seeding — share the link below!';
         } else if (hasFiles && hasSignature) {
             nextText = '▶ Next: Deploy your signed torrent to go live.';
