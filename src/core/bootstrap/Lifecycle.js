@@ -12,6 +12,10 @@ import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/Deplo
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
+import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
+import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
+import { verifyNostrEvent } from '../../nostr/nostr.js';
+import { DEFAULT_NOSTR_RELAYS } from '../../config/nostr.config.js';
 import { createLocalWalletSigner, eciesDecryptWithLocalWallet } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
@@ -21,8 +25,11 @@ import {
     clearChannelsComposer,
     clearChannelsMessages,
     renderChannelsStatus,
+    renderDmTransport,
+    showDmStep,
     setLocalAnswerCode,
     setLocalOfferCode,
+    updateDmNostrIdentity,
     updateDmOwnPubkey
 } from '../../ui/channels/ChannelsPanel.js';
 
@@ -83,10 +90,59 @@ export async function initAuth() {
 
 export function setupChannels() {
     // The service is granted a signing handle, never the private key itself.
-    this.channelsService = new ChannelsService({ signer: createLocalWalletSigner() });
+    const signer = createLocalWalletSigner();
+    this.dmSigner = signer;
+    this.channelsService = new ChannelsService({ signer });
     this.dmOfferSessionId = null;
 
+    // Browser → public relays, directly. No proxy, no Web25 relay.
+    this.nostrPool = new NostrRelayPool({ relays: DEFAULT_NOSTR_RELAYS, verifyEvent: verifyNostrEvent });
+    this.nostrDmSession = new NostrDirectMessageSession({
+        pool: this.nostrPool,
+        signer,
+        onInvitation: (bootstrap, context) => this.handleNostrInvitation(bootstrap, context),
+        onChatEnvelope: (wire) => this.channelsService.receiveNostrEnvelope(wire),
+        onError: (error) => this.log(`Nostr Direct Messenger: ${error.message}`)
+    });
+    this.channelsService.setNostrFallback(this.nostrDmSession.createFallback());
+
     bindChannelsPanel({
+        onNostrInvite: async ({ recipient }) => {
+            const identity = this.authController.getActiveIdentity();
+            if (!identity?.address) {
+                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
+                return false;
+            }
+
+            try {
+                this.showDirectMessageProgress('Connecting to Nostr relays…');
+                clearChannelsMessages();
+                await this.nostrDmSession.start({ localAddress: identity.address });
+
+                const offerSessionId = createDirectMessageSessionId();
+                const sharedRoom = directMessageRoomFromSession(offerSessionId);
+                this.showDirectMessageProgress('Creating WebRTC offer…');
+                const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
+
+                this.showDirectMessageProgress('Publishing encrypted invitation…');
+                const { bootstrap } = await this.nostrDmSession.sendInvitation({
+                    identity,
+                    eciesPublicKey: signal.publicKey,
+                    role: 'offer',
+                    webrtcDescription: signal.description,
+                    recipient,
+                    sessionId: offerSessionId
+                });
+                this.dmOfferSessionId = bootstrap.session.sessionId;
+                this.toast.success('Encrypted invitation sent through the Nostr relay pool.', 'Direct Messenger');
+                return true;
+            } catch (error) {
+                this.toast.error(error.message, 'Direct Messenger');
+                return false;
+            } finally {
+                this.hideDirectMessageProgress();
+            }
+        },
         onCreateOffer: async ({ recipientPublicKey }) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
@@ -202,6 +258,9 @@ export function setupChannels() {
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
+            // Stay subscribed: leaving a conversation should not stop the user
+            // being reachable at their npub.
+            this.nostrDmSession?.clearPeer();
             setLocalOfferCode('');
             setLocalAnswerCode('');
             this.dmOfferSessionId = null;
@@ -227,6 +286,13 @@ export function setupChannels() {
     });
 
     this.channelsService.onUpdate((event) => {
+        if (event.type === 'transport') {
+            renderDmTransport(event.transport);
+            // The relay fallback is a working conversation too: show the chat
+            // pane for it, not just for an established WebRTC connection.
+            if (event.transport === 'nostr' || event.transport === 'webrtc') showDmStep('dm-chat-active');
+            return;
+        }
         if (event.type === 'connecting') {
             renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
         } else if (event.type === 'local-offer') {
@@ -260,6 +326,64 @@ export function setupChannels() {
             this.toast.error(event.error?.message || 'Unexpected direct messenger error', 'Direct Messenger');
         }
     });
+}
+
+/**
+ * An invitation arrived through the relay pool.
+ *
+ * An `offer` is answered automatically with a gift-wrapped answer; an `answer`
+ * completes the handshake for an offer this page sent. Both were already
+ * validated (identity binding, TTL, replay) before reaching here.
+ */
+export async function handleNostrInvitation(bootstrap, context) {
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) return;
+
+    try {
+        if (bootstrap.role === 'offer') {
+            // An open conversation is not interrupted by an unsolicited third
+            // party: relays are public, so anyone can address this npub.
+            const boundPeer = this.nostrDmSession.peerNostrPublicKey;
+            if (this.channelsService.currentChannel && boundPeer && boundPeer !== context.senderNostrPublicKey) {
+                this.log(`Ignoring a Direct Messenger invitation from ${context.senderNostrPublicKey} during an active session.`);
+                return;
+            }
+
+            const derivedRoom = directMessageRoomFromSession(bootstrap.session.sessionId);
+            const offerPayload = {
+                description: bootstrap.webrtc.description,
+                evmAddress: bootstrap.from.evmAddress,
+                publicKey: bootstrap.from.eciesPublicKey
+            };
+            const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
+            this.nostrDmSession.setPeer(context.senderNostrPublicKey);
+            await this.nostrDmSession.sendInvitation({
+                identity,
+                eciesPublicKey: answerSignal.publicKey,
+                role: 'answer',
+                webrtcDescription: answerSignal.description,
+                recipient: context.senderNostrPublicKey,
+                // The peer's full ECIES key is known now, so the answer gets the
+                // Web25 ECIES envelope on top of the NIP-44 gift wrap.
+                recipientEciesPublicKey: bootstrap.from.eciesPublicKey,
+                replyToSessionId: bootstrap.session.sessionId
+            });
+            this.toast.success('Encrypted invitation accepted; connecting…', 'Direct Messenger');
+            return;
+        }
+
+        if (bootstrap.role === 'answer') {
+            await this.channelsService.applyRemoteAnswerPayload({
+                description: bootstrap.webrtc.description,
+                evmAddress: bootstrap.from.evmAddress,
+                publicKey: bootstrap.from.eciesPublicKey
+            });
+            this.nostrDmSession.setPeer(context.senderNostrPublicKey);
+            this.toast.success('Peer answered. Establishing the direct connection…', 'Direct Messenger');
+        }
+    } catch (error) {
+        this.toast.error(error.message, 'Direct Messenger');
+    }
 }
 
 export function showDirectMessageProgress(message) {
@@ -560,6 +684,16 @@ export function setupAuthAwareUi(state) {
     // Update DM panel "My Public Key" display. The public key is supplied by the
     // signing worker via auth state; the private key never reaches this thread.
     updateDmOwnPubkey(isAuthenticated ? state.publicKey || null : null);
+    updateDmNostrIdentity(isAuthenticated ? state.npub || null : null);
+    renderDmTransport(this.channelsService?.transport || 'disconnected');
+
+    // An unlocked wallet is reachable at its npub: subscribe the inbox so an
+    // inbound invitation arrives without the user having to send one first.
+    if (isAuthenticated && this.nostrDmSession && !this.nostrDmSession.started) {
+        void this.nostrDmSession.start({ localAddress: state.address }).catch((error) => {
+            this.log(`Nostr inbox unavailable: ${error.message}`);
+        });
+    }
 
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
@@ -571,6 +705,7 @@ export function setupAuthAwareUi(state) {
         if (this.channelsService?.currentChannel) {
             this.channelsService.leaveChannel();
         }
+        this.nostrDmSession?.stop();
         return;
     }
 

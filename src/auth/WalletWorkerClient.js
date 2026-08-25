@@ -185,3 +185,51 @@ export async function workerEciesDecrypt(ciphertext) {
 export function workerGetPublicKey() {
     return request(WALLET_WORKER_OPS.GET_PUBLIC_KEY);
 }
+
+/**
+ * The wallet's Nostr identity — the x-only public key of the *same*
+ * secp256k1 key pair, plus its NIP-19 `npub` form. Public material only:
+ * there is no operation anywhere that returns an `nsec`.
+ * @returns {Promise<{ nostrPublicKey: string, npub: string }>}
+ */
+export function workerGetNostrPublicKey() {
+    return request(WALLET_WORKER_OPS.NOSTR_GET_PUBLIC_KEY);
+}
+
+/**
+ * BIP-340 signature over a Nostr event template. The worker computes the
+ * event id itself, so this cannot be used as a generic signing oracle.
+ * @param {{ kind: number, created_at: number, tags: string[][], content: string }} template
+ * @returns {Promise<any>} the finalized event, including `id`, `pubkey` and `sig`
+ */
+export async function workerNostrSignEvent(template) {
+    const result = await request(WALLET_WORKER_OPS.NOSTR_SIGN_EVENT, {
+        kind: template.kind,
+        created_at: template.created_at,
+        tags: template.tags,
+        content: template.content
+    });
+    return result.event;
+}
+
+/**
+ * NIP-44 v2 encryption to a peer's Nostr public key.
+ * @param {string} plaintext
+ * @param {string} peerPublicKey 32-byte hex
+ * @returns {Promise<string>} base64 NIP-44 payload
+ */
+export async function workerNostrNip44Encrypt(plaintext, peerPublicKey) {
+    const result = await request(WALLET_WORKER_OPS.NOSTR_NIP44_ENCRYPT, { plaintext, peerPublicKey });
+    return result.payload;
+}
+
+/**
+ * NIP-44 v2 decryption from a peer's Nostr public key.
+ * @param {string} payload base64 NIP-44 payload
+ * @param {string} peerPublicKey 32-byte hex
+ * @returns {Promise<string>}
+ */
+export async function workerNostrNip44Decrypt(payload, peerPublicKey) {
+    const result = await request(WALLET_WORKER_OPS.NOSTR_NIP44_DECRYPT, { payload, peerPublicKey });
+    return result.plaintext;
+}

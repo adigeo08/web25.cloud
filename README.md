@@ -27,10 +27,12 @@ The UI is organized into:
   - Seed signed output
 - **Browse / Load**
   - Existing torrent hash loading flow remains available
-- **Direct Messenger (WebRTC data channels)**
-  - Manual host/guest offer-answer signaling
-  - Peer count and session state updates
+- **Direct Messenger (WebRTC data channels + Nostr)**
+  - Address a peer by Nostr `npub`; encrypted invitations travel as NIP-59 gift wraps
+  - Manual host/guest magnet signaling still available under "Advanced"
+  - Peer count, transport state and session updates
   - Identity-bound encrypted/signed message exchange
+  - Nostr relay fallback when WebRTC cannot be established
 
 ### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault + IndexedDB)
 
@@ -202,18 +204,45 @@ To avoid regressions from verified → pending after refresh:
 
 ### 7) P2P Direct Messenger over WebRTC (identity-bound)
 
-Direct Messenger follows manual offer/answer signaling with asymmetric crypto on secp256k1:
+Direct Messenger binds every peer to an EVM identity with asymmetric crypto on secp256k1:
 
-- host creates offer with mandatory `evmAddress` + `publicKey`
-- guest verifies host identity (`publicKey → keccak256 → address`)
-- guest replies with answer carrying mandatory `evmAddress` + `publicKey`
-- host verifies guest identity and opens data channel
-- DM setup requires an unlocked local wallet private key on both peers
+- offers and answers carry mandatory `evmAddress` + `publicKey`
+- each side verifies the other (`publicKey → keccak256 → address`) before any message
+- DM setup requires an unlocked local wallet on both peers
 - STUN used for ICE discovery: `stun:stun.l.google.com:19302`
 - outbound messages are always encrypted for recipient (ECIES) + signed by sender
 - inbound messages are always decrypted locally + signature-verified
 - invalid signatures are rejected
 - no plaintext DM fallback is allowed
+
+---
+
+### 8) Nostr identity, signalling and relay fallback
+
+One local secp256k1 key backs three identities — EVM, ECIES and Nostr — with no
+second seed and no second private key:
+
+```text
+local wallet private key (dedicated worker only)
+   ├─ EVM identity     0x…
+   ├─ ECIES identity   04…
+   └─ Nostr identity   npub1…
+```
+
+- conversations start from a recipient `npub` (a raw hex key is accepted too)
+- the encrypted WebRTC offer/answer travel as NIP-59 gift wraps through a
+  configurable pool of public relays, straight from the browser
+- SDP, ICE data, EVM address and ECIES key are never publicly readable
+- WebRTC stays the preferred transport; the relay path is used only when a
+  connection cannot be established, and WebRTC is preferred again as soon as the
+  DataChannel reopens
+- fallback messages keep the existing Web25 signed + ECIES envelope *and* add
+  NIP-44 on top; relays are just another untrusted pipe
+- Nostr private-key operations happen inside the wallet worker and fail when the
+  wallet is locked; no `nsec` is ever produced or persisted
+
+NIPs used: **NIP-01**, **NIP-19**, **NIP-44 v2**, **NIP-59**, **NIP-17**.
+NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
 
@@ -252,7 +281,18 @@ src/
 │   └── PeerWebCache.js
 ├── channels/
 │   ├── ChannelsService.js
+│   ├── DirectMessageBootstrapCore.js
+│   ├── DirectMessageTorrentBootstrap.js
+│   ├── NostrDirectMessageBootstrap.js
+│   ├── NostrDirectMessageSession.js
 │   └── ecies.js
+├── nostr/
+│   ├── NostrRelayPool.js
+│   ├── bech32.js
+│   ├── nip19.js
+│   ├── nip59.js
+│   ├── nostr.js
+│   └── nostrCore.js
 ├── core/
 │   ├── cache/
 │   │   └── SignatureStateVersion.js
@@ -330,6 +370,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 
 - WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
 - STUN: `stun:stun.l.google.com:19302`
+- Nostr relays (configurable in `src/config/nostr.config.js`):
+  `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
 
 ---
 

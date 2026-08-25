@@ -4,6 +4,7 @@ import { createAuthState, AUTH_STATUS } from './AuthState.js';
 import {
     clearLocalWalletSession,
     destroyLocalWalletSession,
+    getLocalWalletNostrIdentity,
     getLocalWalletPublicKey,
     getLocalWalletStatus,
     onWalletLocked,
@@ -85,6 +86,7 @@ export default class AuthController {
         this.state.localWalletUnlocked = localWallet.unlocked;
         this.state.passkeyProtected = Boolean(localWallet.passkeyProtected);
         this.state.publicKey = localWallet.unlocked ? await getLocalWalletPublicKey() : null;
+        await this.refreshNostrIdentity(localWallet.unlocked);
 
         if (localWallet.exists && localWallet.address) {
             this.state.identityType = 'local';
@@ -110,10 +112,27 @@ export default class AuthController {
         }
     }
 
+    /**
+     * Pull the Nostr view of the wallet key. Derived from the same secp256k1
+     * key inside the worker; public material only.
+     * @param {boolean} unlocked
+     */
+    async refreshNostrIdentity(unlocked) {
+        if (!unlocked) {
+            this.state.nostrPublicKey = null;
+            this.state.npub = null;
+            return;
+        }
+        const nostrIdentity = await getLocalWalletNostrIdentity();
+        this.state.nostrPublicKey = nostrIdentity?.nostrPublicKey || null;
+        this.state.npub = nostrIdentity?.npub || null;
+    }
+
     async registerLocal() {
         try {
             const result = await registerLocalWallet();
             this.state.publicKey = await getLocalWalletPublicKey();
+            await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
@@ -143,6 +162,7 @@ export default class AuthController {
         try {
             const result = await registerLocalWalletFromSeed(seedPhrase);
             this.state.publicKey = await getLocalWalletPublicKey();
+            await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
@@ -163,6 +183,7 @@ export default class AuthController {
         try {
             const result = await unlockLocalWallet();
             this.state.publicKey = await getLocalWalletPublicKey();
+            await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
@@ -203,6 +224,7 @@ export default class AuthController {
             await removeLocalWallet();
             const result = await registerLocalWalletFromSeed(seedPhrase);
             this.state.publicKey = await getLocalWalletPublicKey();
+            await this.refreshNostrIdentity(true);
             input.value = '';
             this.state.identityType = 'local';
             this.state.address = result.address;

@@ -49,7 +49,19 @@ function shortAddress(address) {
     return `${address.slice(0, 8)}…${address.slice(-4)}`;
 }
 
-export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer, onLeave, onSend }) {
+/**
+ * Transport labels shown in the chat header. Deliberately plain: the user only
+ * needs to know whether the conversation is peer-to-peer or going through a
+ * public relay.
+ */
+export const DM_TRANSPORT_LABELS = {
+    connecting: { text: 'Connecting…', className: 'status-chip status-pending' },
+    webrtc: { text: 'P2P · WebRTC', className: 'status-chip status-success' },
+    nostr: { text: 'Relay fallback · Nostr', className: 'status-chip status-pending' },
+    disconnected: { text: 'Disconnected', className: 'status-chip status-pending' }
+};
+
+export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer, onLeave, onSend, onNostrInvite = null }) {
     const createOfferBtn = document.getElementById('channels-create-offer-btn');
     const createAnswerBtn = document.getElementById('channels-create-answer-btn');
     const applyAnswerBtn = document.getElementById('channels-apply-answer-btn');
@@ -67,6 +79,40 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
     const localAnswerOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-answer-output'));
     const messageInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
     const recipientPubKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-pubkey-input'));
+    const recipientNpubInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-npub-input'));
+    const nostrInviteBtn = document.getElementById('channels-nostr-invite-btn');
+    const copyOwnNpubBtn = document.getElementById('dm-copy-own-npub-btn');
+
+    nostrInviteBtn?.addEventListener('click', async () => {
+        setDmError('dm-choose-role-error', '');
+        if (!onNostrInvite) return;
+        try {
+            const ok = await onNostrInvite({ recipient: recipientNpubInput?.value?.trim() || '' });
+            if (ok === true) showDmStep('dm-chat-active');
+        } catch (err) {
+            setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
+        }
+    });
+
+    copyOwnNpubBtn?.addEventListener('click', () => {
+        const npubEl = document.getElementById('dm-own-npub-value');
+        const npub = npubEl?.textContent || '';
+        if (!npub) return;
+        const originalText = copyOwnNpubBtn.textContent || '📋 Copy';
+        copyToClipboard(npub)
+            .then(() => {
+                copyOwnNpubBtn.textContent = '✅ Copied!';
+                setTimeout(() => {
+                    copyOwnNpubBtn.textContent = originalText;
+                }, 2000);
+            })
+            .catch(() => {
+                copyOwnNpubBtn.textContent = '❌ Failed';
+                setTimeout(() => {
+                    copyOwnNpubBtn.textContent = originalText;
+                }, 2000);
+            });
+    });
 
     createOfferBtn?.addEventListener('click', async () => {
         setDmError('dm-choose-role-error', '');
@@ -169,6 +215,37 @@ export function updateDmOwnPubkey(publicKey) {
         if (lockedPanel) lockedPanel.classList.remove('hidden');
         if (valueEl) valueEl.textContent = '';
     }
+}
+
+/**
+ * Show the local Nostr address when the wallet is unlocked.
+ * @param {string|null} npub
+ */
+export function updateDmNostrIdentity(npub) {
+    const panel = document.getElementById('dm-my-npub-panel');
+    const lockedPanel = document.getElementById('dm-my-npub-locked');
+    const valueEl = document.getElementById('dm-own-npub-value');
+
+    if (npub) {
+        if (panel) panel.classList.remove('hidden');
+        if (lockedPanel) lockedPanel.classList.add('hidden');
+        if (valueEl) valueEl.textContent = npub;
+    } else {
+        if (panel) panel.classList.add('hidden');
+        if (lockedPanel) lockedPanel.classList.remove('hidden');
+        if (valueEl) valueEl.textContent = '';
+    }
+}
+
+/**
+ * @param {string} transport one of `connecting`, `webrtc`, `nostr`, `disconnected`
+ */
+export function renderDmTransport(transport) {
+    const el = document.getElementById('dm-transport-chip');
+    if (!el) return;
+    const label = DM_TRANSPORT_LABELS[transport] || DM_TRANSPORT_LABELS.disconnected;
+    el.textContent = label.text;
+    el.className = label.className;
 }
 
 export function renderChannelsStatus({ channel = '', peers = 0, connected = false }) {

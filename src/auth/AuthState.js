@@ -22,6 +22,10 @@ export function createAuthState() {
         passkeyProtected: false,
         // Public secp256k1 key of the unlocked wallet, fetched from the signing
         // worker. Public material only — never the private key.
-        publicKey: null
+        publicKey: null,
+        // The same key's Nostr view: x-only public key and its NIP-19 `npub`.
+        // There is no `nsec` here, or anywhere else.
+        nostrPublicKey: null,
+        npub: null
     };
 }

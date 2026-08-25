@@ -48,7 +48,11 @@
             "imports": {
                 "@noble/curves/secp256k1": "https://esm.sh/@noble/curves@1.4.2/secp256k1",
                 "@noble/hashes/sha3": "https://esm.sh/@noble/hashes@1.4.0/sha3.js",
-                "@noble/curves/ed25519": "https://esm.sh/@noble/curves@1.4.2/ed25519"
+                "@noble/curves/ed25519": "https://esm.sh/@noble/curves@1.4.2/ed25519",
+                "@noble/hashes/sha256": "https://esm.sh/@noble/hashes@1.4.0/sha256.js",
+                "@noble/hashes/hmac": "https://esm.sh/@noble/hashes@1.4.0/hmac.js",
+                "@noble/hashes/hkdf": "https://esm.sh/@noble/hashes@1.4.0/hkdf.js",
+                "@noble/ciphers/chacha": "https://esm.sh/@noble/ciphers@1.3.0/chacha.js"
             }
         }
         </script>
@@ -326,12 +330,24 @@
                         <!-- SUB-PANEL 1: Choose Role -->
                         <div id="dm-choose-role">
                             <h3>💬 P2P Direct Messenger</h3>
-                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow with recipient-encrypted magnet bootstrap</p>
+                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow, addressed by Nostr <code>npub</code></p>
                             <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
                             <p style="text-align:center; margin-bottom: 1.25rem">
-                                Each magnet distributes a signed, recipient-encrypted DM envelope. Only the intended recipient can decrypt the invite.
-                                After the connection is established, messages remain E2E encrypted with ECIES on the WebRTC data channel.
+                                Invitations travel as NIP-59 gift wraps through public Nostr relays — the SDP, ICE data, EVM address and
+                                ECIES key are never publicly readable. WebRTC stays the preferred transport; if it cannot be established,
+                                messages fall back to the relays, still signed and ECIES-encrypted end to end.
                             </p>
+                            <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
+                                <p class="dm-own-pubkey-label">🪐 Your Nostr address <span class="dm-own-pubkey-hint">(share this so others can message you)</span></p>
+                                <div class="identity-pubkey-row">
+                                    <code id="dm-own-npub-value" class="dm-own-pubkey-value"></code>
+                                    <button id="dm-copy-own-npub-btn" class="btn btn-secondary btn-sm" title="Copy my Nostr address" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
+                                </div>
+                            </div>
+                            <div id="dm-my-npub-locked" class="dm-own-pubkey-panel hidden">
+                                <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
+                                <p class="dm-own-pubkey-hint">Authenticate and unlock your wallet to view your Nostr address.</p>
+                            </div>
                             <div id="dm-my-pubkey-panel" class="dm-own-pubkey-panel hidden">
                                 <p class="dm-own-pubkey-label">🔑 Your ECIES Public Key <span class="dm-own-pubkey-hint">(share this so others can send you encrypted invites)</span></p>
                                 <div class="identity-pubkey-row">
@@ -344,6 +360,22 @@
                                 <p class="dm-own-pubkey-hint">Authenticate and unlock your wallet to view your public key.</p>
                             </div>
                             <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
+                            <div class="dm-role-cards">
+                                <div class="dm-role-card">
+                                    <p class="dm-card-title">Start a chat</p>
+                                    <p class="dm-instruction">Enter the recipient's Nostr address. The encrypted WebRTC invitation is delivered through the relay pool.</p>
+                                    <input
+                                        id="dm-recipient-npub-input"
+                                        type="text"
+                                        class="hash-input"
+                                        placeholder="Recipient Nostr address (npub)"
+                                        style="margin-top: 0.5rem"
+                                    />
+                                    <button id="channels-nostr-invite-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Send Encrypted Invitation</button>
+                                </div>
+                            </div>
+                            <details class="dm-advanced" style="margin-top: 1rem">
+                                <summary>Advanced · magnet &amp; manual invite (WebTorrent)</summary>
                             <div class="dm-role-cards">
                                 <div class="dm-role-card">
                                     <p class="dm-card-title">Generate room magnet as host</p>
@@ -371,6 +403,7 @@
                                     <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Room &amp; Generate My Magnet</button>
                                 </div>
                             </div>
+                            </details>
                         </div>
 
                         <!-- SUB-PANEL 2: Host Signaling -->
@@ -423,7 +456,10 @@
 
                         <!-- SUB-PANEL 4: Chat Active -->
                         <div id="dm-chat-active" class="hidden">
-                            <p id="channels-status" class="status-chip status-pending" style="margin-bottom: 0.75rem">Disconnected</p>
+                            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem">
+                                <p id="channels-status" class="status-chip status-pending" style="margin: 0">Disconnected</p>
+                                <p id="dm-transport-chip" class="status-chip status-pending" style="margin: 0">Disconnected</p>
+                            </div>
                             <div id="channels-messages" class="channels-messages"></div>
                             <div class="hash-input-group" style="margin-top: 0.75rem">
                                 <input

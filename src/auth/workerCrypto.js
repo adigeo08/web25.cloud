@@ -13,3 +13,5 @@ import { keccak_256 } from 'https://esm.sh/@noble/hashes@1.4.0/sha3.js';
 import { createEcies } from '../channels/eciesCore.js';
 
 export const workerEcies = createEcies({ secp256k1, keccak_256 });
+
+export { workerNostr } from './workerNostr.js';

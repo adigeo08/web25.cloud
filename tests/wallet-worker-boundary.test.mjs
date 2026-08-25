@@ -17,13 +17,15 @@ import { createWalletWorkerCore } from '../src/auth/walletWorkerCore.js';
 import { validateWalletRequest, WALLET_WORKER_OPS, WALLET_SESSION_TTL_MS } from '../src/auth/walletWorkerProtocol.js';
 import * as ecies from '../src/channels/ecies.js';
 import { eciesEncrypt, evmAddressFromPublicKey, getPublicKeyFromPrivateKey, verifySignature } from '../src/channels/ecies.js';
+import { nostrCore } from '../src/nostr/nostr.js';
+import { npubEncode } from '../src/nostr/nip19.js';
 
 const PRIV_KEY = '0x1111111111111111111111111111111111111111111111111111111111111111';
 const PUB_KEY = getPublicKeyFromPrivateKey(PRIV_KEY);
 const ADDRESS = evmAddressFromPublicKey(PUB_KEY);
 
 function newCore(options = {}) {
-    return createWalletWorkerCore({ ecies, ...options });
+    return createWalletWorkerCore({ ecies, nostr: nostrCore, ...options });
 }
 
 let requestId = 0;
@@ -47,6 +49,10 @@ test('the worker exposes exactly the agreed operations and no generic executor',
         'ECIES_SIGN',
         'GET_PUBLIC_KEY',
         'LOCK',
+        'NOSTR_GET_PUBLIC_KEY',
+        'NOSTR_NIP44_DECRYPT',
+        'NOSTR_NIP44_ENCRYPT',
+        'NOSTR_SIGN_EVENT',
         'SIGN_MESSAGE',
         'STATUS',
         'UNLOCK'

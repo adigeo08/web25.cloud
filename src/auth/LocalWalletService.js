@@ -31,7 +31,11 @@ import {
     walletWorkerStatus,
     workerEciesDecrypt,
     workerEciesSign,
+    workerGetNostrPublicKey,
     workerGetPublicKey,
+    workerNostrNip44Decrypt,
+    workerNostrNip44Encrypt,
+    workerNostrSignEvent,
     workerSignMessage
 } from './WalletWorkerClient.js';
 import { WALLET_SESSION_TTL_MS } from './walletWorkerProtocol.js';
@@ -228,6 +232,45 @@ export async function getLocalWalletPublicKey() {
     }
 }
 
+/**
+ * The wallet's Nostr identity, derived from the *same* secp256k1 key as the
+ * EVM and ECIES identities. Public material only.
+ * @returns {Promise<{ nostrPublicKey: string, npub: string } | null>}
+ */
+export async function getLocalWalletNostrIdentity() {
+    try {
+        return await workerGetNostrPublicKey();
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * BIP-340 Nostr event signature produced inside the worker.
+ * @param {{ kind: number, created_at: number, tags: string[][], content: string }} template
+ */
+export async function nostrSignEventWithLocalWallet(template) {
+    return workerNostrSignEvent(template);
+}
+
+/**
+ * NIP-44 v2 encryption performed inside the worker.
+ * @param {string} plaintext
+ * @param {string} peerPublicKey
+ */
+export async function nostrNip44EncryptWithLocalWallet(plaintext, peerPublicKey) {
+    return workerNostrNip44Encrypt(plaintext, peerPublicKey);
+}
+
+/**
+ * NIP-44 v2 decryption performed inside the worker.
+ * @param {string} payload
+ * @param {string} peerPublicKey
+ */
+export async function nostrNip44DecryptWithLocalWallet(payload, peerPublicKey) {
+    return workerNostrNip44Decrypt(payload, peerPublicKey);
+}
+
 /** @returns {Promise<boolean>} */
 export async function isLocalWalletUnlocked() {
     const status = await walletWorkerStatus();
@@ -236,13 +279,30 @@ export async function isLocalWalletUnlocked() {
 
 /**
  * Signing/decryption handle handed to services that must not see the key.
- * @returns {{ getPublicKey: () => Promise<string|null>, signMessage: (m: string) => Promise<string>, eciesDecrypt: (c: string) => Promise<string> }}
+ *
+ * Each entry is a narrowly scoped capability backed by one fixed wallet-worker
+ * operation. There is deliberately no private-key accessor, no `sign(anything)`
+ * and no generic crypto-execution entry point.
+ *
+ * @returns {{
+ *   getPublicKey: () => Promise<string|null>,
+ *   signMessage: (m: string) => Promise<string>,
+ *   eciesDecrypt: (c: string) => Promise<string>,
+ *   getNostrIdentity: () => Promise<{ nostrPublicKey: string, npub: string } | null>,
+ *   nostrSignEvent: (template: any) => Promise<any>,
+ *   nostrEncrypt: (plaintext: string, peerPublicKey: string) => Promise<string>,
+ *   nostrDecrypt: (payload: string, peerPublicKey: string) => Promise<string>
+ * }}
  */
 export function createLocalWalletSigner() {
     return {
         getPublicKey: getLocalWalletPublicKey,
         signMessage: eciesSignWithLocalWallet,
-        eciesDecrypt: eciesDecryptWithLocalWallet
+        eciesDecrypt: eciesDecryptWithLocalWallet,
+        getNostrIdentity: getLocalWalletNostrIdentity,
+        nostrSignEvent: nostrSignEventWithLocalWallet,
+        nostrEncrypt: nostrNip44EncryptWithLocalWallet,
+        nostrDecrypt: nostrNip44DecryptWithLocalWallet
     };
 }
 
