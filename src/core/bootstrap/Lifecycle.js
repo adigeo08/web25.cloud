@@ -2,7 +2,13 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import AuthController from '../../auth/AuthController.js';
-import { bindPublishActions, renderDeployStage, setPublishButtonsState } from '../../ui/publish/PublishPanel.js';
+import {
+    bindPublishActions,
+    renderDeployArtifactDetails,
+    renderDeployStage,
+    renderDeploymentStatus,
+    setPublishButtonsState
+} from '../../ui/publish/PublishPanel.js';
 import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
@@ -106,6 +112,9 @@ export function setupRegistry() {
     this.registryPublication = null;
     this.lastRegistryEvent = null;
     this.registryResults = [];
+    /** Registry entry a pending load came from, checked against .torrentchain. */
+    this.pendingRegistryClaim = null;
+    this.lastRegistryClaimComparison = null;
 
     bindRegistryRetry(() => void this.retryRegistryPublish());
 
@@ -115,8 +124,12 @@ export function setupRegistry() {
         },
         onSearch: (query) => void this.searchRegistry(query),
         // Discovery hands the infohash to the one existing loader; there is no
-        // second website loading path.
-        onOpen: (infohash) => this.loadSite(infohash)
+        // second website loading path. The claim travels with it so the loader
+        // can check it against the .torrentchain that actually arrives.
+        onOpen: (infohash) => {
+            this.pendingRegistryClaim = this.registryResults.find((entry) => entry.infohash === infohash) || null;
+            this.loadSite(infohash);
+        }
     });
     showBrowseMode('hash');
 }
@@ -169,11 +182,14 @@ export async function publishRegistryEntry() {
 
     this.registryPublication = null;
     renderRegistryStatus({ state: 'signing', npub });
+    renderDeployStage('Registry · building event', 'Creating the NIP-35 kind 2003 event for this torrent');
+    updateDeployProgress({ label: 'Creating NIP-35 registry event', percent: 25, state: 'running' });
     this.refreshDeployUiState();
 
     try {
         // One signed event per artifact: built once here, reused verbatim by
         // every retry so a resubmission is never a second torrent entry.
+        updateDeployProgress({ label: 'Signing registry event with your Nostr identity', percent: 55, state: 'running' });
         this.lastRegistryEvent = await this.registryService.createSignedRegistryEvent({
             torrent: candidate.torrent,
             chainArtifact: signature,
@@ -185,12 +201,17 @@ export async function publishRegistryEntry() {
         this.registryPublication = { ok: false, error: error.message, accepted: [], rejected: {}, attempted: 0, eventId: null };
         renderRegistryStatus({ state: 'skipped', npub, error: error.message });
         renderRegistryTechnicalDetails({ event: null, publication: this.registryPublication });
+        // The site is deployed and seeding regardless of what happened here.
+        renderDeployStage('Deployment complete', `Live and seeding · registry entry not created: ${error.message}`);
+        updateDeployProgress({ label: 'Live and seeding · registry skipped', percent: 100, state: 'success' });
         this.refreshDeployUiState();
         return;
     }
 
     renderRegistryStatus({ state: 'publishing', npub });
     renderRegistryTechnicalDetails({ event: this.lastRegistryEvent, publication: null });
+    renderDeployStage('Registry · publishing', 'Sending the signed event to DTAN and the other registry relays');
+    updateDeployProgress({ label: 'Publishing to registry relays', percent: 80, state: 'running' });
 
     await this.sendRegistryEvent(npub);
 }
@@ -224,8 +245,15 @@ export async function sendRegistryEvent(npub = null) {
     this.refreshDeployUiState();
 
     if (publication.ok) {
+        renderDeployStage(
+            'Deployment complete',
+            `Live and seeding · listed in WEB25.cloud / Websites on ${publication.accepted.length} relay(s)`
+        );
+        updateDeployProgress({ label: 'Live, seeding and discoverable', percent: 100, state: 'success' });
         this.toast.success(`Listed in the WEB25 registry on ${publication.accepted.length} relay(s).`, 'Registry');
     } else {
+        renderDeployStage('Deployment complete', 'Live and seeding · registry entry not published, retry available');
+        updateDeployProgress({ label: 'Live and seeding · registry not published', percent: 100, state: 'success' });
         this.toast.warning(
             'Your site is live and seeding. The registry entry did not publish — you can retry it.',
             'Registry not published'
@@ -625,6 +653,11 @@ export async function signStagedPayload() {
 
     renderSignatureStatus(signature);
     renderPublishReview(signature.payload);
+    renderDeployArtifactDetails({
+        payload: signature.payload,
+        signature,
+        bundleMode: usingGzipBundle ? 'gzip' : 'files'
+    });
 
     const output = document.getElementById('publish-output');
     if (output) {
@@ -714,6 +747,7 @@ export async function deploySignedArtifact() {
 
     this.lastDeployResult = { hash, url, signedBy: identity.address };
     this.persistDeploySession();
+    renderDeploymentStatus('seeding');
     updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live and seeding from memory');
     this.refreshDeployUiState();

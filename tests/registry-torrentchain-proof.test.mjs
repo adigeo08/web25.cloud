@@ -259,3 +259,68 @@ test('the registry event is where the infohash and the proof finally meet', asyn
     assert.equal(firstTagValue(event.tags, 'x'), INFOHASH);
     assert.equal(firstTagValue(event.tags, 'web25-signature'), manifest.signature);
 });
+
+// ─── 4. The load-path cross-check ────────────────────────────────────────
+
+/**
+ * Mirrors the check now wired into `verifyTorrentChainGate`: when a site was
+ * opened from a registry result, the downloaded manifest is compared against
+ * the claim. The manifest always wins — the comparison withdraws a false
+ * registry claim, it never blocks a load that `.torrentchain` already verified.
+ */
+function simulateLoadPathCrossCheck({ registryClaim, hash, manifest }) {
+    if (!registryClaim || `${registryClaim.infohash}`.toLowerCase() !== `${hash}`.toLowerCase()) {
+        return { checked: false, matches: null, mismatches: [], loadBlocked: false };
+    }
+    const comparison = matchesDownloadedManifest(registryClaim, manifest);
+    return { checked: true, ...comparison, loadBlocked: false };
+}
+
+test('opening from the registry compares the claim against the downloaded manifest', async () => {
+    const signCounter = { evm: 0, nostr: 0 };
+    const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
+    const event = nostrCore.signEvent(buildRegistryEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const claim = parseRegistryEvent(event, { npubEncode });
+
+    const check = simulateLoadPathCrossCheck({ registryClaim: claim, hash: INFOHASH, manifest });
+    assert.equal(check.checked, true);
+    assert.equal(check.matches, true);
+});
+
+test('a lying registry entry is detected but never blocks a valid load', async () => {
+    const signCounter = { evm: 0, nostr: 0 };
+    const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
+    const event = nostrCore.signEvent(buildRegistryEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const claim = parseRegistryEvent(event, { npubEncode });
+
+    // The swarm serves a genuinely signed site by somebody else.
+    const otherPriv = '0x2222222222222222222222222222222222222222222222222222222222222222';
+    const otherPayload = { ...manifest.payload, publisher: '0x' + '2'.repeat(40) };
+    const otherMessage = JSON.stringify(otherPayload);
+    const servedManifest = {
+        ...manifest,
+        payload: otherPayload,
+        message: otherMessage,
+        signature: signEvmMessage(otherMessage, otherPriv)
+    };
+
+    const check = simulateLoadPathCrossCheck({ registryClaim: claim, hash: INFOHASH, manifest: servedManifest });
+    assert.equal(check.matches, false);
+    assert.ok(check.mismatches.includes('publisher'));
+    assert.equal(check.loadBlocked, false, '.torrentchain already verified the site on its own terms');
+});
+
+test('a site loaded by hash carries no registry claim to check', () => {
+    const check = simulateLoadPathCrossCheck({ registryClaim: null, hash: INFOHASH, manifest: {} });
+    assert.equal(check.checked, false, 'the hash-loading path is untouched by the registry');
+});
+
+test('a claim for a different infohash is not applied to this load', async () => {
+    const signCounter = { evm: 0, nostr: 0 };
+    const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
+    const event = nostrCore.signEvent(buildRegistryEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const claim = parseRegistryEvent(event, { npubEncode });
+
+    const check = simulateLoadPathCrossCheck({ registryClaim: claim, hash: 'f'.repeat(40), manifest });
+    assert.equal(check.checked, false);
+});

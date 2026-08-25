@@ -310,6 +310,10 @@
                                 <div class="result-success">
                                     <h4>✅ Website Ready</h4>
                                     <div class="result-info">
+                                        <p>
+                                            <strong>Deployment:</strong>
+                                            <span id="result-deployment-status" class="status-chip status-success">Live / Seeding</span>
+                                        </p>
                                         <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
                                         <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
                                         <p><strong>EVM publisher:</strong> <code id="result-signed-by">Not signed</code></p>
@@ -353,10 +357,10 @@
                                 <span class="step-chip is-current">1. Select files</span>
                                 <span class="step-chip">2. Build in-memory bundle</span>
                                 <span class="step-chip">3. Review payload</span>
-                                <span class="step-chip">4. Sign payload</span>
+                                <span class="step-chip">4. Sign .torrentchain · EVM</span>
                                 <span class="step-chip">5. Deploy signed memory torrent</span>
                                 <span class="step-chip">6. Live and seeding</span>
-                                <span class="step-chip">7. Publish to WEB25 registry</span>
+                                <span class="step-chip">7. Sign &amp; publish registry · Nostr</span>
                             </div>
                             <div class="deploy-stage-box">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
@@ -369,24 +373,32 @@
                             </div>
                             <details id="deploy-tech-details">
                                 <summary>View technical details</summary>
-                                <h4>WEB25 bundle &amp; <code>.torrentchain</code> payload</h4>
-                                <p class="tech-note">Signed once with your EVM identity. This is the WEB25 provenance layer.</p>
+                                <h4>1 · WEB25 bundle</h4>
+                                <p class="tech-note">Deterministic in-memory bundle. In gzip mode the whole site becomes <code>site.bundle.json.gz</code>.</p>
+                                <pre id="deploy-bundle-preview" class="code-block"></pre>
+
+                                <h4>2 · <code>.torrentchain</code> payload</h4>
+                                <p class="tech-note">The signed WEB25 provenance manifest, inserted into the torrent before it is created.</p>
                                 <pre id="publish-payload-preview" class="code-block"></pre>
 
-                                <h4>Torrent artifact &amp; deploy output</h4>
-                                <p class="tech-note">The BitTorrent infohash identifies the distributed artifact.</p>
+                                <h4>3 · EVM signature</h4>
+                                <p class="tech-note">Proves the WEB25 <em>publisher</em>. Produced once per website, when <code>.torrentchain</code> is generated — never again for registry publication.</p>
+                                <pre id="deploy-evm-signature-preview" class="code-block"></pre>
+
+                                <h4>4 · Torrent artifact</h4>
+                                <p class="tech-note">The BitTorrent infohash identifies the distributed artifact. Website content travels over BitTorrent, not over Nostr.</p>
                                 <pre id="publish-output" class="code-block"></pre>
 
-                                <h4>NIP-35 registry event</h4>
+                                <h4>5 · NIP-35 registry event</h4>
                                 <p class="tech-note">
                                     Signed with the Nostr identity derived from the same wallet key. This signature proves
                                     who published the <em>registry entry</em>; the EVM signature above proves who published
-                                    the <em>website</em>.
+                                    the <em>website</em>. Two separate signatures, two separate claims.
                                 </p>
                                 <pre id="registry-event-preview" class="code-block"></pre>
 
-                                <h4>Registry publication results</h4>
-                                <p class="tech-note">Per-relay outcome. Discovery only — never a source of authenticity.</p>
+                                <h4>6 · Per-relay publication results</h4>
+                                <p class="tech-note">DTAN and the other registry relays. Discovery only — never a source of authenticity.</p>
                                 <pre id="registry-publish-output" class="code-block"></pre>
                             </details>
                         </section>

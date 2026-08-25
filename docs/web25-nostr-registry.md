@@ -202,9 +202,13 @@ registry result -> infohash -> WebTorrent download -> read .torrentchain
     -> verify EVM signature -> verify bundle SHA -> render in sandbox
 ```
 
-`matchesDownloadedManifest()` is available to compare a registry entry against
-the manifest that actually arrived; any mismatch marks the registry metadata
-untrusted.
+When a site is opened from a registry result, the claim travels with the
+infohash and `verifyTorrentChainGate()` compares it against the manifest that
+actually arrived (`matchesDownloadedManifest()`). Any disagreement is logged and
+surfaced, and the registry claim is withdrawn — the downloaded manifest always
+wins. The comparison never blocks a load that `.torrentchain` has already
+verified on its own terms, and a site opened by hash carries no claim to check,
+so the hash path is untouched.
 
 ## 9. Security
 
