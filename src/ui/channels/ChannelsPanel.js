@@ -8,6 +8,8 @@
  * WebTorrent bootstrap modules are unchanged and still available to callers.
  */
 
+import { bindCopyButton } from '../ClipboardButton.js';
+
 const DM_STEPS = ['dm-choose-role', 'dm-chat-active'];
 
 /**
@@ -44,51 +46,6 @@ function setDmError(elementId, message) {
         el.textContent = '';
         el.classList.add('hidden');
     }
-}
-
-async function copyToClipboard(text) {
-    try {
-        await navigator.clipboard.writeText(text);
-    } catch (err) {
-        console.warn('Clipboard API failed, falling back to execCommand:', err);
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        // execCommand is deprecated but used here for legacy browser support
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-    }
-}
-
-/**
- * Flash a transient result on a copy button without losing its label.
- * @param {HTMLElement} button
- * @param {string} text
- */
-function bindCopyButton(button, readValue) {
-    if (!button || button.dataset.bound) return;
-    button.dataset.bound = '1';
-    button.addEventListener('click', () => {
-        const value = readValue();
-        if (!value) return;
-        const originalText = button.textContent || '📋 Copy';
-        copyToClipboard(value)
-            .then(() => {
-                button.textContent = '✅ Copied!';
-                setTimeout(() => {
-                    button.textContent = originalText;
-                }, 2000);
-            })
-            .catch(() => {
-                button.textContent = '❌ Failed';
-                setTimeout(() => {
-                    button.textContent = originalText;
-                }, 2000);
-            });
-    });
 }
 
 function shortAddress(address) {

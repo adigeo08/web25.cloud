@@ -283,7 +283,24 @@ export class NostrRelayPool {
         } else {
             pending.rejected.set(entry.url, `${message || 'rejected'}`);
         }
-        if (pending.accepted.size + pending.rejected.size >= this.connectedCount) pending.resolve();
+        this._settlePublishIfComplete(pending);
+    }
+
+    /**
+     * Resolve a publish once every relay that actually received the event has
+     * answered.
+     *
+     * The target is the number of relays the `EVENT` frame was written to, not
+     * the live connected count: a relay can be marked connected while its send
+     * failed, or reconnect mid-publish, and comparing against a moving count
+     * leaves the publish waiting out its whole timeout even though everyone who
+     * got the event has already replied.
+     *
+     * @param {{ resolve: Function, accepted: Set<string>, rejected: Map<string,string>, attempted: number }} pending
+     */
+    _settlePublishIfComplete(pending) {
+        if (!pending.attempted) return;
+        if (pending.accepted.size + pending.rejected.size >= pending.attempted) pending.resolve();
     }
 
     /**
@@ -303,6 +320,8 @@ export class NostrRelayPool {
             resolve: () => {},
             accepted: new Set(),
             rejected: new Map(),
+            /** Relays the EVENT frame actually reached; the completion target. */
+            attempted: 0,
             timer: /** @type {any} */ (null)
         };
         const settled = new Promise((resolve) => {
@@ -319,6 +338,11 @@ export class NostrRelayPool {
             this.pendingPublishes.delete(event.id);
             throw new Error('No Nostr relay is currently reachable.');
         }
+
+        pending.attempted = attempted;
+        // A relay may already have answered during the send loop, so check once
+        // the target is known rather than waiting for another frame.
+        this._settlePublishIfComplete(pending);
 
         pending.timer = setTimeout(() => pending.resolve(), this.config.RELAY_PUBLISH_TIMEOUT_MS);
         await settled;

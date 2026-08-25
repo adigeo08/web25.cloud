@@ -506,10 +506,13 @@ export function refreshDeployUiState() {
     });
 }
 
-/** @returns {'idle'|'publishing'|'published'|'failed'} */
+/** @returns {'idle'|'publishing'|'published'|'failed'|'skipped'} */
 export function registryStateLabel() {
     if (!this.registryPublication) return this.lastRegistryEvent ? 'publishing' : 'idle';
-    return this.registryPublication.ok ? 'published' : 'failed';
+    if (this.registryPublication.ok) return 'published';
+    // No event id means the event was never created — nothing was published and
+    // nothing can be retried, which is a different outcome from a failed send.
+    return this.registryPublication.eventId ? 'failed' : 'skipped';
 }
 
 export function invalidateSignedState(message = 'Signature invalidated') {

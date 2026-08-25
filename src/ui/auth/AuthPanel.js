@@ -3,48 +3,7 @@
 import { passkeySupported } from '../../auth/SecureKeyStore.js';
 import { AUTH_STATUS } from '../../auth/AuthState.js';
 import { renderIdentityBadge } from './IdentityBadge.js';
-
-/**
- * Copy-to-clipboard with a Clipboard-API-free fallback, bound once per button.
- * @param {HTMLElement|null} button
- * @param {() => string} readValue
- */
-function bindCopyButton(button, readValue) {
-    if (!button || button.dataset.bound) return;
-    button.dataset.bound = '1';
-
-    button.addEventListener('click', () => {
-        const value = readValue();
-        if (!value) return;
-
-        const originalText = button.textContent || '📋 Copy';
-        const done = (text) => {
-            button.textContent = text;
-            setTimeout(() => {
-                button.textContent = originalText;
-            }, 2000);
-        };
-
-        navigator.clipboard
-            .writeText(value)
-            .then(() => done('✅ Copied!'))
-            .catch(() => {
-                try {
-                    const textarea = document.createElement('textarea');
-                    textarea.value = value;
-                    textarea.style.position = 'fixed';
-                    textarea.style.opacity = '0';
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(textarea);
-                    done('✅ Copied!');
-                } catch (_) {
-                    done('❌ Failed');
-                }
-            });
-    });
-}
+import { bindCopyButton } from '../ClipboardButton.js';
 
 /**
  * Render the Nostr section of the keys panel.
