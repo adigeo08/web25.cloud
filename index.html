@@ -660,26 +660,54 @@
                         </div>
 
                         <br /><br />
-                        <h3>🛰️ Website registry (NIP-35 / DTAN)</h3>
+                        <h3>🛰️ Publishing to the registry (NIP-35 / DTAN)</h3>
                         <p>
-                            Deployed websites can also be published as public NIP-35 torrent events under the
-                            category <code>WEB25.cloud / Websites</code>, making them discoverable from the
-                            Browse tab. This is a second, separate Nostr use case from the private Direct
-                            Messenger — registry events carry public metadata only.
+                            Once a site bundle is signed, seeded and live, it can also be published as a public
+                            NIP-35 torrent event under the category <code>WEB25.cloud / Websites</code>. This is
+                            a second, separate Nostr use case from the private Direct Messenger — registry
+                            events carry public metadata only.
                         </p>
                         <div class="feature-grid">
                             <div class="feature">🗂️ Category <code>tcat:web25.cloud,websites</code></div>
-                            <div class="feature">🔗 Carries the final BitTorrent infohash and real torrent files</div>
+                            <div class="feature">🔗 Carries the final BitTorrent infohash and the real torrent entries</div>
+                            <div class="feature">📦 In gzip mode that is <code>.torrentchain</code> + <code>site.bundle.json.gz</code></div>
                             <div class="feature">🪪 Mirrors the <code>.torrentchain</code> EVM proof for pre-download checks</div>
                             <div class="feature">✍️ No second EVM signature — only a Nostr signature is added</div>
                             <div class="feature">🌐 Registry relay: <code>wss://relay.dtan.xyz</code> plus generic relays</div>
-                            <div class="feature">🧯 A registry outage never blocks or invalidates a deployment</div>
                         </div>
+                        <p>
+                            Deployment and registry publication are reported separately, because they are
+                            separate outcomes: a site stays <strong>Live / Seeding</strong> even if every registry
+                            relay is unreachable, and <em>Retry Registry Publish</em> resends the identical signed
+                            event rather than creating a second entry. The deploy wizard names which key signs
+                            what — <em>Sign .torrentchain · EVM</em> for the website, then
+                            <em>Sign &amp; publish registry · Nostr</em> for the registry entry.
+                        </p>
+
+                        <br /><br />
+                        <h3>🔎 Searching the registry</h3>
+                        <p>
+                            The Browse tab has a second mode, <strong>Search WEB25 Registry</strong>, next to the
+                            existing load-by-hash flow. It queries <code>kind: 2003</code> events in
+                            <code>tcat:web25.cloud,websites</code> and nothing else.
+                        </p>
+                        <div class="feature-grid">
+                            <div class="feature">🔍 Search by site name, infohash, EVM publisher, or <code>npub</code></div>
+                            <div class="feature">🪪 Each result shows its publisher verification state</div>
+                            <div class="feature">🚀 <strong>Open</strong> reuses the existing WEB25 hash loader</div>
+                            <div class="feature">🧯 Registry availability never affects loading by hash</div>
+                        </div>
+                        <p>
+                            A valid Nostr signature only proves who wrote the registry entry. Showing
+                            <em>Publisher verified</em> requires the separate mirrored EVM proof to check out, so
+                            results appear as verified, invalid, malformed or unverified.
+                        </p>
                         <p>
                             Nostr provides registry, discovery and search. Website content is distributed over
                             BitTorrent, and authenticity still comes from <code>.torrentchain</code> after
-                            download — a registry entry that disagrees with the downloaded manifest is treated
-                            as untrusted.
+                            download. When a site is opened from a registry result, the entry is compared against
+                            the manifest that actually arrives — any disagreement is surfaced and the registry
+                            claim is withdrawn, because the downloaded manifest always wins.
                         </p>
 
                         <br /><br />

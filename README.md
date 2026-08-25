@@ -27,7 +27,9 @@ The UI is organized into:
   - Seed signed output
 - **Browse / Load**
   - Existing torrent hash loading flow remains available
-  - Separate mode to search the public WEB25 website registry over Nostr/DTAN
+  - Separate **Search WEB25 Registry** mode querying Nostr/DTAN for published sites
+  - Search by site name, infohash, EVM publisher address or `npub`
+  - Each result shows its publisher verification state; **Open** reuses the same hash loader
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -280,6 +282,33 @@ Registry          ->  public website discovery (NIP-35 kind 2003)
 - registry publication never blocks or invalidates a deployment, and a retry
   resubmits the identical signed event (same id, `created_at` and signature)
 
+**Publishing** (Deploy tab). The registry step runs after the site is already
+live and seeding, and the two outcomes are reported separately — `Deployment:
+Live / Seeding` next to `Registry: Published to 3 / 4 relays`, or
+`Registry: Not published · Retry`. The deploy wizard names which key signs what
+(`Sign .torrentchain · EVM`, then `Sign & publish registry · Nostr`), and
+*View technical details* breaks the artifact into six sections: WEB25 bundle,
+`.torrentchain` payload, EVM signature, torrent artifact, NIP-35 registry event,
+and per-relay publication results.
+
+**Discovery** (Browse tab). *Search WEB25 Registry* queries `kind: 2003` events
+carrying `tcat:web25.cloud,websites` and nothing else. You can search the
+results by site name, infohash, EVM publisher address, or `npub` / Nostr
+pubkey. Each row shows the site name, EVM publisher, Nostr identity, publish
+date, infohash and a verification state:
+
+| State | Meaning |
+| --- | --- |
+| `verified` | the mirrored EVM signature recovers to the claimed publisher |
+| `invalid` | the metadata is well-formed but the signature does not hold |
+| `malformed` | the WEB25 metadata is broken or self-inconsistent |
+| `unverified` | there is no WEB25 proof to check |
+
+A valid Nostr signature alone never means `verified` — that only says who wrote
+the registry entry. **Open** hands the infohash to the existing loader, so there
+is one website loading implementation and the `.torrentchain` render gate is
+unchanged. Registry availability never affects loading by hash.
+
 Trust model:
 
 ```text
@@ -292,7 +321,10 @@ Nostr signature     -> proves who published the registry entry
 
 Registry metadata is an early signal only. The final load path is unchanged:
 download, read `.torrentchain`, verify the EVM signature and bundle hash, then
-render in the sandbox. See `docs/web25-nostr-registry.md`.
+render in the sandbox. When a site is opened from a registry result, the claim is
+additionally compared against the manifest that actually arrived; any
+disagreement is surfaced and the registry claim is withdrawn, because the
+downloaded manifest always wins. See `docs/web25-nostr-registry.md`.
 
 ---
 
