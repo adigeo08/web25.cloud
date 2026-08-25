@@ -26,6 +26,9 @@ export function createAuthState() {
         // The same key's Nostr view: x-only public key and its NIP-19 `npub`.
         // There is no `nsec` here, or anywhere else.
         nostrPublicKey: null,
-        npub: null
+        npub: null,
+        // Whether this identity is reachable over Nostr. The key always exists
+        // — this is the user's Add/Delete choice on the Identity page.
+        nostrEnabled: true
     };
 }

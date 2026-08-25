@@ -139,10 +139,20 @@
                                 <div class="identity-key-block">
                                     <p class="identity-key-label">EVM Address</p>
 
-                                    <p
-                                            id="identity-full-address"
-                                            class="identity-key-value"
-                                    ></p>
+                                    <div class="identity-pubkey-row">
+                                        <p
+                                                id="identity-full-address"
+                                                class="identity-key-value"
+                                        ></p>
+
+                                        <button
+                                                id="copy-address-btn"
+                                                class="btn btn-secondary btn-sm"
+                                                title="Copy EVM address"
+                                        >
+                                            📋 Copy
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div class="identity-key-block">
@@ -157,16 +167,75 @@
                                         <button
                                                 id="copy-pubkey-btn"
                                                 class="btn btn-secondary btn-sm"
-                                                title="Copy public key"
+                                                title="Copy ECIES public key"
                                         >
                                             📋 Copy
                                         </button>
                                     </div>
                                 </div>
 
+                                <div id="identity-nostr-block" class="identity-key-block">
+                                    <p class="identity-key-label">Nostr Address</p>
+
+                                    <div id="identity-nostr-present">
+                                        <div class="identity-pubkey-row">
+                                            <p
+                                                    id="identity-full-npub"
+                                                    class="identity-key-value"
+                                            ></p>
+
+                                            <button
+                                                    id="copy-npub-btn"
+                                                    class="btn btn-secondary btn-sm"
+                                                    title="Copy Nostr address"
+                                            >
+                                                📋 Copy
+                                            </button>
+                                        </div>
+
+                                        <p class="identity-key-label" style="margin-top: 0.6rem">Nostr Public Key</p>
+
+                                        <div class="identity-pubkey-row">
+                                            <p
+                                                    id="identity-full-nostr-pubkey"
+                                                    class="identity-key-value"
+                                            ></p>
+
+                                            <button
+                                                    id="copy-nostr-pubkey-btn"
+                                                    class="btn btn-secondary btn-sm"
+                                                    title="Copy Nostr public key"
+                                            >
+                                                📋 Copy
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <p id="identity-nostr-absent" class="identity-pubkey-hint hidden">
+                                        This identity is not reachable over Nostr. Add it to receive
+                                        encrypted Direct Messages at your <code>npub</code>.
+                                    </p>
+
+                                    <div class="button-group identity-key-actions">
+                                        <button
+                                                id="add-nostr-identity-btn"
+                                                class="btn btn-secondary btn-sm hidden"
+                                        >
+                                            ➕ Add Nostr Identity
+                                        </button>
+
+                                        <button
+                                                id="delete-nostr-identity-btn"
+                                                class="btn btn-clear btn-sm hidden"
+                                        >
+                                            🗑️ Delete Nostr Identity
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <p class="identity-pubkey-hint">
-                                    Safe to share for encrypted Direct Message invites.
-                                    Never share your private key.
+                                    All three identities come from one local key. They are safe to
+                                    share so others can reach you. Never share your seed phrase.
                                 </p>
                             </div>
                         </div>
@@ -327,134 +396,66 @@
                 <div id="tab-channels" class="tab-panel" role="tabpanel" style="display: none">
                     <section class="quick-upload card-base">
 
-                        <!-- SUB-PANEL 1: Choose Role -->
+                        <!-- SUB-PANEL 1: Find someone to message -->
                         <div id="dm-choose-role">
-                            <h3>💬 P2P Direct Messenger</h3>
-                            <p style="text-align:center; margin-bottom: 0.25rem">WebRTC direct flow, addressed by Nostr <code>npub</code></p>
-                            <p style="text-align:center; margin-bottom: 1.25rem"><strong>STUN:</strong> <code>stun:stun.l.google.com:19302</code></p>
-                            <p style="text-align:center; margin-bottom: 1.25rem">
-                                Invitations travel as NIP-59 gift wraps through public Nostr relays — the SDP, ICE data, EVM address and
-                                ECIES key are never publicly readable. WebRTC stays the preferred transport; if it cannot be established,
-                                messages fall back to the relays, still signed and ECIES-encrypted end to end.
+                            <h3>💬 Direct Messenger</h3>
+                            <p class="dm-lede">
+                                Enter someone's Nostr address to start an encrypted chat.
+                                Messages go peer-to-peer over WebRTC, and fall back to Nostr relays
+                                if a direct connection can't be made.
                             </p>
+
                             <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
-                                <p class="dm-own-pubkey-label">🪐 Your Nostr address <span class="dm-own-pubkey-hint">(share this so others can message you)</span></p>
+                                <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
                                 <div class="identity-pubkey-row">
                                     <code id="dm-own-npub-value" class="dm-own-pubkey-value"></code>
                                     <button id="dm-copy-own-npub-btn" class="btn btn-secondary btn-sm" title="Copy my Nostr address" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
                                 </div>
+                                <p class="dm-own-pubkey-hint">Share this so others can message you.</p>
                             </div>
+
                             <div id="dm-my-npub-locked" class="dm-own-pubkey-panel hidden">
                                 <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
-                                <p class="dm-own-pubkey-hint">Authenticate and unlock your wallet to view your Nostr address.</p>
+                                <p class="dm-own-pubkey-hint">Unlock your wallet to see your Nostr address.</p>
                             </div>
-                            <div id="dm-my-pubkey-panel" class="dm-own-pubkey-panel hidden">
-                                <p class="dm-own-pubkey-label">🔑 Your ECIES Public Key <span class="dm-own-pubkey-hint">(share this so others can send you encrypted invites)</span></p>
-                                <div class="identity-pubkey-row">
-                                    <code id="dm-own-pubkey-value" class="dm-own-pubkey-value"></code>
-                                    <button id="dm-copy-own-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy my public key" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
-                                </div>
+
+                            <div id="dm-nostr-disabled" class="dm-own-pubkey-panel hidden">
+                                <p class="dm-own-pubkey-label">🪐 Nostr identity removed</p>
+                                <p class="dm-own-pubkey-hint">
+                                    Add your Nostr identity on the Identity page to send and receive
+                                    Direct Messages.
+                                </p>
                             </div>
-                            <div id="dm-my-pubkey-locked" class="dm-own-pubkey-panel hidden">
-                                <p class="dm-own-pubkey-label">🔑 Your ECIES Public Key</p>
-                                <p class="dm-own-pubkey-hint">Authenticate and unlock your wallet to view your public key.</p>
-                            </div>
-                            <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
-                            <div class="dm-role-cards">
-                                <div class="dm-role-card">
-                                    <p class="dm-card-title">Start a chat</p>
-                                    <p class="dm-instruction">Enter the recipient's Nostr address. The encrypted WebRTC invitation is delivered through the relay pool.</p>
+
+                            <div class="dm-search">
+                                <label class="dm-search-label" for="dm-recipient-npub-input">Recipient Nostr address</label>
+                                <div class="hash-input-group">
                                     <input
                                         id="dm-recipient-npub-input"
                                         type="text"
                                         class="hash-input"
-                                        placeholder="Recipient Nostr address (npub)"
-                                        style="margin-top: 0.5rem"
+                                        placeholder="npub1…"
+                                        autocomplete="off"
+                                        spellcheck="false"
                                     />
-                                    <button id="channels-nostr-invite-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Send Encrypted Invitation</button>
+                                    <button id="dm-nostr-search-btn" class="btn btn-secondary">🔍 Search</button>
                                 </div>
-                            </div>
-                            <details class="dm-advanced" style="margin-top: 1rem">
-                                <summary>Advanced · magnet &amp; manual invite (WebTorrent)</summary>
-                            <div class="dm-role-cards">
-                                <div class="dm-role-card">
-                                    <p class="dm-card-title">Generate room magnet as host</p>
-                                    <p class="dm-instruction">Enter the recipient's ECIES public key (<code>04…</code> hex), then generate an encrypted invite magnet.</p>
-                                    <input
-                                        id="dm-recipient-pubkey-input"
-                                        type="text"
-                                        class="hash-input"
-                                        placeholder="Recipient public key: 04..."
-                                        style="margin-top: 0.5rem"
-                                    />
-                                    <button id="channels-create-offer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Generate Encrypted Invite Magnet</button>
-                                </div>
-                                <div class="dm-or-separator">or</div>
-                                <div class="dm-role-card">
-                                    <p class="dm-card-title">Join a room and send your magnet</p>
+                                <p id="dm-search-hint" class="dm-search-hint">Paste an npub, or a raw 64-character hex key.</p>
 
-                                    <p class="dm-instruction">Paste the host invite magnet (encrypted for you), then generate your encrypted response magnet.</p>
-                                    <textarea
-                                        id="channels-remote-offer-input"
-                                        class="hash-input"
-                                        rows="4"
-                                        placeholder="Paste host invite magnet here..."
-                                    ></textarea>
-                                    <button id="channels-create-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Join Room &amp; Generate My Magnet</button>
+                                <div id="dm-search-result" class="dm-search-result hidden">
+                                    <div class="dm-search-result-main">
+                                        <p id="dm-search-result-name" class="dm-search-result-name"></p>
+                                        <p id="dm-search-result-npub" class="dm-search-result-npub"></p>
+                                        <p id="dm-search-result-about" class="dm-search-result-about"></p>
+                                    </div>
+                                    <button id="channels-nostr-invite-btn" class="btn btn-primary">Start chat</button>
                                 </div>
+
+                                <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
                             </div>
-                            </details>
                         </div>
 
-                        <!-- SUB-PANEL 2: Host Signaling -->
-                        <div id="dm-host-signaling" class="hidden">
-                            <h3 style="text-align:center; margin-bottom: 1.5rem">Starting a new chat</h3>
-                            <div class="dm-step-card">
-                                <div class="dm-step-indicator">1</div>
-                                <p class="dm-instruction">Send this room magnet to your peer:</p>
-                                <textarea
-                                    id="channels-local-offer-output"
-                                    class="hash-input"
-                                    rows="5"
-                                    readonly
-                                    placeholder="Offer magnet appears here..."
-                                ></textarea>
-                                <button id="dm-copy-offer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
-                            </div>
-                            <div class="dm-step-card" style="margin-top: 1rem">
-                                <div class="dm-step-indicator">2</div>
-                                <p class="dm-instruction">Paste the peer magnet from your peer:</p>
-                                <textarea
-                                    id="channels-remote-answer-input"
-                                    class="hash-input"
-                                    rows="5"
-                                    placeholder="magnet:?xt=urn:btih:..."
-                                ></textarea>
-                                <p id="dm-apply-answer-error" class="dm-error-message hidden"></p>
-                                <button id="channels-apply-answer-btn" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem">Import Peer Magnet</button>
-                            </div>
-                            <button id="dm-host-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
-                        </div>
-
-                        <!-- SUB-PANEL 3: Guest Waiting -->
-                        <div id="dm-guest-waiting" class="hidden">
-                            <h3 style="text-align:center; margin-bottom: 1.5rem">Joining a chat</h3>
-                            <div class="dm-step-card">
-                                <p class="dm-instruction">Send this magnet back to the host.</p>
-                                <textarea
-                                    id="channels-local-answer-output"
-                                    class="hash-input"
-                                    rows="5"
-                                    readonly
-                                    placeholder="Answer magnet appears here..."
-                                ></textarea>
-                                <button id="dm-copy-answer-btn" class="btn btn-secondary" style="margin-top: 0.5rem">Copy to clipboard</button>
-                                <p style="margin-top: 0.75rem; opacity: 0.75">⏳ Waiting for connection...</p>
-                            </div>
-                            <button id="dm-guest-back-btn" class="btn btn-secondary" style="margin-top: 1rem">← Back</button>
-                        </div>
-
-                        <!-- SUB-PANEL 4: Chat Active -->
+                        <!-- SUB-PANEL 2: Chat Active -->
                         <div id="dm-chat-active" class="hidden">
                             <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem">
                                 <p id="channels-status" class="status-chip status-pending" style="margin: 0">Disconnected</p>
@@ -469,7 +470,7 @@
                                     class="hash-input"
                                 />
                                 <input type="file" id="channels-file-input" style="display: none" />
-                                <button id="channels-attach-btn" class="btn btn-secondary" title="Attach file">📎</button>
+                                <button id="channels-attach-btn" class="btn btn-secondary" title="Attach file (peer-to-peer only)">📎</button>
                                 <button id="channels-send-btn" class="btn btn-primary">Send</button>
                             </div>
                             <div id="channels-files" style="margin-top: 0.5rem"></div>
@@ -507,24 +508,36 @@
                         <p>
                             WEB25.cloud is a
                             <a href="https://github.com/Omodaka9375/peerweb" target="_blank" rel="noopener noreferrer">PeerWeb fork</a>
-                            focused on local EVM identity, signed static-site deploys, and direct peer-to-peer messaging.
-                            Core flows are browser-native and do not require a mandatory MetaMask connection.
+                            focused on local EVM identity, signed static-site deploys, and direct peer-to-peer messaging
+                            addressed by Nostr. Core flows are browser-native: no backend, no signalling server and no
+                            mandatory MetaMask connection. The browser talks directly to STUN, WebTorrent and public
+                            Nostr relays.
                         </p>
                     </section>
 
                     <section class="features about-bento">
-                        <h3>🪪 Identity: Local EVM wallet + WebAuthn passkeys</h3>
+                        <h3>🪪 Identity: one local key, three addresses</h3>
                         <p>
                             The identity model is local-first and is inspired by
                             <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
-                            EVM key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+                            key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+                            A single secp256k1 key backs all three identities shown on the Identity page —
+                            there is no second seed and no second private key.
                         </p>
                         <div class="feature-grid">
+                            <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
+                            <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
+                            <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
                             <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
                             <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
-                            <div class="feature">⚙️ viem-based EVM address derivation and signing flow</div>
                             <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
                         </div>
+                        <p>
+                            The Identity page shows all three side by side, each with its own copy button.
+                            The Nostr address can be added or removed there: removing it takes you off the
+                            relays and hides the address, and adding it back restores the same
+                            <code>npub</code> — because it was never a separate key to begin with.
+                        </p>
 
                         <br /><br />
                         <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
@@ -540,18 +553,43 @@
                         </div>
 
                         <br /><br />
-                        <h3>💬 Direct Messenger (p2p-chat inspired, identity-bound)</h3>
+                        <h3>💬 Direct Messenger: search an address, start a chat</h3>
                         <p>
-                            Messaging UX is inspired by
+                            Messaging UX started from
                             <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                            (manual offer/answer), then extended with EVM identity verification, recipient-encrypted bootstrap, and asymmetric crypto.
+                            and replaced its manual offer/answer step entirely. You enter someone's Nostr
+                            address, and the encrypted WebRTC invitation is delivered for you through public
+                            Nostr relays — no magnet links or key pasting.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🔏 Recipient-encrypted magnet bootstrap (ECIES)</div>
+                            <div class="feature">🔍 Search by <code>npub</code>, then start the chat</div>
+                            <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
+                            <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
                             <div class="feature">🪪 Peer verification from public key to EVM address</div>
-                            <div class="feature">🔐 Asymmetric encryption for invites/messages</div>
                             <div class="feature">✍️ Per-message signatures verified on receive</div>
                             <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                        </div>
+                        <p>
+                            WebRTC stays the preferred transport. If a direct connection cannot be
+                            established, messages fall back to the relays — still signed and ECIES-encrypted
+                            exactly as before, with NIP-44 on top. The chat header says which path is in use:
+                            <strong>P2P · WebRTC</strong> or <strong>Relay fallback · Nostr</strong>.
+                        </p>
+
+                        <br /><br />
+                        <h3>🛰️ Nostr relays: browser to relay, directly</h3>
+                        <p>
+                            The app talks straight to a pool of public relays over WebSockets. There is no
+                            Web25 relay, no proxy and no signalling server — the relay list is configurable
+                            and no single relay is required.
+                        </p>
+                        <div class="feature-grid">
+                            <div class="feature">🌐 <code>wss://relay.damus.io</code></div>
+                            <div class="feature">🌐 <code>wss://nos.lol</code></div>
+                            <div class="feature">🌐 <code>wss://relay.nostr.band</code></div>
+                            <div class="feature">🌐 <code>wss://relay.snort.social</code></div>
+                            <div class="feature">🧯 Unreachable relays are tolerated automatically</div>
+                            <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
                         </div>
 
                         <br /><br />
@@ -575,7 +613,10 @@
                             <div class="req">✅ Signed static-site deploys with publisher identity in .torrentchain</div>
                             <div class="req">✅ Load-time verification path for identity + bundle integrity</div>
                             <div class="req">✅ Local EVM identity protected by WebAuthn passkeys</div>
+                            <div class="req">✅ One key, three identities: EVM, ECIES and Nostr</div>
                             <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
+                            <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
+                            <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
                             <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
                         </div>
                     </section>

@@ -4,6 +4,78 @@ import { passkeySupported } from '../../auth/SecureKeyStore.js';
 import { AUTH_STATUS } from '../../auth/AuthState.js';
 import { renderIdentityBadge } from './IdentityBadge.js';
 
+/**
+ * Copy-to-clipboard with a Clipboard-API-free fallback, bound once per button.
+ * @param {HTMLElement|null} button
+ * @param {() => string} readValue
+ */
+function bindCopyButton(button, readValue) {
+    if (!button || button.dataset.bound) return;
+    button.dataset.bound = '1';
+
+    button.addEventListener('click', () => {
+        const value = readValue();
+        if (!value) return;
+
+        const originalText = button.textContent || '📋 Copy';
+        const done = (text) => {
+            button.textContent = text;
+            setTimeout(() => {
+                button.textContent = originalText;
+            }, 2000);
+        };
+
+        navigator.clipboard
+            .writeText(value)
+            .then(() => done('✅ Copied!'))
+            .catch(() => {
+                try {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = value;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    done('✅ Copied!');
+                } catch (_) {
+                    done('❌ Failed');
+                }
+            });
+    });
+}
+
+/**
+ * Render the Nostr section of the keys panel.
+ *
+ * The Nostr identity is a view of the same wallet key, so "add" and "delete"
+ * control reachability — whether this identity is derived, shown and subscribed
+ * on the relays — not the existence of a key.
+ *
+ * @param {{ npub: string|null, nostrPublicKey: string|null, nostrEnabled: boolean, unlocked: boolean }} params
+ */
+function renderNostrIdentitySection({ npub, nostrPublicKey, nostrEnabled, unlocked }) {
+    const present = document.getElementById('identity-nostr-present');
+    const absent = document.getElementById('identity-nostr-absent');
+    const npubValue = document.getElementById('identity-full-npub');
+    const pubkeyValue = document.getElementById('identity-full-nostr-pubkey');
+    const addBtn = document.getElementById('add-nostr-identity-btn');
+    const deleteBtn = document.getElementById('delete-nostr-identity-btn');
+
+    const hasIdentity = Boolean(unlocked && nostrEnabled && npub);
+
+    if (present) present.classList.toggle('hidden', !hasIdentity);
+    if (absent) absent.classList.toggle('hidden', hasIdentity || !unlocked);
+    if (npubValue) npubValue.textContent = hasIdentity ? `${npub}` : '';
+    if (pubkeyValue) pubkeyValue.textContent = hasIdentity ? `${nostrPublicKey || ''}` : '';
+
+    // Only the applicable action is offered, so the section never shows a
+    // button that would be a no-op.
+    if (addBtn) addBtn.classList.toggle('hidden', !unlocked || nostrEnabled);
+    if (deleteBtn) deleteBtn.classList.toggle('hidden', !unlocked || !nostrEnabled);
+}
+
 export function renderAuthPanel(state) {
     renderIdentityBadge(state);
 
@@ -12,14 +84,12 @@ export function renderAuthPanel(state) {
         status.textContent = `Status: ${state.status}`;
     }
 
-    // Full address + ECIES public key panel (only when unlocked)
     const keysPanel = document.getElementById('identity-keys-panel');
     const fullAddress = document.getElementById('identity-full-address');
     const fullPubkey = document.getElementById('identity-full-pubkey');
-    const copyPubkeyBtn = document.getElementById('copy-pubkey-btn');
 
     // The private key lives in the signing worker; the panel only ever sees the
-    // public key that AuthController pulled from it.
+    // public material AuthController pulled from it.
     const publicKey = state.publicKey || null;
     const isUnlocked = Boolean(state.localWalletUnlocked && state.address && publicKey);
 
@@ -28,77 +98,30 @@ export function renderAuthPanel(state) {
     }
 
     if (isUnlocked && state.address) {
-        const derivedPubKey = publicKey;
-
-        if (fullAddress) {
-            fullAddress.textContent = state.address;
-        }
-
-        if (fullPubkey) {
-            fullPubkey.textContent = derivedPubKey;
-        }
-
-        if (copyPubkeyBtn && !copyPubkeyBtn.dataset.bound) {
-            copyPubkeyBtn.dataset.bound = '1';
-
-            copyPubkeyBtn.addEventListener('click', () => {
-                const key = fullPubkey?.textContent || '';
-
-                if (!key) {
-                    return;
-                }
-
-                const originalText = copyPubkeyBtn.textContent || '📋 Copy';
-
-                navigator.clipboard
-                    .writeText(key)
-                    .then(() => {
-                        copyPubkeyBtn.textContent = '✅ Copied!';
-
-                        setTimeout(() => {
-                            copyPubkeyBtn.textContent = originalText;
-                        }, 2000);
-                    })
-                    .catch(() => {
-                        // Fallback for browsers without Clipboard API
-                        try {
-                            const textarea = document.createElement('textarea');
-
-                            textarea.value = key;
-                            textarea.style.position = 'fixed';
-                            textarea.style.opacity = '0';
-
-                            document.body.appendChild(textarea);
-
-                            textarea.select();
-                            document.execCommand('copy');
-
-                            document.body.removeChild(textarea);
-
-                            copyPubkeyBtn.textContent = '✅ Copied!';
-
-                            setTimeout(() => {
-                                copyPubkeyBtn.textContent = originalText;
-                            }, 2000);
-                        } catch (_) {
-                            copyPubkeyBtn.textContent = '❌ Failed';
-
-                            setTimeout(() => {
-                                copyPubkeyBtn.textContent = originalText;
-                            }, 2000);
-                        }
-                    });
-            });
-        }
+        if (fullAddress) fullAddress.textContent = state.address;
+        if (fullPubkey) fullPubkey.textContent = publicKey;
     } else {
-        if (fullAddress) {
-            fullAddress.textContent = '';
-        }
-
-        if (fullPubkey) {
-            fullPubkey.textContent = '';
-        }
+        if (fullAddress) fullAddress.textContent = '';
+        if (fullPubkey) fullPubkey.textContent = '';
     }
+
+    renderNostrIdentitySection({
+        npub: state.npub || null,
+        nostrPublicKey: state.nostrPublicKey || null,
+        nostrEnabled: state.nostrEnabled !== false,
+        unlocked: isUnlocked
+    });
+
+    bindCopyButton(document.getElementById('copy-address-btn'), () => fullAddress?.textContent || '');
+    bindCopyButton(document.getElementById('copy-pubkey-btn'), () => fullPubkey?.textContent || '');
+    bindCopyButton(
+        document.getElementById('copy-npub-btn'),
+        () => document.getElementById('identity-full-npub')?.textContent || ''
+    );
+    bindCopyButton(
+        document.getElementById('copy-nostr-pubkey-btn'),
+        () => document.getElementById('identity-full-nostr-pubkey')?.textContent || ''
+    );
 
     const passKeyBadge = document.getElementById('passkey-protection-badge');
     if (passKeyBadge) {

@@ -87,8 +87,16 @@ A relay is never treated as an authority for anything.
 
 ## 4. Direct Messenger flow
 
+The panel has exactly two states: find someone, and talk to them. The manual
+magnet exchange and the raw ECIES key display were removed from this panel in
+favour of the address search.
+
 ```text
-A enters B's npub
+A types B's npub into the search box
+      ↓
+address resolved locally; the pool is asked for a kind-0 profile (optional)
+      ↓
+A clicks "Start chat"
       ↓
 NIP-59 gift wrap (kind 1059) published to the relay pool
       ↓  rumor: Web25 invitation envelope with the WebRTC offer
@@ -103,6 +111,25 @@ both sides attempt the direct WebRTC connection
       ↓                            ↓
  P2P · WebRTC              Relay fallback · Nostr
 ```
+
+### The address search
+
+`normalizeNostrPublicKey()` resolves the typed value — an `npub1…` or a raw
+64-character hex key — entirely locally; a malformed address is rejected before
+anything touches the network. The profile lookup on top of it
+(`NostrProfileLookup.js`) asks the pool for the most recent kind-0 event by that
+author and shows a display name, so the user can confirm they have the right
+person before starting a chat.
+
+The lookup is a convenience, never a gate: no profile found still means a
+perfectly messageable address. Everything it returns is attacker-controlled text
+from a public relay, so each field is type-checked, stripped of control and bidi
+characters, length-capped, and written to the DOM with `textContent`. The
+profile `picture` is deliberately not returned — rendering a remote image would
+make the browser fetch an arbitrary third-party host.
+
+The one privacy cost is inherent to the protocol: the relays you are connected
+to learn which pubkey you looked up.
 
 WebRTC remains the preferred transport. The fallback is armed only when:
 
@@ -176,12 +203,38 @@ fanned out by several relays — is rendered exactly once.
 
 NIP-04 is not implemented and is not accepted.
 
-## 7. What did not change
+## 7. Identity management
 
-- The WebTorrent + `.torrentchain` magnet flow still works and is still reachable
-  from the UI, under "Advanced · magnet & manual invite".
+The Identity page shows all three addresses of the one wallet key side by side —
+EVM address, ECIES public key, Nostr address and Nostr public key — each with its
+own copy button. Wallet-wide controls (Lock, Delete Wallet, Add Passkey) stay
+grouped with the wallet status; the Nostr section carries only its own actions.
+
+**Add / Delete Nostr Identity** controls *reachability*, not a key. Because the
+Nostr address is the x coordinate of the wallet key, there is nothing separate to
+create or destroy:
+
+- **Delete** stops the gift-wrapped inbox subscription, leaves any active
+  conversation, hides the address, and disables the Direct Messenger search.
+- **Add** derives it again and resubscribes. The `npub` is always the same one.
+
+The choice is persisted per wallet address in `localStorage` as the single string
+`on` or `off` (`NostrIdentityPreference.js`). No key material is stored — that
+rule is unchanged — and blocked storage falls back to the default rather than
+throwing. Deleting the wallet clears its preference too.
+
+What this cannot do is make an already-published `npub` unknowable. Anyone who
+recorded it still has it, and re-adding the identity produces the same address.
+It removes you from the relays; it does not rotate your identity.
+
+## 8. What did not change
+
 - STUN and the WebRTC DataChannel are unchanged.
 - The WebAuthn PRF vault, the worker isolation model and the 30-minute
   auto-lock are unchanged.
 - File transfer stays on the DataChannel; chunked transfers are deliberately not
   offered over public relays.
+- `DirectMessageTorrentBootstrap.js` — the WebTorrent + `.torrentchain` DM
+  bootstrap — is unchanged and still fully tested. Only its UI in the Direct
+  Messenger panel was removed; the module can be re-surfaced without touching the
+  protocol.

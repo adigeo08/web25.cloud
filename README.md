@@ -28,9 +28,9 @@ The UI is organized into:
 - **Browse / Load**
   - Existing torrent hash loading flow remains available
 - **Direct Messenger (WebRTC data channels + Nostr)**
-  - Address a peer by Nostr `npub`; encrypted invitations travel as NIP-59 gift wraps
-  - Manual host/guest magnet signaling still available under "Advanced"
-  - Peer count, transport state and session updates
+  - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
+  - Encrypted invitations travel as NIP-59 gift wraps through public relays
+  - Transport state shown plainly: `P2P · WebRTC` or `Relay fallback · Nostr`
   - Identity-bound encrypted/signed message exchange
   - Nostr relay fallback when WebRTC cannot be established
 
@@ -229,7 +229,18 @@ local wallet private key (dedicated worker only)
    └─ Nostr identity   npub1…
 ```
 
-- conversations start from a recipient `npub` (a raw hex key is accepted too)
+The Identity page shows all three side by side, each with its own copy button.
+The Nostr section carries its own **Add / Delete Nostr Identity** action, while
+Lock / Delete Wallet / Add Passkey stay grouped with the wallet status.
+
+Add and Delete control *reachability*, not a key: deleting unsubscribes the
+gift-wrapped inbox and hides the address, adding it back derives the same
+`npub`. Only the string `on`/`off` is persisted per wallet in `localStorage` —
+no key material. It cannot make an already-shared `npub` unknowable.
+
+- conversations start by searching a recipient `npub` (a raw hex key works too);
+  the pool is asked for a public kind-0 profile so the user can confirm the peer
+  before starting, but a missing profile never blocks messaging
 - the encrypted WebRTC offer/answer travel as NIP-59 gift wraps through a
   configurable pool of public relays, straight from the browser
 - SDP, ICE data, EVM address and ECIES key are never publicly readable
@@ -287,6 +298,8 @@ src/
 │   ├── NostrDirectMessageSession.js
 │   └── ecies.js
 ├── nostr/
+│   ├── NostrIdentityPreference.js
+│   ├── NostrProfileLookup.js
 │   ├── NostrRelayPool.js
 │   ├── bech32.js
 │   ├── nip19.js

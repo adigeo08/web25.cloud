@@ -1,6 +1,26 @@
 // @ts-check
+/**
+ * Direct Messenger panel.
+ *
+ * The panel has two states: find someone to message, and the conversation
+ * itself. Addressing is by Nostr address only — the manual magnet exchange and
+ * the raw ECIES key display were removed in favour of the search flow. The
+ * WebTorrent bootstrap modules are unchanged and still available to callers.
+ */
 
-const DM_STEPS = ['dm-choose-role', 'dm-host-signaling', 'dm-guest-waiting', 'dm-chat-active'];
+const DM_STEPS = ['dm-choose-role', 'dm-chat-active'];
+
+/**
+ * Transport labels shown in the chat header. Deliberately plain: the user only
+ * needs to know whether the conversation is peer-to-peer or going through a
+ * public relay.
+ */
+export const DM_TRANSPORT_LABELS = {
+    connecting: { text: 'Connecting…', className: 'status-chip status-pending' },
+    webrtc: { text: 'P2P · WebRTC', className: 'status-chip status-success' },
+    nostr: { text: 'Relay fallback · Nostr', className: 'status-chip status-pending' },
+    disconnected: { text: 'Disconnected', className: 'status-chip status-pending' }
+};
 
 export function showDmStep(step) {
     DM_STEPS.forEach((id) => {
@@ -43,6 +63,34 @@ async function copyToClipboard(text) {
     }
 }
 
+/**
+ * Flash a transient result on a copy button without losing its label.
+ * @param {HTMLElement} button
+ * @param {string} text
+ */
+function bindCopyButton(button, readValue) {
+    if (!button || button.dataset.bound) return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', () => {
+        const value = readValue();
+        if (!value) return;
+        const originalText = button.textContent || '📋 Copy';
+        copyToClipboard(value)
+            .then(() => {
+                button.textContent = '✅ Copied!';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                }, 2000);
+            })
+            .catch(() => {
+                button.textContent = '❌ Failed';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                }, 2000);
+            });
+    });
+}
+
 function shortAddress(address) {
     if (!address) return 'anonymous';
     if (address.length < 14) return address;
@@ -50,110 +98,77 @@ function shortAddress(address) {
 }
 
 /**
- * Transport labels shown in the chat header. Deliberately plain: the user only
- * needs to know whether the conversation is peer-to-peer or going through a
- * public relay.
+ * @param {{
+ *   onSearch: (query: string) => Promise<any>,
+ *   onStartChat: (result: any) => Promise<boolean>,
+ *   onLeave: () => void,
+ *   onSend: (text: string) => void
+ * }} handlers
  */
-export const DM_TRANSPORT_LABELS = {
-    connecting: { text: 'Connecting…', className: 'status-chip status-pending' },
-    webrtc: { text: 'P2P · WebRTC', className: 'status-chip status-success' },
-    nostr: { text: 'Relay fallback · Nostr', className: 'status-chip status-pending' },
-    disconnected: { text: 'Disconnected', className: 'status-chip status-pending' }
-};
-
-export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer, onLeave, onSend, onNostrInvite = null }) {
-    const createOfferBtn = document.getElementById('channels-create-offer-btn');
-    const createAnswerBtn = document.getElementById('channels-create-answer-btn');
-    const applyAnswerBtn = document.getElementById('channels-apply-answer-btn');
+export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend }) {
+    const searchBtn = document.getElementById('dm-nostr-search-btn');
+    const startChatBtn = document.getElementById('channels-nostr-invite-btn');
     const leaveBtn = document.getElementById('channels-leave-btn');
     const sendBtn = document.getElementById('channels-send-btn');
-    const hostBackBtn = document.getElementById('dm-host-back-btn');
-    const guestBackBtn = document.getElementById('dm-guest-back-btn');
-    const copyOfferBtn = document.getElementById('dm-copy-offer-btn');
-    const copyAnswerBtn = document.getElementById('dm-copy-answer-btn');
-    const copyOwnPubkeyBtn = document.getElementById('dm-copy-own-pubkey-btn');
-
-    const remoteOfferInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-offer-input'));
-    const remoteAnswerInput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-remote-answer-input'));
-    const localOfferOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
-    const localAnswerOutput = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-answer-output'));
-    const messageInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
-    const recipientPubKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-pubkey-input'));
-    const recipientNpubInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-npub-input'));
-    const nostrInviteBtn = document.getElementById('channels-nostr-invite-btn');
     const copyOwnNpubBtn = document.getElementById('dm-copy-own-npub-btn');
 
-    nostrInviteBtn?.addEventListener('click', async () => {
+    const messageInput = /** @type {HTMLInputElement|null} */ (document.getElementById('channels-message-input'));
+    const recipientInput = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-npub-input'));
+
+    /** The address the search resolved, held until the user starts the chat. */
+    let pendingResult = null;
+
+    const runSearch = async () => {
         setDmError('dm-choose-role-error', '');
-        if (!onNostrInvite) return;
+        pendingResult = null;
+        renderDmSearchResult(null);
+
+        const query = recipientInput?.value?.trim() || '';
+        if (!query) {
+            setDmSearchHint('Paste an npub, or a raw 64-character hex key.');
+            return;
+        }
+
+        setDmSearchHint('Searching the relay pool…', 'pending');
         try {
-            const ok = await onNostrInvite({ recipient: recipientNpubInput?.value?.trim() || '' });
+            const result = await onSearch(query);
+            if (!result) return;
+            pendingResult = result;
+            renderDmSearchResult(result);
+            setDmSearchHint(
+                result.profile ? 'Found on the relay pool.' : 'Valid address. No public profile found on the relays.',
+                'ok'
+            );
+        } catch (err) {
+            setDmSearchHint('', '');
+            setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
+        }
+    };
+
+    searchBtn?.addEventListener('click', () => void runSearch());
+    recipientInput?.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter') void runSearch();
+    });
+    recipientInput?.addEventListener('input', () => {
+        // A changed address invalidates whatever the last search resolved.
+        pendingResult = null;
+        renderDmSearchResult(null);
+        setDmError('dm-choose-role-error', '');
+        setDmSearchHint('Paste an npub, or a raw 64-character hex key.');
+    });
+
+    startChatBtn?.addEventListener('click', async () => {
+        setDmError('dm-choose-role-error', '');
+        if (!pendingResult) {
+            setDmError('dm-choose-role-error', 'Search for a Nostr address first.');
+            return;
+        }
+        try {
+            const ok = await onStartChat(pendingResult);
             if (ok === true) showDmStep('dm-chat-active');
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
         }
-    });
-
-    copyOwnNpubBtn?.addEventListener('click', () => {
-        const npubEl = document.getElementById('dm-own-npub-value');
-        const npub = npubEl?.textContent || '';
-        if (!npub) return;
-        const originalText = copyOwnNpubBtn.textContent || '📋 Copy';
-        copyToClipboard(npub)
-            .then(() => {
-                copyOwnNpubBtn.textContent = '✅ Copied!';
-                setTimeout(() => {
-                    copyOwnNpubBtn.textContent = originalText;
-                }, 2000);
-            })
-            .catch(() => {
-                copyOwnNpubBtn.textContent = '❌ Failed';
-                setTimeout(() => {
-                    copyOwnNpubBtn.textContent = originalText;
-                }, 2000);
-            });
-    });
-
-    createOfferBtn?.addEventListener('click', async () => {
-        setDmError('dm-choose-role-error', '');
-        try {
-            const recipientPublicKey = recipientPubKeyInput?.value?.trim() || '';
-            const ok = await onCreateOffer({ recipientPublicKey });
-            if (ok === true) showDmStep('dm-host-signaling');
-        } catch (err) {
-            setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
-        }
-    });
-
-    createAnswerBtn?.addEventListener('click', async () => {
-        setDmError('dm-choose-role-error', '');
-        try {
-            const ok = await onCreateAnswer({
-                offerMagnet: remoteOfferInput?.value || ''
-            });
-            if (ok === true) showDmStep('dm-guest-waiting');
-        } catch (err) {
-            setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
-        }
-    });
-
-    applyAnswerBtn?.addEventListener('click', async () => {
-        setDmError('dm-apply-answer-error', '');
-        try {
-            await onApplyAnswer(remoteAnswerInput?.value || '');
-        } catch (err) {
-            setDmError('dm-apply-answer-error', err instanceof Error ? err.message : String(err));
-        }
-    });
-
-    hostBackBtn?.addEventListener('click', () => {
-        onLeave();
-        showDmStep('dm-choose-role');
-    });
-
-    guestBackBtn?.addEventListener('click', () => {
-        onLeave();
-        showDmStep('dm-choose-role');
     });
 
     leaveBtn?.addEventListener('click', () => {
@@ -161,35 +176,7 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
         showDmStep('dm-choose-role');
     });
 
-    copyOfferBtn?.addEventListener('click', () => {
-        const code = localOfferOutput?.value || '';
-        if (code) copyToClipboard(code);
-    });
-
-    copyAnswerBtn?.addEventListener('click', () => {
-        const code = localAnswerOutput?.value || '';
-        if (code) copyToClipboard(code);
-    });
-
-    copyOwnPubkeyBtn?.addEventListener('click', () => {
-        const pubkeyEl = document.getElementById('dm-own-pubkey-value');
-        const key = pubkeyEl?.textContent || '';
-        if (!key) return;
-        const originalText = copyOwnPubkeyBtn.textContent || '📋 Copy';
-        copyToClipboard(key)
-            .then(() => {
-                copyOwnPubkeyBtn.textContent = '✅ Copied!';
-                setTimeout(() => {
-                    copyOwnPubkeyBtn.textContent = originalText;
-                }, 2000);
-            })
-            .catch(() => {
-                copyOwnPubkeyBtn.textContent = '❌ Failed';
-                setTimeout(() => {
-                    copyOwnPubkeyBtn.textContent = originalText;
-                }, 2000);
-            });
-    });
+    bindCopyButton(copyOwnNpubBtn, () => document.getElementById('dm-own-npub-value')?.textContent || '');
 
     sendBtn?.addEventListener('click', () => onSend(messageInput?.value || ''));
     messageInput?.addEventListener('keypress', (event) => {
@@ -198,43 +185,73 @@ export function bindChannelsPanel({ onCreateOffer, onCreateAnswer, onApplyAnswer
 }
 
 /**
- * Update the "My Public Key" display in the DM choose-role panel.
- * @param {string|null} publicKey  — full uncompressed hex key ("04…"), or null if unavailable
+ * @param {string} message
+ * @param {string} [tone] '' | 'pending' | 'ok'
  */
-export function updateDmOwnPubkey(publicKey) {
-    const panel = document.getElementById('dm-my-pubkey-panel');
-    const lockedPanel = document.getElementById('dm-my-pubkey-locked');
-    const valueEl = document.getElementById('dm-own-pubkey-value');
-
-    if (publicKey) {
-        if (panel) panel.classList.remove('hidden');
-        if (lockedPanel) lockedPanel.classList.add('hidden');
-        if (valueEl) valueEl.textContent = publicKey;
-    } else {
-        if (panel) panel.classList.add('hidden');
-        if (lockedPanel) lockedPanel.classList.remove('hidden');
-        if (valueEl) valueEl.textContent = '';
-    }
+export function setDmSearchHint(message, tone = '') {
+    const el = document.getElementById('dm-search-hint');
+    if (!el) return;
+    el.textContent = message;
+    el.className = `dm-search-hint${tone ? ` is-${tone}` : ''}`;
 }
 
 /**
- * Show the local Nostr address when the wallet is unlocked.
- * @param {string|null} npub
+ * Render (or clear) the resolved recipient.
+ *
+ * Profile fields come from public relays, so everything is written with
+ * `textContent` — never markup — and the profile picture is deliberately not
+ * fetched or displayed.
+ *
+ * @param {{ npub: string, shortNpub: string, profile: any }|null} result
  */
-export function updateDmNostrIdentity(npub) {
+export function renderDmSearchResult(result) {
+    const container = document.getElementById('dm-search-result');
+    const nameEl = document.getElementById('dm-search-result-name');
+    const npubEl = document.getElementById('dm-search-result-npub');
+    const aboutEl = document.getElementById('dm-search-result-about');
+    if (!container) return;
+
+    if (!result) {
+        container.classList.add('hidden');
+        if (nameEl) nameEl.textContent = '';
+        if (npubEl) npubEl.textContent = '';
+        if (aboutEl) aboutEl.textContent = '';
+        return;
+    }
+
+    const profile = result.profile || null;
+    const displayName = profile?.displayName || profile?.name || '';
+
+    if (nameEl) nameEl.textContent = displayName || 'Unnamed Nostr identity';
+    if (npubEl) npubEl.textContent = result.shortNpub || result.npub || '';
+    if (aboutEl) {
+        aboutEl.textContent = profile?.nip05 || profile?.about || '';
+        aboutEl.classList.toggle('hidden', !aboutEl.textContent);
+    }
+
+    container.classList.remove('hidden');
+}
+
+/**
+ * Show the local Nostr address when the wallet is unlocked and the identity is
+ * present. `enabled: false` means the user removed it on the Identity page.
+ *
+ * @param {{ npub: string|null, enabled?: boolean }} params
+ */
+export function updateDmNostrIdentity({ npub, enabled = true }) {
     const panel = document.getElementById('dm-my-npub-panel');
     const lockedPanel = document.getElementById('dm-my-npub-locked');
+    const disabledPanel = document.getElementById('dm-nostr-disabled');
     const valueEl = document.getElementById('dm-own-npub-value');
+    const search = document.querySelector('.dm-search');
 
-    if (npub) {
-        if (panel) panel.classList.remove('hidden');
-        if (lockedPanel) lockedPanel.classList.add('hidden');
-        if (valueEl) valueEl.textContent = npub;
-    } else {
-        if (panel) panel.classList.add('hidden');
-        if (lockedPanel) lockedPanel.classList.remove('hidden');
-        if (valueEl) valueEl.textContent = '';
-    }
+    const hasIdentity = Boolean(npub) && enabled !== false;
+
+    if (panel) panel.classList.toggle('hidden', !hasIdentity);
+    if (valueEl) valueEl.textContent = hasIdentity ? `${npub}` : '';
+    if (disabledPanel) disabledPanel.classList.toggle('hidden', enabled !== false);
+    if (lockedPanel) lockedPanel.classList.toggle('hidden', Boolean(npub) || enabled === false);
+    if (search) search.classList.toggle('hidden', !hasIdentity);
 }
 
 /**
@@ -254,32 +271,29 @@ export function renderChannelsStatus({ channel = '', peers = 0, connected = fals
     if (!connected) {
         status.textContent = 'Disconnected';
         status.className = 'status-chip status-pending';
-        showDmStep('dm-choose-role');
         return;
     }
     if (connected && peers < 1) {
-        status.textContent = `Connecting to room "${channel}"...`;
+        status.textContent = 'Connecting…';
         status.className = 'status-chip status-pending';
         return;
     }
-    status.textContent = `Connected to room "${channel}" · peers: ${peers}`;
+    status.textContent = `Connected · peers: ${peers}`;
     status.className = 'status-chip status-success';
     showDmStep('dm-chat-active');
-}
-
-export function setLocalOfferCode(code) {
-    const output = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-offer-output'));
-    if (output) output.value = code || '';
-}
-
-export function setLocalAnswerCode(code) {
-    const output = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('channels-local-answer-output'));
-    if (output) output.value = code || '';
 }
 
 export function clearChannelsMessages() {
     const container = document.getElementById('channels-messages');
     if (container) container.innerHTML = '';
+}
+
+export function clearDmSearch() {
+    const input = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-recipient-npub-input'));
+    if (input) input.value = '';
+    renderDmSearchResult(null);
+    setDmSearchHint('Paste an npub, or a raw 64-character hex key.');
+    setDmError('dm-choose-role-error', '');
 }
 
 export function appendChannelsMessage(message, isOwn = false) {

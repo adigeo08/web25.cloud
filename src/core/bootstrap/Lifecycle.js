@@ -11,12 +11,12 @@ import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, suppor
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
-import { createDirectMessageBootstrapTorrent, loadDirectMessageBootstrapFromMagnet } from '../../channels/DirectMessageTorrentBootstrap.js';
 import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
-import { verifyNostrEvent } from '../../nostr/nostr.js';
+import { verifyNostrEvent, normalizeNostrPublicKey, npubEncode, shortNpub } from '../../nostr/nostr.js';
+import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
 import { DEFAULT_NOSTR_RELAYS } from '../../config/nostr.config.js';
-import { createLocalWalletSigner, eciesDecryptWithLocalWallet } from '../../auth/LocalWalletService.js';
+import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -24,13 +24,11 @@ import {
     bindFileInput,
     clearChannelsComposer,
     clearChannelsMessages,
+    clearDmSearch,
     renderChannelsStatus,
     renderDmTransport,
     showDmStep,
-    setLocalAnswerCode,
-    setLocalOfferCode,
-    updateDmNostrIdentity,
-    updateDmOwnPubkey
+    updateDmNostrIdentity
 } from '../../ui/channels/ChannelsPanel.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
@@ -107,7 +105,35 @@ export function setupChannels() {
     this.channelsService.setNostrFallback(this.nostrDmSession.createFallback());
 
     bindChannelsPanel({
-        onNostrInvite: async ({ recipient }) => {
+        onSearch: async (query) => {
+            // Resolving the address is local and always works; the profile
+            // lookup is a best-effort convenience on top of it.
+            let nostrPublicKey;
+            try {
+                nostrPublicKey = normalizeNostrPublicKey(query);
+            } catch (error) {
+                throw new Error(error.message);
+            }
+
+            const identity = this.authController.getActiveIdentity();
+            if (!identity?.address) {
+                throw new Error('Unlock your wallet to search for a Nostr address.');
+            }
+
+            let profile = null;
+            try {
+                await this.nostrDmSession.start({ localAddress: identity.address });
+                profile = await lookupNostrProfile({ pool: this.nostrPool, publicKey: nostrPublicKey });
+            } catch (error) {
+                // A relay that will not answer is not a failed search: the
+                // address is still valid and messageable.
+                this.log(`Nostr profile lookup unavailable: ${error.message}`);
+            }
+
+            const npub = npubEncode(nostrPublicKey);
+            return { nostrPublicKey, npub, shortNpub: shortNpub(npub), profile };
+        },
+        onStartChat: async (result) => {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
@@ -130,128 +156,15 @@ export function setupChannels() {
                     eciesPublicKey: signal.publicKey,
                     role: 'offer',
                     webrtcDescription: signal.description,
-                    recipient,
+                    recipient: result.nostrPublicKey,
                     sessionId: offerSessionId
                 });
                 this.dmOfferSessionId = bootstrap.session.sessionId;
-                this.toast.success('Encrypted invitation sent through the Nostr relay pool.', 'Direct Messenger');
+                this.toast.success('Encrypted invitation sent. Waiting for your peer…', 'Direct Messenger');
                 return true;
             } catch (error) {
                 this.toast.error(error.message, 'Direct Messenger');
                 return false;
-            } finally {
-                this.hideDirectMessageProgress();
-            }
-        },
-        onCreateOffer: async ({ recipientPublicKey }) => {
-            const identity = this.authController.getActiveIdentity();
-            if (!identity?.address) {
-                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                return false;
-            }
-
-            try {
-                this.showDirectMessageProgress('Generating encrypted invite…');
-                clearChannelsMessages();
-                setLocalAnswerCode('');
-                const offerSessionId = createDirectMessageSessionId();
-                const sharedRoom = directMessageRoomFromSession(offerSessionId);
-                const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
-                this.showDirectMessageProgress('Seeding Direct Message magnet…');
-                const created = await createDirectMessageBootstrapTorrent({
-                    client: this.client,
-                    trackers: this.trackers,
-                    identity,
-                    recipientPublicKey,
-                    role: 'offer',
-                    webrtcDescription: signal.description,
-                    eciesPublicKey: signal.publicKey,
-                    sessionId: offerSessionId
-                });
-                this.dmOfferSessionId = created.bootstrap.session.sessionId;
-                setLocalOfferCode(created.magnetURI);
-                this.toast.success('Share the offer magnet link with your peer.', 'Offer magnet generated');
-                return true;
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
-                return false;
-            } finally {
-                this.hideDirectMessageProgress();
-            }
-        },
-        onCreateAnswer: async ({ offerMagnet }) => {
-            const identity = this.authController.getActiveIdentity();
-            if (!identity?.address) {
-                this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                return false;
-            }
-
-            try {
-                this.showDirectMessageProgress('Loading peer magnet…');
-                clearChannelsMessages();
-                const offerBootstrap = await loadDirectMessageBootstrapFromMagnet({
-                    client: this.client,
-                    magnetURI: offerMagnet,
-                    localAddress: identity.address,
-                    decryptFn: eciesDecryptWithLocalWallet,
-                    trackers: this.trackers
-                });
-                this.showDirectMessageProgress('Verifying .torrentchain identity…');
-                const offerPayload = {
-                    description: offerBootstrap.webrtc.description,
-                    evmAddress: offerBootstrap.from.evmAddress,
-                    publicKey: offerBootstrap.from.eciesPublicKey
-                };
-                this.showDirectMessageProgress('Applying WebRTC offer…');
-                const derivedRoom = directMessageRoomFromSession(offerBootstrap?.session?.sessionId);
-                const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
-                this.showDirectMessageProgress('Creating WebRTC answer…');
-                const created = await createDirectMessageBootstrapTorrent({
-                    client: this.client,
-                    trackers: this.trackers,
-                    identity,
-                    recipientPublicKey: offerBootstrap.from.eciesPublicKey,
-                    role: 'answer',
-                    webrtcDescription: answerSignal.description,
-                    eciesPublicKey: answerSignal.publicKey,
-                    replyToSessionId: offerBootstrap.session.sessionId
-                });
-                setLocalAnswerCode(created.magnetURI);
-                this.toast.success('Send the answer magnet link back to the host.', 'Answer magnet generated');
-                return true;
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
-                return false;
-            } finally {
-                this.hideDirectMessageProgress();
-            }
-        },
-        onApplyAnswer: async (answerCode) => {
-            try {
-                const identity = this.authController.getActiveIdentity();
-                if (!identity?.address) {
-                    this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
-                    return;
-                }
-                this.showDirectMessageProgress('Loading peer magnet…');
-                const answerBootstrap = await loadDirectMessageBootstrapFromMagnet({
-                    client: this.client,
-                    magnetURI: answerCode,
-                    localAddress: identity.address,
-                    decryptFn: eciesDecryptWithLocalWallet,
-                    expectedReplyToSessionId: this.dmOfferSessionId || null,
-                    trackers: this.trackers
-                });
-                this.showDirectMessageProgress('Verifying .torrentchain identity…');
-                await this.channelsService.applyRemoteAnswerPayload({
-                    description: answerBootstrap.webrtc.description,
-                    evmAddress: answerBootstrap.from.evmAddress,
-                    publicKey: answerBootstrap.from.eciesPublicKey
-                });
-                this.showDirectMessageProgress('Waiting for encrypted peer connection…');
-                this.toast.success('Answer accepted. Waiting for data channel open...', 'Direct Messenger');
-            } catch (error) {
-                this.toast.error(error.message, 'Direct Messenger');
             } finally {
                 this.hideDirectMessageProgress();
             }
@@ -261,9 +174,8 @@ export function setupChannels() {
             // Stay subscribed: leaving a conversation should not stop the user
             // being reachable at their npub.
             this.nostrDmSession?.clearPeer();
-            setLocalOfferCode('');
-            setLocalAnswerCode('');
             this.dmOfferSessionId = null;
+            clearDmSearch();
         },
         onSend: async (text) => {
             try {
@@ -295,10 +207,6 @@ export function setupChannels() {
         }
         if (event.type === 'connecting') {
             renderChannelsStatus({ channel: event.channel, peers: 0, connected: true });
-        } else if (event.type === 'local-offer') {
-            setLocalOfferCode(event.code || '');
-        } else if (event.type === 'local-answer') {
-            setLocalAnswerCode(event.code || '');
         } else if (event.type === 'connected') {
             renderChannelsStatus({
                 connected: true,
@@ -681,18 +589,25 @@ export function setupAuthAwareUi(state) {
     if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
 
-    // Update DM panel "My Public Key" display. The public key is supplied by the
-    // signing worker via auth state; the private key never reaches this thread.
-    updateDmOwnPubkey(isAuthenticated ? state.publicKey || null : null);
-    updateDmNostrIdentity(isAuthenticated ? state.npub || null : null);
+    // The DM panel shows the Nostr address only. All of it is public material
+    // supplied by the signing worker; the private key never reaches this thread.
+    const nostrReachable = isAuthenticated && state.nostrEnabled !== false;
+    updateDmNostrIdentity({
+        npub: nostrReachable ? state.npub || null : null,
+        enabled: state.nostrEnabled !== false
+    });
     renderDmTransport(this.channelsService?.transport || 'disconnected');
 
-    // An unlocked wallet is reachable at its npub: subscribe the inbox so an
+    // An identity that is reachable at its npub subscribes the inbox, so an
     // inbound invitation arrives without the user having to send one first.
-    if (isAuthenticated && this.nostrDmSession && !this.nostrDmSession.started) {
+    // Removing the Nostr identity unsubscribes it again.
+    if (nostrReachable && this.nostrDmSession && !this.nostrDmSession.started) {
         void this.nostrDmSession.start({ localAddress: state.address }).catch((error) => {
             this.log(`Nostr inbox unavailable: ${error.message}`);
         });
+    } else if (!nostrReachable && this.nostrDmSession?.started) {
+        this.nostrDmSession.stop();
+        void this.channelsService?.leaveChannel();
     }
 
     if (!isAuthenticated) {

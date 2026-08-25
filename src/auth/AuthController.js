@@ -14,6 +14,11 @@ import {
     registerLocalWalletFromSeed
 } from './LocalWalletService.js';
 import { addAlternatePasskey, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
+import {
+    clearNostrIdentityPreference,
+    isNostrIdentityEnabled,
+    setNostrIdentityEnabled
+} from '../nostr/NostrIdentityPreference.js';
 import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
 import { bindRegisterWallet } from '../ui/auth/RegisterWalletModal.js';
 import { bindUnlockWallet } from '../ui/auth/UnlockWalletModal.js';
@@ -55,6 +60,12 @@ export default class AuthController {
 
         const migrateBtn = document.getElementById('migrate-wallet-btn');
         if (migrateBtn) migrateBtn.addEventListener('click', () => this.migrateFromLegacy());
+
+        const addNostrBtn = document.getElementById('add-nostr-identity-btn');
+        if (addNostrBtn) addNostrBtn.addEventListener('click', () => this.setNostrIdentityEnabled(true));
+
+        const deleteNostrBtn = document.getElementById('delete-nostr-identity-btn');
+        if (deleteNostrBtn) deleteNostrBtn.addEventListener('click', () => this.setNostrIdentityEnabled(false));
 
         this.render();
         this.notify();
@@ -118,7 +129,9 @@ export default class AuthController {
      * @param {boolean} unlocked
      */
     async refreshNostrIdentity(unlocked) {
-        if (!unlocked) {
+        this.state.nostrEnabled = this.state.address ? isNostrIdentityEnabled(this.state.address) : true;
+
+        if (!unlocked || !this.state.nostrEnabled) {
             this.state.nostrPublicKey = null;
             this.state.npub = null;
             return;
@@ -126,6 +139,37 @@ export default class AuthController {
         const nostrIdentity = await getLocalWalletNostrIdentity();
         this.state.nostrPublicKey = nostrIdentity?.nostrPublicKey || null;
         this.state.npub = nostrIdentity?.npub || null;
+    }
+
+    /**
+     * Add or remove this identity's Nostr reachability.
+     *
+     * There is no second key to create or destroy: the Nostr address is the x
+     * coordinate of the wallet key, so removing it takes the identity off the
+     * relays and out of the UI, and adding it back yields the same `npub`.
+     *
+     * @param {boolean} enabled
+     */
+    async setNostrIdentityEnabled(enabled) {
+        if (!this.state.address) {
+            this.toast.warning('Unlock your wallet first.', 'Nostr identity');
+            return false;
+        }
+
+        setNostrIdentityEnabled(this.state.address, enabled);
+        await this.refreshNostrIdentity(Boolean(this.state.localWalletUnlocked));
+        this.render();
+        this.notify();
+
+        if (enabled) {
+            this.toast.success('Your Nostr address is active. Others can now message you.', 'Nostr identity added');
+        } else {
+            this.toast.info(
+                'Nostr messaging is off and your inbox is unsubscribed. Adding it back restores the same address.',
+                'Nostr identity removed'
+            );
+        }
+        return true;
     }
 
     async registerLocal() {
@@ -264,7 +308,10 @@ export default class AuthController {
         );
         if (!confirmed) return;
         try {
+            const address = this.state.address;
             await removeLocalWallet();
+            // The wallet is gone, so its Nostr reachability preference is too.
+            clearNostrIdentityPreference(address);
             this.state = createAuthState();
             this.render();
             this.notify();

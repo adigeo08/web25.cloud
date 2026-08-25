@@ -1,18 +1,24 @@
 /**
- * Focused tests for ECIES public-key derivation and UI helper logic.
- * These tests validate the pure logic used by the profile and DM panels
- * without requiring a real DOM or browser APIs.
+ * Focused tests for key derivation and UI helper logic.
+ *
+ * These validate the pure logic behind the Identity page and the Direct
+ * Messenger panel — which keys are shown, which actions are offered — without
+ * requiring a real DOM or browser APIs.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getPublicKeyFromPrivateKey, evmAddressFromPublicKey } from '../src/channels/ecies.js';
+import { nostrCore } from '../src/nostr/nostr.js';
+import { npubEncode } from '../src/nostr/nip19.js';
 
 // ─── Deterministic test keys ─────────────────────────────────────────────────
 const PRIV_KEY = '0x1111111111111111111111111111111111111111111111111111111111111111';
 const KNOWN_PUB_KEY = getPublicKeyFromPrivateKey(PRIV_KEY);
 const KNOWN_ADDRESS = evmAddressFromPublicKey(KNOWN_PUB_KEY);
+const KNOWN_NOSTR_PUBKEY = nostrCore.getNostrPublicKey(PRIV_KEY);
+const KNOWN_NPUB = npubEncode(KNOWN_NOSTR_PUBKEY);
 
 // ─── Public key derivation ────────────────────────────────────────────────────
 
@@ -56,45 +62,108 @@ test('evmAddressFromPublicKey is deterministic', () => {
     assert.equal(addr1, addr2);
 });
 
-// ─── updateDmOwnPubkey logic (DOM-independent simulation) ────────────────────
+// ─── DM panel identity display (DOM-independent simulation) ─────────────────
 
 /**
- * Simulates the DOM element state management used by updateDmOwnPubkey.
- * This mirrors the logic without requiring jsdom.
+ * Mirrors `updateDmNostrIdentity`: the DM panel shows the Nostr address, the
+ * "unlock first" notice, or the "identity removed" notice — never the raw ECIES
+ * key, which now lives only on the Identity page.
  */
-function simulateUpdateDmOwnPubkey(publicKey) {
-    // Simulate element state
-    const state = {
-        panel: { hidden: true },
-        lockedPanel: { hidden: false },
-        valueEl: { textContent: '' }
+function simulateUpdateDmNostrIdentity({ npub, enabled = true }) {
+    const hasIdentity = Boolean(npub) && enabled !== false;
+    return {
+        npubPanelHidden: !hasIdentity,
+        lockedPanelHidden: Boolean(npub) || enabled === false,
+        disabledPanelHidden: enabled !== false,
+        searchHidden: !hasIdentity,
+        npubValue: hasIdentity ? npub : ''
     };
-
-    if (publicKey) {
-        state.panel.hidden = false;
-        state.lockedPanel.hidden = true;
-        state.valueEl.textContent = publicKey;
-    } else {
-        state.panel.hidden = true;
-        state.lockedPanel.hidden = false;
-        state.valueEl.textContent = '';
-    }
-
-    return state;
 }
 
-test('updateDmOwnPubkey logic: shows key panel and hides locked panel when key is provided', () => {
-    const state = simulateUpdateDmOwnPubkey(KNOWN_PUB_KEY);
-    assert.equal(state.panel.hidden, false, 'key panel should be visible');
-    assert.equal(state.lockedPanel.hidden, true, 'locked panel should be hidden');
-    assert.equal(state.valueEl.textContent, KNOWN_PUB_KEY, 'public key value should be set');
+test('DM panel: an unlocked, reachable identity shows the npub and the search', () => {
+    const state = simulateUpdateDmNostrIdentity({ npub: KNOWN_NPUB, enabled: true });
+    assert.equal(state.npubPanelHidden, false);
+    assert.equal(state.lockedPanelHidden, true);
+    assert.equal(state.disabledPanelHidden, true);
+    assert.equal(state.searchHidden, false);
+    assert.equal(state.npubValue, KNOWN_NPUB);
 });
 
-test('updateDmOwnPubkey logic: hides key panel and shows locked panel when key is null', () => {
-    const state = simulateUpdateDmOwnPubkey(null);
-    assert.equal(state.panel.hidden, true, 'key panel should be hidden');
-    assert.equal(state.lockedPanel.hidden, false, 'locked panel should be visible');
-    assert.equal(state.valueEl.textContent, '', 'public key value should be empty');
+test('DM panel: a locked wallet shows the unlock notice and hides the search', () => {
+    const state = simulateUpdateDmNostrIdentity({ npub: null, enabled: true });
+    assert.equal(state.npubPanelHidden, true);
+    assert.equal(state.lockedPanelHidden, false);
+    assert.equal(state.disabledPanelHidden, true);
+    assert.equal(state.searchHidden, true);
+    assert.equal(state.npubValue, '');
+});
+
+test('DM panel: a removed Nostr identity shows the removed notice, not the unlock one', () => {
+    const state = simulateUpdateDmNostrIdentity({ npub: null, enabled: false });
+    assert.equal(state.npubPanelHidden, true);
+    assert.equal(state.lockedPanelHidden, true, 'the unlock notice must not compete with the removed notice');
+    assert.equal(state.disabledPanelHidden, false);
+    assert.equal(state.searchHidden, true, 'messaging is unavailable without the identity');
+});
+
+// ─── Identity page Nostr section (DOM-independent simulation) ───────────────
+
+/**
+ * Mirrors `renderNostrIdentitySection`: exactly one of Add/Delete is offered,
+ * and key values are only rendered when the identity is actually present.
+ */
+function simulateNostrIdentitySection({ npub, nostrPublicKey, nostrEnabled, unlocked }) {
+    const hasIdentity = Boolean(unlocked && nostrEnabled && npub);
+    return {
+        presentHidden: !hasIdentity,
+        absentHidden: hasIdentity || !unlocked,
+        npubValue: hasIdentity ? npub : '',
+        pubkeyValue: hasIdentity ? nostrPublicKey || '' : '',
+        addHidden: !unlocked || nostrEnabled,
+        deleteHidden: !unlocked || !nostrEnabled
+    };
+}
+
+test('identity page: an active Nostr identity shows both keys and only Delete', () => {
+    const state = simulateNostrIdentitySection({
+        npub: KNOWN_NPUB,
+        nostrPublicKey: KNOWN_NOSTR_PUBKEY,
+        nostrEnabled: true,
+        unlocked: true
+    });
+    assert.equal(state.presentHidden, false);
+    assert.equal(state.absentHidden, true);
+    assert.equal(state.npubValue, KNOWN_NPUB);
+    assert.equal(state.pubkeyValue, KNOWN_NOSTR_PUBKEY);
+    assert.equal(state.addHidden, true, 'Add is pointless while the identity is present');
+    assert.equal(state.deleteHidden, false);
+});
+
+test('identity page: a removed Nostr identity shows the notice and only Add', () => {
+    const state = simulateNostrIdentitySection({
+        npub: null,
+        nostrPublicKey: null,
+        nostrEnabled: false,
+        unlocked: true
+    });
+    assert.equal(state.presentHidden, true);
+    assert.equal(state.absentHidden, false);
+    assert.equal(state.npubValue, '');
+    assert.equal(state.addHidden, false);
+    assert.equal(state.deleteHidden, true, 'Delete is pointless while the identity is absent');
+});
+
+test('identity page: a locked wallet offers neither action and renders no keys', () => {
+    const state = simulateNostrIdentitySection({
+        npub: null,
+        nostrPublicKey: null,
+        nostrEnabled: true,
+        unlocked: false
+    });
+    assert.equal(state.presentHidden, true);
+    assert.equal(state.absentHidden, true);
+    assert.equal(state.addHidden, true);
+    assert.equal(state.deleteHidden, true);
 });
 
 // ─── Profile panel key derivation logic ──────────────────────────────────────
