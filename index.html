@@ -708,53 +708,66 @@
                         </div>
 
                         <br /><br />
-                        <h3>🛰️ Publishing to the registry (NIP-35 / DTAN)</h3>
+                        <h3>🛰️ Publishing to NosNS (NIP-35 / DTAN)</h3>
                         <p>
-                            Once a site bundle is signed, seeded and live, it can also be published as a public
-                            NIP-35 torrent event under DTAN’s <code>application</code> category, marked <code>web25</code>. This is
-                            a second, separate Nostr use case from the private Direct Messenger — registry
-                            events carry public metadata only.
+                            Once a site bundle is signed, seeded and live, it can also be published to
+                            <strong>NosNS</strong> — the Nostr Name System — as a public NIP-35 torrent event. This
+                            is a second, separate Nostr use case from the private Direct Messenger: NosNS events
+                            carry public metadata only.
+                        </p>
+                        <p>
+                            NosNS is a deliberately tiny convention: NIP-35 <code>kind 2003</code>, one official
+                            DTAN category you choose, <code>wss://relay.dtan.xyz</code> as the only directory
+                            relay, and a torrent name ending in <code>.nosns.torrent</code>. That suffix is the
+                            entire discriminator — there is no custom event kind, no custom category and no
+                            custom tag, so a NosNS entry is a first-class DTAN torrent rather than a record
+                            parked in the DTAN index.
                         </p>
                         <div class="feature-grid">
-                            <div class="feature">🗂️ <code>tcat:application</code> + marker <code>web25:website</code></div>
+                            <div class="feature">🏷️ Name ends in <code>.nosns.torrent</code> — the real BitTorrent <code>info.name</code></div>
+                            <div class="feature">🗂️ A real DTAN category you pick, defaulting to <code>tcat:application</code></div>
                             <div class="feature">🔗 Carries the final BitTorrent infohash and the real torrent entries</div>
                             <div class="feature">📦 In gzip mode that is <code>.torrentchain</code> + <code>site.bundle.json.gz</code></div>
                             <div class="feature">🪪 Mirrors the <code>.torrentchain</code> EVM proof for pre-download checks</div>
                             <div class="feature">✍️ No second EVM signature — only a Nostr signature is added</div>
-                            <div class="feature">🌐 Registry relay: <code>wss://relay.dtan.xyz</code> plus generic relays</div>
+                            <div class="feature">🌐 Directory relay: <code>wss://relay.dtan.xyz</code>, and nowhere else</div>
                         </div>
                         <p>
-                            Deployment and registry publication are reported separately, because they are
-                            separate outcomes: a site stays <strong>Live / Seeding</strong> even if every registry
-                            relay is unreachable, and <em>Retry Registry Publish</em> resends the identical signed
+                            Deployment and NosNS publication are reported separately, because they are
+                            separate outcomes: a site stays <strong>Live / Seeding</strong> even if the directory
+                            relay is unreachable, and <em>Retry NosNS Publish</em> resends the identical signed
                             event rather than creating a second entry. The deploy wizard names which key signs
                             what — <em>Sign .torrentchain · EVM</em> for the website, then
-                            <em>Sign &amp; publish registry · Nostr</em> for the registry entry.
+                            <em>Publish to NosNS · Nostr</em> for the directory entry.
                         </p>
 
                         <br /><br />
-                        <h3>🔎 Searching the registry</h3>
+                        <h3>🔎 Searching NosNS</h3>
                         <p>
-                            The Browse tab has a second mode, <strong>Search WEB25 Registry</strong>, next to the
-                            existing load-by-hash flow. It queries <code>kind: 2003</code> events in
-                            the <code>web25</code> hashtag, and nothing else.
+                            The Browse tab has a second mode, <strong>Search NosNS</strong>, next to the
+                            existing load-by-hash flow. Pick a DTAN category and it queries
+                            <code>kind: 2003</code> in that category alone — never the whole index — then keeps
+                            only the entries whose name ends in <code>.nosns.torrent</code>. Text search runs
+                            locally on those results, so there is no dependency on NIP-50 full-text search.
                         </p>
                         <div class="feature-grid">
                             <div class="feature">🔍 Search by site name, infohash, EVM publisher, or <code>npub</code></div>
                             <div class="feature">🪪 Each result shows its publisher verification state</div>
                             <div class="feature">🚀 <strong>Open</strong> reuses the existing WEB25 hash loader</div>
-                            <div class="feature">🧯 Registry availability never affects loading by hash</div>
+                            <div class="feature">🧯 NosNS availability never affects loading by hash</div>
                         </div>
                         <p>
-                            A valid Nostr signature only proves who wrote the registry entry. Showing
+                            A valid Nostr signature only proves who wrote the directory entry. Showing
                             <em>Publisher verified</em> requires the separate mirrored EVM proof to check out, so
-                            results appear as verified, invalid, malformed or unverified.
+                            results appear as verified, invalid, malformed or unverified. Discovery does not
+                            depend on that proof: an entry with the NosNS name and no WEB25 proof is still
+                            listed, simply as unverified.
                         </p>
                         <p>
-                            Nostr provides registry, discovery and search. Website content is distributed over
+                            Nostr provides directory, discovery and search. Website content is distributed over
                             BitTorrent, and authenticity still comes from <code>.torrentchain</code> after
-                            download. When a site is opened from a registry result, the entry is compared against
-                            the manifest that actually arrives — any disagreement is surfaced and the registry
+                            download. When a site is opened from a NosNS result, the entry is compared against
+                            the manifest that actually arrives — any disagreement is surfaced and the directory
                             claim is withdrawn, because the downloaded manifest always wins.
                         </p>
 
@@ -783,7 +796,7 @@
                             <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
                             <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
                             <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
-                            <div class="req">✅ Public website registry over NIP-35 with DTAN-compatible discovery</div>
+                            <div class="req">✅ NosNS: public website directory over NIP-35, inside the real DTAN index</div>
                             <div class="req">✅ Pre-download publisher verification from mirrored <code>.torrentchain</code> proof</div>
                             <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
                         </div>

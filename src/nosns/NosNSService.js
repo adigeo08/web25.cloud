@@ -9,7 +9,7 @@
  *
  * They share the relay client and the wallet-worker signing operation, and
  * nothing else. No SDP, ICE candidate, ECIES secret or message content ever
- * reaches an event built here — a registry event is entirely public metadata.
+ * reaches an event built here — a NosNS event is entirely public metadata.
  *
  * Publication and discovery both go to `wss://relay.dtan.xyz` and nowhere else.
  * NosNS is a convention inside the real DTAN index, so adding generic relays
@@ -107,11 +107,11 @@ export class NosNSService {
     }
 
     /**
-     * Build and sign the registry event for a finished deployment.
+     * Build and sign the NosNS event for a finished deployment.
      *
      * Signing goes through the existing narrowly scoped wallet-worker Nostr
      * operation, so the private key never reaches this module. A locked wallet
-     * makes this reject, which is the intended behaviour: a registry entry
+     * makes this reject, which is the intended behaviour: a directory entry
      * cannot be created without an unlocked identity.
      *
      * @param {{ torrent: any, chainArtifact: { payload: any, message: string, signature: string },
@@ -143,7 +143,7 @@ export class NosNSService {
     }
 
     /**
-     * Publish an already-signed event to every reachable registry relay.
+     * Publish an already-signed event to the NosNS directory relay.
      *
      * This deliberately takes a signed event rather than building one, so a
      * retry is a resubmission of the very same event — same id, same
@@ -275,7 +275,7 @@ export class NosNSService {
     /**
      * Verify one result's mirrored WEB25/EVM proof.
      *
-     * A valid Nostr signature only proves who wrote the registry entry; this is
+     * A valid Nostr signature only proves who wrote the directory entry; this is
      * the separate question of whether the publisher proof inside it holds.
      * @param {any} result
      */

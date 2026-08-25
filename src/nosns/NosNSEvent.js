@@ -9,7 +9,7 @@
  *
  * Trust model, which the whole file is written around:
  *
- *   Nostr signature   → who published this *registry entry*
+ *   Nostr signature   → who published this *directory entry*
  *   BitTorrent hash   → which artifact it points at
  *   `.torrentchain`   → what the artifact contains and who published the site
  *   EVM signature     → proof of that publisher
@@ -87,7 +87,7 @@ export function allTagValues(tags, name) {
 }
 
 /**
- * Describe the torrent that was actually created, so the registry advertises
+ * Describe the torrent that was actually created, so the event advertises
  * the real torrent entries rather than assumptions about bundle mode.
  *
  * In gzip mode the torrent holds `.torrentchain` + `site.bundle.json.gz`; in
@@ -108,7 +108,7 @@ export function describeTorrentArtifact(torrent, fallbackTrackers = []) {
     const files = rawFiles.slice(0, NOSNS_CONFIG.MAX_FILE_TAGS).map((file) => {
         const raw = text(file?.path) || text(file?.name);
         // WebTorrent prefixes multi-file paths with the torrent name; the
-        // registry should advertise the entry, not the container.
+        // event should advertise the entry, not the container.
         const normalized = raw.replace(/\\/g, '/').replace(new RegExp(`^${escapeRegExp(name)}/`), '');
         return { path: normalized || text(file?.name), size: Number(file?.length) || 0 };
     });
@@ -226,7 +226,7 @@ export function isNosnsEvent(event) {
 }
 
 /**
- * Normalize a relay event into a registry result.
+ * Normalize a relay event into a NosNS result.
  *
  * Returns `null` for anything that is not a structurally valid WEB25 website
  * entry, so a relay cannot inject unrelated torrents into the listing.
@@ -367,7 +367,7 @@ function readProofTags(tags) {
 /**
  * Verify the mirrored EVM proof of a parsed NosNS record.
  *
- * A valid Nostr signature says only who wrote the registry entry. This is the
+ * A valid Nostr signature says only who wrote the directory entry. This is the
  * separate question of whether the WEB25 publisher proof inside it holds, and
  * only this can move a result to `verified`.
  *
