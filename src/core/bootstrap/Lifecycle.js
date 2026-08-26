@@ -54,9 +54,17 @@ import {
     showDmStep,
     updateDmNostrIdentity
 } from '../../ui/channels/ChannelsPanel.js';
-import { bindContactsPanel, bindSaveContact, renderContacts, renderSearchPresence } from '../../ui/channels/ContactsPanel.js';
+import {
+    bindContactsPanel,
+    bindSaveContact,
+    renderContacts,
+    renderContactsLocked,
+    renderSearchPresence
+} from '../../ui/channels/ContactsPanel.js';
+import { bindInvitationsPanel, renderInvitations } from '../../ui/channels/InvitationsPanel.js';
 import { NostrPresenceService, INTENT } from '../../channels/NostrPresenceService.js';
-import { filterContacts, listContacts, saveContact } from '../../channels/ContactsStore.js';
+import { ContactsStore, TRUST, filterContacts, verifyIdentityTuple } from '../../channels/ContactsStore.js';
+import { PendingInvitations } from '../../channels/PendingInvitations.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /**
@@ -435,9 +443,18 @@ export function setupChannels() {
         this.presenceService.receiveChatRequest(peer);
         return undefined;
     };
+    // Contacts are authorization, not authentication. Every record is
+    // encrypted to the wallet's own Nostr identity, so a locked wallet has
+    // nothing to read and this list simply cannot be shown.
+    this.contactsStore = new ContactsStore({ signer });
     this.dmContacts = [];
     this.dmContactFilter = '';
     this.dmSelectedPeer = '';
+
+    // Offers from peers who are not approved contacts wait here. Nothing is
+    // answered from this queue without a person pressing Accept.
+    this.dmInvitations = new PendingInvitations();
+    this.dmInvitations.onChange = () => renderInvitations(this.dmInvitations.list());
 
     bindContactsPanel({
         // Opening a contact expresses intent; it does not connect.
@@ -445,8 +462,15 @@ export function setupChannels() {
         onFilter: (query) => {
             this.dmContactFilter = query;
             this.refreshContactList();
-        }
+        },
+        onRename: (contact) => void this.renameContact(contact.nostrPublicKey, contact.name),
+        onRemove: (contact) => void this.removeContact(contact.nostrPublicKey, contact.name)
     });
+    bindInvitationsPanel({
+        onAccept: (peer) => void this.acceptDmInvitation(peer),
+        onDecline: (peer) => void this.declineDmInvitation(peer)
+    });
+    renderInvitations([]);
     bindSaveContact(() => void this.saveCurrentPeerAsContact());
     void this.refreshContactList();
 
@@ -558,13 +582,33 @@ export async function handleNostrInvitation(bootstrap, context) {
 
     try {
         if (bootstrap.role === 'offer') {
-            // An offer is not consent. Anyone can address this npub, so an
-            // invitation from somebody the local user has not selected is
-            // recorded as intent and left there — no answer, no handshake.
+            // A cryptographically valid offer is not consent. Anyone who knows
+            // this npub can produce one, and answering reveals the local ECIES
+            // key, EVM identity and — through ICE gathering — this machine's
+            // network position. So an offer from anyone who is not an approved
+            // contact is parked, and nothing is sent back.
             const sender = `${context.senderNostrPublicKey}`.toLowerCase();
-            if (this.presenceService && this.presenceService.intentState(sender) !== INTENT.MUTUAL) {
-                this.presenceService.receiveChatRequest(sender);
-                this.log(`Holding a Direct Messenger invitation from ${sender}: intent is not mutual yet.`);
+
+            let trusted = false;
+            try {
+                trusted = await this.contactsStore.isTrusted(sender);
+            } catch (error) {
+                // A locked wallet cannot read contacts, so nobody is trusted:
+                // failing closed is the only safe reading of "unknown".
+                this.log(`Trusted contacts unavailable, treating ${sender} as unknown: ${error.message}`);
+                trusted = false;
+            }
+
+            if (!trusted) {
+                await this.holdDmInvitation(bootstrap, sender);
+                return;
+            }
+
+            // An approved contact still has to be who they claim: the identity
+            // tuple in the invitation is checked against the stored one, so a
+            // matching contact record alone never authorizes a connection.
+            if (!(await this.invitationMatchesContact(bootstrap, sender))) {
+                await this.holdDmInvitation(bootstrap, sender, 'identity mismatch');
                 return;
             }
 
@@ -576,27 +620,8 @@ export async function handleNostrInvitation(bootstrap, context) {
                 return;
             }
 
-            const derivedRoom = directMessageRoomFromSession(bootstrap.session.sessionId);
-            const offerPayload = {
-                description: bootstrap.webrtc.description,
-                evmAddress: bootstrap.from.evmAddress,
-                publicKey: bootstrap.from.eciesPublicKey
-            };
-            const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
-            this.nostrDmSession.setPeer(sender);
-            this.dmSelectedPeer = sender;
-            await this.nostrDmSession.sendInvitation({
-                identity,
-                eciesPublicKey: answerSignal.publicKey,
-                role: 'answer',
-                webrtcDescription: answerSignal.description,
-                recipient: sender,
-                // The peer's full ECIES key is known now, so the answer gets the
-                // Web25 ECIES envelope on top of the NIP-44 gift wrap.
-                recipientEciesPublicKey: bootstrap.from.eciesPublicKey,
-                replyToSessionId: bootstrap.session.sessionId
-            });
-            this.toast.success('Encrypted invitation accepted; connecting…', 'Direct Messenger');
+            await this.answerDmInvitation(bootstrap, sender, identity);
+            this.toast.success('Trusted contact connected.', 'Direct Messenger');
             return;
         }
 
@@ -615,6 +640,261 @@ export async function handleNostrInvitation(bootstrap, context) {
     }
 }
 
+/**
+ * Park an invitation from a peer who is not an approved contact.
+ *
+ * This is the whole privacy guarantee. Everything that would reveal something
+ * about the local user is deliberately *not* done here:
+ *
+ *   - `createAnswerPayloadFromRemoteOffer()` is not called, so no
+ *     `RTCPeerConnection` exists and **no ICE gathering happens** — an attacker
+ *     who knows an npub cannot learn this machine's addresses by offering;
+ *   - no answer is sent, so the local full ECIES public key and EVM identity
+ *     stay unrevealed;
+ *   - nothing is written to the contacts store.
+ *
+ * The peer learns only that their gift wrap was published, which they already
+ * knew.
+ *
+ * @param {any} bootstrap
+ * @param {string} sender
+ * @param {string} [reason]
+ */
+export async function holdDmInvitation(bootstrap, sender, reason = 'not an approved contact') {
+    const npub = npubEncode(sender);
+
+    // The profile name is a convenience for recognising the sender and is
+    // best-effort: a relay that will not answer must not stop the invitation
+    // being shown, and a name never stands in for the npub.
+    let profileName = '';
+    try {
+        const profile = await lookupNostrProfile({ pool: this.nostrPool, publicKey: sender });
+        profileName = profile?.displayName || profile?.name || '';
+    } catch (error) {
+        this.log(`Nostr profile lookup unavailable for a pending invitation: ${error.message}`);
+    }
+
+    this.dmInvitations.add({
+        bootstrap,
+        senderNostrPublicKey: sender,
+        npub,
+        profileName,
+        trustState: 'unknown'
+    });
+
+    this.log(`Holding a Direct Messenger invitation from ${sender}: ${reason}. No answer sent, no ICE gathered.`);
+    this.toast.info('A peer wants to chat. Review the invitation before connecting.', 'Chat invitation');
+}
+
+/**
+ * Does an invitation's identity tuple still match the stored contact?
+ *
+ * A contact record is three bound identities, not three strings that happen to
+ * sit together. Both the invitation's own tuple and its agreement with what was
+ * stored are re-checked, so a tampered record — or a peer reusing an npub with
+ * a different key — is refused even though a contact by that name exists.
+ *
+ * @param {any} bootstrap
+ * @param {string} sender
+ */
+export async function invitationMatchesContact(bootstrap, sender) {
+    const claimed = {
+        nostrPublicKey: sender,
+        eciesPublicKey: `${bootstrap?.from?.eciesPublicKey || ''}`,
+        evmAddress: `${bootstrap?.from?.evmAddress || ''}`
+    };
+
+    const verification = verifyIdentityTuple(claimed);
+    if (!verification.ok) {
+        this.log(`Invitation identity tuple rejected for ${sender}: ${verification.reason}`);
+        return false;
+    }
+
+    let contact = null;
+    try {
+        contact = await this.contactsStore.get(sender);
+    } catch (error) {
+        this.log(`Trusted contacts unavailable while verifying ${sender}: ${error.message}`);
+        return false;
+    }
+    if (!contact) return false;
+
+    const sameEcies = contact.eciesPublicKey === claimed.eciesPublicKey.trim().toLowerCase();
+    const sameEvm = contact.evmAddress === claimed.evmAddress.trim().toLowerCase();
+    if (!sameEcies || !sameEvm) {
+        this.log(`Invitation from ${sender} does not match the stored contact identity.`);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Create and send the answer. Only reached for a trusted contact, or after the
+ * local user has explicitly accepted — this is the first point at which ICE is
+ * gathered and the local identity is revealed.
+ *
+ * @param {any} bootstrap
+ * @param {string} sender
+ * @param {any} identity
+ */
+export async function answerDmInvitation(bootstrap, sender, identity) {
+    const derivedRoom = directMessageRoomFromSession(bootstrap.session.sessionId);
+    const offerPayload = {
+        description: bootstrap.webrtc.description,
+        evmAddress: bootstrap.from.evmAddress,
+        publicKey: bootstrap.from.eciesPublicKey
+    };
+    const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
+    this.nostrDmSession.setPeer(sender);
+    this.dmSelectedPeer = sender;
+    await this.nostrDmSession.sendInvitation({
+        identity,
+        eciesPublicKey: answerSignal.publicKey,
+        role: 'answer',
+        webrtcDescription: answerSignal.description,
+        recipient: sender,
+        // The peer's full ECIES key is known now, so the answer gets the
+        // Web25 ECIES envelope on top of the NIP-44 gift wrap.
+        recipientEciesPublicKey: bootstrap.from.eciesPublicKey,
+        replyToSessionId: bootstrap.session.sessionId
+    });
+    return answerSignal;
+}
+
+/**
+ * Accept a pending invitation.
+ *
+ * Consent alone is not enough: validity, expiry and the identity bindings are
+ * all re-checked at this moment, because the invitation has been sitting in a
+ * queue since it arrived and the person may have taken a while to decide.
+ *
+ * @param {string} peerNostrPublicKey
+ */
+export async function acceptDmInvitation(peerNostrPublicKey) {
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) {
+        this.toast.warning('Authenticate first to accept a chat invitation.', 'Authentication required');
+        return false;
+    }
+
+    const invitation = this.dmInvitations.take(peerNostrPublicKey);
+    if (!invitation) {
+        this.toast.warning('That invitation is no longer available.', 'Chat invitation');
+        return false;
+    }
+
+    const sender = invitation.peerNostrPublicKey;
+    const bootstrap = invitation.bootstrap;
+
+    // Re-check expiry: an invitation that timed out while it waited must not be
+    // answered, because the peer has already given up on that session.
+    if (invitation.expiresAt && invitation.expiresAt <= Date.now()) {
+        this.toast.warning('That invitation expired. Ask them to try again.', 'Chat invitation');
+        return false;
+    }
+
+    // Re-check the bindings on the invitation itself. This is the same tuple
+    // check a trusted contact goes through; there is no contact to compare
+    // against yet, so only internal consistency can be required here.
+    const verification = verifyIdentityTuple({
+        nostrPublicKey: sender,
+        eciesPublicKey: bootstrap?.from?.eciesPublicKey,
+        evmAddress: bootstrap?.from?.evmAddress
+    });
+    if (!verification.ok) {
+        this.toast.error(`Invitation rejected: ${verification.reason}`, 'Chat invitation');
+        return false;
+    }
+
+    try {
+        const answerSignal = await this.answerDmInvitation(bootstrap, sender, identity);
+
+        // Persisted as a friend only now, once the authenticated identity and
+        // key exchange has actually produced an answer for this exact tuple.
+        await this.contactsStore.save({
+            nostrPublicKey: sender,
+            npub: invitation.npub || npubEncode(sender),
+            eciesPublicKey: bootstrap.from.eciesPublicKey,
+            evmAddress: bootstrap.from.evmAddress,
+            name: invitation.profileName || '',
+            trust: TRUST.TRUSTED
+        });
+        await this.refreshContactList();
+
+        // Presence intent is recorded too, so the existing WebRTC-first /
+        // Nostr-fallback path continues exactly as before.
+        this.presenceService?.sendChatRequest(sender);
+        this.toast.success('Invitation accepted; connecting…', 'Direct Messenger');
+        return Boolean(answerSignal);
+    } catch (error) {
+        this.toast.error(error.message, 'Direct Messenger');
+        return false;
+    }
+}
+
+/**
+ * Decline a pending invitation.
+ *
+ * The invitation is discarded and that is all: no answer is sent, no
+ * connection is attempted, and no contact is created. The peer is told nothing,
+ * because telling them would itself confirm that this npub is live and
+ * listening.
+ *
+ * @param {string} peerNostrPublicKey
+ */
+export async function declineDmInvitation(peerNostrPublicKey) {
+    const invitation = this.dmInvitations.take(peerNostrPublicKey);
+    if (!invitation) return false;
+    this.log(`Declined a Direct Messenger invitation from ${invitation.peerNostrPublicKey}.`);
+    this.toast.info('Invitation declined.', 'Chat invitation');
+    return true;
+}
+
+/**
+ * Rename a contact. Only the local label changes; identity is untouched.
+ * @param {string} nostrPublicKey
+ * @param {string} currentName
+ */
+export async function renameContact(nostrPublicKey, currentName = '') {
+    const name = window.prompt('Name for this contact (stored only in this browser):', currentName);
+    if (name === null) return false;
+    try {
+        await this.contactsStore.rename(nostrPublicKey, name);
+        await this.refreshContactList();
+        return true;
+    } catch (error) {
+        this.toast.error(error.message, 'Contacts');
+        return false;
+    }
+}
+
+/**
+ * Remove a contact.
+ *
+ * Purely an authorization change: the peer becomes unknown again, so their next
+ * invitation waits for approval like any stranger's. No wallet or Nostr key is
+ * deleted or rotated.
+ *
+ * @param {string} nostrPublicKey
+ * @param {string} name
+ */
+export async function removeContact(nostrPublicKey, name = '') {
+    const label = name || shortNpub(npubEncode(nostrPublicKey));
+    if (!window.confirm(`Remove ${label}? Future invitations from them will need your approval again.`)) {
+        return false;
+    }
+    try {
+        await this.contactsStore.remove(nostrPublicKey);
+        await this.refreshContactList();
+        this.toast.success('Contact removed. They are an unknown peer again.', 'Contacts');
+        return true;
+    } catch (error) {
+        this.toast.error(error.message, 'Contacts');
+        return false;
+    }
+}
+
 /** Short label for whoever the current conversation is with. */
 export function dmPeerLabel() {
     const peer = this.dmSelectedPeer;
@@ -624,13 +904,23 @@ export function dmPeerLabel() {
     return `${peer.slice(0, 8)}…`;
 }
 
-/** Reload contacts from IndexedDB and repaint the list with live presence. */
+/**
+ * Reload contacts and repaint the list with live presence.
+ *
+ * Reading requires an unlocked wallet, because every record is decrypted
+ * through the wallet worker. When that fails the list is not merely empty: the
+ * UI says so, and `dmContacts` is cleared so no decrypted contact lingers in
+ * main-thread state after a lock.
+ */
 export async function refreshContactList() {
     try {
-        this.dmContacts = await listContacts();
+        this.dmContacts = await this.contactsStore.list();
     } catch (error) {
         this.log(`Contacts unavailable: ${error.message}`);
         this.dmContacts = [];
+        this.presenceService?.watch([]);
+        renderContactsLocked();
+        return;
     }
 
     // Watch exactly the contacts on screen; presence for anyone else is noise.
@@ -756,15 +1046,19 @@ export async function saveCurrentPeerAsContact() {
     if (name === null) return false;
 
     try {
-        await saveContact({
+        // The peer's full ECIES key and EVM address are known only because an
+        // invitation was cryptographically verified; the store re-checks that
+        // they and the npub are one key before writing anything.
+        await this.contactsStore.save({
             nostrPublicKey: peer,
             npub: npubEncode(peer),
-            // The EVM address is known only once an invitation was verified.
-            evmAddress: this.channelsService.peerAddress || null,
-            name
+            eciesPublicKey: this.channelsService.peerPublicKey || '',
+            evmAddress: this.channelsService.peerAddress || '',
+            name,
+            trust: TRUST.TRUSTED
         });
         await this.refreshContactList();
-        this.toast.success('Contact saved locally.', 'Contacts');
+        this.toast.success('Contact saved locally and trusted for direct reconnects.', 'Contacts');
         return true;
     } catch (error) {
         this.toast.error(error.message, 'Contacts');
@@ -1141,6 +1435,16 @@ export function setupAuthAwareUi(state) {
             this.channelsService.leaveChannel();
         }
         this.nostrDmSession?.stop();
+
+        // A locked wallet must not leave decrypted contact data behind in
+        // long-lived main-thread state, and a pending invitation cannot be
+        // acted on without an identity to answer with. Both are dropped, and
+        // the list goes back to its locked state until the wallet is unlocked
+        // again.
+        this.dmContacts = [];
+        this.dmInvitations?.clear();
+        renderInvitations([]);
+        renderContactsLocked();
         return;
     }
 

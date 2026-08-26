@@ -11,15 +11,32 @@
 import { shortNpub } from '../../nostr/nip19.js';
 
 /**
- * @param {{ onSelect: (contact: any) => void, onFilter: (query: string) => void }} handlers
+ * @param {{ onSelect: (contact: any) => void, onFilter: (query: string) => void,
+ *           onRename?: (contact: any) => void, onRemove?: (contact: any) => void }} handlers
  */
-export function bindContactsPanel({ onSelect, onFilter }) {
+export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
     const list = document.getElementById('dm-contacts-list');
     const filter = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-contacts-filter'));
 
     // Delegated: rows are re-rendered whenever presence or the list changes.
     list?.addEventListener('click', (event) => {
         const target = /** @type {HTMLElement} */ (event.target);
+
+        const action = target.closest('[data-contact-action]');
+        if (action) {
+            // Rename and Remove sit inside the row, so they must not also open
+            // the conversation the row would otherwise start.
+            event.stopPropagation();
+            const contact = {
+                nostrPublicKey: action.getAttribute('data-contact-key') || '',
+                npub: action.getAttribute('data-contact-npub') || '',
+                name: action.getAttribute('data-contact-name') || ''
+            };
+            if (action.getAttribute('data-contact-action') === 'rename') onRename?.(contact);
+            else onRemove?.(contact);
+            return;
+        }
+
         const row = target.closest('[data-contact-key]');
         if (!row) return;
         onSelect({
@@ -30,6 +47,25 @@ export function bindContactsPanel({ onSelect, onFilter }) {
     });
 
     filter?.addEventListener('input', () => onFilter(filter.value.trim()));
+}
+
+/**
+ * Show that the list exists but cannot be read right now.
+ *
+ * Contacts are encrypted to the wallet identity, so a locked wallet genuinely
+ * has nothing to display: this is the honest state, not a placeholder.
+ */
+export function renderContactsLocked() {
+    const list = document.getElementById('dm-contacts-list');
+    const count = document.getElementById('dm-contacts-count');
+    if (count) count.textContent = '—';
+    if (!list) return;
+
+    list.textContent = '';
+    const locked = document.createElement('p');
+    locked.className = 'dm-contacts-empty';
+    locked.textContent = 'Trusted contacts are encrypted with your wallet identity. Unlock to see them.';
+    list.appendChild(locked);
 }
 
 /**
@@ -66,9 +102,12 @@ export function renderContacts(contacts, { isOnline = () => false, selectedKey =
  * @param {string} selectedKey
  */
 function renderContactRow(contact, online, selectedKey) {
-    const row = document.createElement('button');
-    row.type = 'button';
+    // A div rather than a button: the row now contains its own Rename and
+    // Remove buttons, and a button cannot legally nest buttons.
+    const row = document.createElement('div');
     row.className = `dm-contact${contact.nostrPublicKey === selectedKey ? ' is-selected' : ''}`;
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
     row.setAttribute('data-contact-key', contact.nostrPublicKey);
     row.setAttribute('data-contact-npub', contact.npub || '');
     row.setAttribute('data-contact-name', contact.name || '');
@@ -94,7 +133,41 @@ function renderContactRow(contact, online, selectedKey) {
     body.appendChild(identity);
     row.appendChild(dot);
     row.appendChild(body);
+    row.appendChild(renderContactActions(contact));
     return row;
+}
+
+/**
+ * Rename and Remove.
+ *
+ * Removing is a local authorization change only: the peer becomes unknown
+ * again and a future invitation from them needs approval. No key is deleted or
+ * rotated on either side.
+ *
+ * @param {any} contact
+ */
+function renderContactActions(contact) {
+    const actions = document.createElement('span');
+    actions.className = 'dm-contact-actions';
+
+    for (const [action, label, title] of [
+        ['rename', '✏️', 'Rename this contact'],
+        ['remove', '🗑️', 'Remove this contact. Future invitations from them will need approval again.']
+    ]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'dm-contact-action';
+        button.textContent = label;
+        button.title = title;
+        button.setAttribute('aria-label', title);
+        button.setAttribute('data-contact-action', action);
+        button.setAttribute('data-contact-key', contact.nostrPublicKey);
+        button.setAttribute('data-contact-npub', contact.npub || '');
+        button.setAttribute('data-contact-name', contact.name || '');
+        actions.appendChild(button);
+    }
+
+    return actions;
 }
 
 /**

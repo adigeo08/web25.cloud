@@ -99,19 +99,26 @@ magnet exchange and the raw ECIES key display were removed from this panel in
 favour of the address search.
 
 ```text
-A types B's npub into the search box (or picks B from contacts)
+A types B's npub into the search box (or picks B from trusted contacts)
       ↓
 address resolved locally; presence and profile looked up — neither connects
       ↓
 A clicks "Request chat"  →  gift-wrapped chat request to B. No SDP yet.
       ↓
-                     ...nothing further happens until...
+B's client verifies the gift wrap, then asks one more question:
+"is A a trusted contact of mine?"
       ↓
-B also selects A        →  gift-wrapped chat request to A
-      ↓
-INTENT IS MUTUAL — and only now may a handshake begin
-      ↓
-one side offers (deterministic: lower pubkey), the other answers
+ ┌────────────────┴─────────────────┐
+ A is a trusted friend        A is unknown
+      ↓                             ↓
+ answer immediately          pending invitation shown to B
+ (crypto checks still run)   nothing sent · no ICE gathered
+                                    ↓
+                             B presses Accept
+                                    ↓
+                             re-verify, answer, store A as a friend
+      ↓                             ↓
+ └────────────────┬─────────────────┘
       ↓
 NIP-59 gift wrap (kind 1059) carrying the Web25 invitation envelope
       ↓
@@ -123,13 +130,80 @@ both sides attempt the direct WebRTC connection
  Connected · WebRTC         Connected · Nostr
 ```
 
-### Presence is not consent
+### Cryptographic validity is not consent
+
+This is the sentence the whole layer exists for. Verifying a gift wrap proves
+the sender **is who they claim**. It does not establish that the local user
+**wants to talk to them** — and anyone who knows an npub can produce a perfectly
+valid offer addressed to it.
+
+Answering is not free. It reveals:
+
+```text
+the local full ECIES public key   -> a long-term identity key
+the local EVM address             -> the same identity, on-chain
+ICE candidates                    -> this machine's network addresses,
+                                     including local ones behind NAT
+```
+
+So an attacker who knew only a victim's npub could, in the old flow, send a
+valid offer and have the victim's browser gather ICE and answer automatically —
+learning their IP addresses without any interaction at all. That is the attack
+this layer closes.
+
+For a peer who is not an approved contact, `handleNostrInvitation()` does none
+of the following: it does not call `createAnswerPayloadFromRemoteOffer()`, so no
+`RTCPeerConnection` is created and **no ICE gathering happens**; it does not send
+an answer; it writes nothing to the contacts store. The invitation is parked in
+an in-memory queue and shown as a notification. The peer learns only that their
+gift wrap was published, which they already knew.
+
+The gate **fails closed**: when the contacts store cannot answer "is this a
+friend?" — most importantly while the wallet is locked — the peer is treated as
+unknown.
+
+### Authorization on top of authentication
+
+The contact layer never replaces a cryptographic check. Every existing
+verification still runs, for trusted and untrusted peers alike: NIP-59 unwrap,
+NIP-44 v2 decryption, Web25 bootstrap signature, recipient verification, TTL and
+expiry, session id, nonce and replay protection, and local Nostr event
+verification. Trust is one extra question asked *after* all of them.
+
+A trusted contact is also re-checked against the invitation it sent:
+
+```text
+Nostr pubkey  ==  x coordinate of the ECIES key
+EVM address   ==  keccak-derived from the same ECIES key
+both          ==  what the stored contact record says
+```
+
+A matching contact record alone is never enough. If the tuple does not validate,
+or disagrees with what was stored, the invitation is held for review like a
+stranger's — so somebody who takes over an npub cannot inherit the trust
+attached to it.
+
+### Accept and Decline
+
+**Accept** re-checks everything at the moment of the decision, because the
+invitation has been sitting in a queue since it arrived: the TTL is re-checked
+(a request that expired while the user thought about it is refused), and the
+identity bindings are re-verified. Only then is the answer created and sent, and
+only after that authenticated exchange is the peer persisted as a trusted
+friend.
+
+**Decline** discards the invitation and does exactly nothing else — no answer,
+no connection, no contact record. The peer is not notified, because notifying
+them would itself confirm that the npub is live and listening.
+
+### Presence is not consent either
 
 Presence and conversation are deliberately separate states:
 
 ```text
 presence  ->  "reachable right now"   public, coarse, says nothing about who
 intent    ->  "I want to talk to you" private, gift-wrapped, one peer
+consent   ->  "I will answer you"     local, explicit, never inferred
 ```
 
 Presence is a NIP-38 user status (kind 30315) under the `web25-dm` `d` tag, with
@@ -139,27 +213,57 @@ to announce leaving.
 
 Selecting a contact sends a **chat request** (a gift-wrapped rumor of kind
 `WEB25_CHAT_REQUEST_KIND`) and nothing else. It carries no SDP, no ICE and no
-ECIES key. A WebRTC offer is created only once requests exist in both
-directions, and an invitation arriving from somebody the local user has not
-selected is recorded as intent and left unanswered.
+ECIES key.
 
 Exactly one side offers, chosen by comparing the two Nostr public keys, because
-both reach the mutual state at the same moment and two simultaneous offers would
-leave nobody answering.
+both reach the connecting state at the same moment and two simultaneous offers
+would leave nobody answering.
 
-### Local contacts
+### Trusted contacts, and how they are protected
 
-Contacts live in their own IndexedDB database, `web25-contacts`, keyed by Nostr
-public key:
+Contacts live in their own IndexedDB database, `web25-contacts`, and are
+**encrypted at rest with the wallet's own Nostr identity** — NIP-44 v2 to self,
+through the existing narrowly scoped wallet-worker operations. There is no
+second password and no separate unlock path: the wallet/passkey protection the
+app already has is the protection here too.
+
+A decrypted record is:
 
 ```text
-{ nostrPublicKey, npub, evmAddress | null, name, createdAt, updatedAt }
+{ nostrPublicKey, npub, eciesPublicKey, evmAddress, name, trust,
+  createdAt, updatedAt }
 ```
+
+A stored row is not:
+
+```text
+{ id, ownerTag, ciphertext, createdAt, updatedAt }
+```
+
+`id` is `sha256(owner ‖ peer)` and `ownerTag` is `sha256(owner)`. Both are
+derived from public keys, so they leak nothing an npub does not — but they keep
+the *list itself* unreadable while locked: a row names neither party. Everything
+else, including the display name and the trust state, is inside the ciphertext.
+
+**No private key, PRF output, raw derived secret or equivalent is written here.**
+The only things persisted are ciphertext and timestamps.
+
+Consequences, all of them intended:
+
+- while the wallet is locked, the contact list cannot be read at all — the UI
+  says so rather than showing an empty list;
+- locking clears the decrypted list from main-thread state and drops any pending
+  invitations, so nothing survives in memory either;
+- unlocking again restores access to exactly the same contacts.
 
 The friendly name is the user's own label and is **never published** — attaching
 a human name to a public key on a relay would deanonymise the contact for
-everyone. The EVM address is filled in once an invitation has been verified, so
-a contact saved from a search legitimately has only the Nostr identity.
+everyone.
+
+The Friends list offers **open**, **rename** and **remove**. Removing is purely
+a local authorization change: the peer becomes unknown again, so their next
+invitation waits for approval like any stranger's. **No wallet or Nostr key is
+deleted or rotated** on either side.
 
 ### The address search
 

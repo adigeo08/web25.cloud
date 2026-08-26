@@ -921,10 +921,21 @@ footer {
 
 .dm-lede {
     max-width: 46rem;
-    margin: 0 0 1.5rem;
+    /* Left-aligned and visually secondary: this is orientation, not a hero. */
+    margin: 0 0 1.25rem;
     text-align: left;
-    opacity: 0.85;
-    line-height: 1.6;
+    opacity: 0.72;
+    font-size: 0.9rem;
+    line-height: 1.55;
+}
+
+.dm-lede p {
+    margin: 0 0 0.5rem;
+    text-align: left;
+}
+
+.dm-lede p:last-child {
+    margin-bottom: 0;
 }
 
 /* ── Direct Messenger: contacts sidebar ── */
@@ -3005,4 +3016,107 @@ select {
 
 #nosns-relay-status {
     margin-top: 0.4rem;
+}
+
+/* ── Direct Messenger: pending chat invitations ─────────────────────── */
+
+.dm-invitations {
+    margin-bottom: 1rem;
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.dm-invitations.hidden {
+    display: none;
+}
+
+.dm-invitations-hint {
+    margin: 0.35rem 0 0.6rem;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    opacity: 0.7;
+}
+
+.dm-invitations-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.dm-invite {
+    padding: 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.dm-invite-title {
+    margin: 0 0 0.2rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.dm-invite-npub,
+.dm-invite-evm {
+    margin: 0 0 0.15rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.68rem;
+    opacity: 0.72;
+    overflow-wrap: anywhere;
+}
+
+.dm-invite-meta {
+    margin: 0.3rem 0 0.55rem;
+    font-size: 0.7rem;
+}
+
+.dm-invite-trust.is-unknown {
+    color: var(--warn, #d9a441);
+}
+
+.dm-invite-trust.is-trusted {
+    color: var(--ok, #4bb543);
+}
+
+.dm-invite-trust.is-blocked {
+    color: var(--err, #d9534f);
+}
+
+.dm-invite-time {
+    opacity: 0.6;
+}
+
+.dm-invite-actions {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.dm-contact-actions {
+    display: inline-flex;
+    gap: 0.15rem;
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity 0.12s ease-in-out;
+}
+
+.dm-contact:hover .dm-contact-actions,
+.dm-contact:focus-within .dm-contact-actions {
+    opacity: 1;
+}
+
+.dm-contact-action {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0.1rem 0.2rem;
+    font-size: 0.8rem;
+    line-height: 1;
+    border-radius: 6px;
+    color: inherit;
+}
+
+.dm-contact-action:hover {
+    background: rgba(255, 255, 255, 0.08);
 }

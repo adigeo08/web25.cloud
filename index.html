@@ -449,8 +449,20 @@
 
                         <div class="dm-layout">
                         <aside class="dm-contacts" aria-label="Contacts">
+                            <section id="dm-invitations" class="dm-invitations hidden" aria-label="Chat invitations">
+                                <div class="dm-contacts-head">
+                                    <p class="dm-contacts-title">Chat invitations</p>
+                                    <span id="dm-invitations-count" class="dm-contacts-count">0</span>
+                                </div>
+                                <p class="dm-invitations-hint">
+                                    Nobody is connected yet. Accepting reveals your encryption key and network
+                                    address to them; declining sends nothing at all.
+                                </p>
+                                <div id="dm-invitations-list" class="dm-invitations-list"></div>
+                            </section>
+
                             <div class="dm-contacts-head">
-                                <p class="dm-contacts-title">Contacts</p>
+                                <p class="dm-contacts-title">Trusted contacts</p>
                                 <span id="dm-contacts-count" class="dm-contacts-count">0</span>
                             </div>
                             <input
@@ -470,13 +482,26 @@
                         <!-- SUB-PANEL 1: Find someone to message -->
                         <div id="dm-choose-role">
                             <h3>💬 Direct Messenger</h3>
-                            <p class="dm-lede">
-                                Enter someone's Nostr address to start an encrypted chat. The invitation is
-                                sent privately through Nostr, then your browsers try to connect directly over
-                                WebRTC. If that doesn't work, messages keep flowing through Nostr instead.
-                                Either way, invitations and messages are end-to-end encrypted — relays only
-                                ever carry sealed envelopes they can't read.
-                            </p>
+                            <div class="dm-lede">
+                                <p>
+                                    One key, one identity: your Nostr address, ECIES encryption key and EVM
+                                    address are cryptographically bound to each other, and an invitation that
+                                    does not prove all three is rejected.
+                                </p>
+                                <p>
+                                    Nostr is untrusted infrastructure here — signalling and fallback transport
+                                    only. Relays carry sealed envelopes they cannot read, and they are never a
+                                    source of authenticity.
+                                </p>
+                                <p>
+                                    An unknown peer never connects on its own: their invitation waits for you to
+                                    accept it. Trusted contacts can reconnect directly, without asking again.
+                                </p>
+                                <p>
+                                    Browsers connect over WebRTC when they can and fall back to Nostr when they
+                                    cannot. Messages are signed and end-to-end encrypted either way.
+                                </p>
+                            </div>
 
                             <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
                                 <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
@@ -679,11 +704,43 @@
                             <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
                             <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
                             <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
-                            <div class="feature">🤝 A chat opens only when both sides have asked</div>
+                            <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
                             <div class="feature">🪪 Peer verification from public key to EVM address</div>
                             <div class="feature">✍️ Per-message signatures verified on receive</div>
                             <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
                         </div>
+
+                        <br />
+                        <h4>Cryptographic validity is not consent</h4>
+                        <p>
+                            Verifying an invitation proves the sender <em>is who they claim</em>. It does not
+                            mean you want to talk to them — and anyone who knows your <code>npub</code> can
+                            produce a perfectly valid offer. Answering one is not free: it reveals your full
+                            ECIES public key, your EVM address, and, through ICE gathering, your machine's
+                            network addresses.
+                        </p>
+                        <p>
+                            So an invitation from anyone who is not already a trusted contact simply
+                            <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
+                            sent back until you press Accept. Declining discards it silently — the sender is
+                            not told, because telling them would confirm the address is live.
+                        </p>
+                        <div class="feature-grid">
+                            <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+                            <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
+                            <div class="feature">🚫 Decline sends nothing at all</div>
+                            <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
+                            <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
+                            <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
+                        </div>
+                        <p>
+                            Trust is authorization layered on top of authentication — it replaces none of the
+                            existing checks. A trusted friend's invitation is still verified end to end, and
+                            its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
+                            what was stored, so taking over an <code>npub</code> does not inherit the trust
+                            attached to it. Removing a contact is a local change only: they become unknown
+                            again, and no key is deleted or rotated on either side.
+                        </p>
                         <p>
                             WebRTC stays the preferred transport. If a direct connection cannot be
                             established, messages fall back to the relays — still signed and ECIES-encrypted

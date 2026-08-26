@@ -33,8 +33,8 @@ The UI is organized into:
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
-  - A chat opens only on mutual intent — seeing someone online never connects you
-  - Local contacts in IndexedDB, with presence shown per contact
+  - Unknown peers are never auto-answered — their invitation waits for you to accept
+  - Trusted contacts, encrypted with your wallet identity, reconnect directly
   - One connection indicator: `Connected · WebRTC` or `Connected · Nostr`, green either way
   - Identity-bound encrypted/signed message exchange
   - Nostr relay fallback when WebRTC cannot be established
@@ -262,24 +262,60 @@ NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
 
-### 8b) Presence, mutual intent and local contacts
+### 8b) Consent, trusted contacts and presence
 
-Seeing somebody online is not permission to call them, so presence and
-conversation are separate states:
+**A cryptographically valid offer is not consent.** Verifying a gift wrap proves
+the sender is who they claim; it says nothing about whether you want to talk to
+them, and anyone who knows your npub can produce a valid offer.
+
+Answering is not free — it reveals your full ECIES public key, your EVM address,
+and, through ICE gathering, your machine's network addresses. So an unknown peer
+is never auto-answered:
+
+- an invitation from anyone who is not an approved contact is **held**, and shown
+  in a notifications area with their npub, profile name (best-effort), EVM
+  address, trust state and timestamp
+- while it is held, `createAnswerPayloadFromRemoteOffer()` is not called, **no
+  ICE is gathered**, no answer is sent and nothing is written to the contacts
+  store
+- **Accept** re-checks validity, expiry and the identity bindings, creates the
+  answer, sends it over Nostr, and only then persists the peer as a trusted
+  friend
+- **Decline** discards the invitation: no answer, no connection, no contact. The
+  peer is not notified, because that would confirm the npub is live
+- the gate **fails closed** — when trust cannot be determined (a locked wallet,
+  say), the peer is unknown
+
+Trusted friends reconnect directly without asking again, but every existing
+cryptographic check still runs, plus one more: the invitation's identity tuple
+(Nostr pubkey ↔ ECIES key ↔ EVM address) must validate *and* match the stored
+record. A matching contact record alone is never authorization, so somebody who
+takes over an npub does not inherit the trust attached to it. Authorization sits
+on top of authentication; it replaces none of it.
+
+**Contacts are wallet-protected.** Records are encrypted at rest with your own
+Nostr identity (NIP-44 v2 to self, through the existing wallet-worker
+operations) — the same passkey/wallet protection the app already uses, not a
+second password. IndexedDB holds `{ id, ownerTag, ciphertext, … }` and nothing
+else: no peer key, no EVM address, no display name. **No private key, PRF output
+or derived secret is persisted.** A locked wallet cannot read the list at all,
+locking clears it from memory, and unlocking restores it.
+
+The Friends list offers open, rename and remove. Removing is a local
+authorization change only — the peer is unknown again and their next invitation
+needs approval; **no key is deleted or rotated** on either side.
+
+Presence is a separate state again:
 
 ```text
 presence  ->  "reachable right now"   public, coarse, NIP-38 beacon
 intent    ->  "I want to talk to you" private, gift-wrapped, one peer
+consent   ->  "I will answer you"     local, explicit, never inferred
 ```
 
-- selecting a contact or a search result sends a **chat request** only — it
-  carries no SDP and starts no handshake
-- a WebRTC offer is created solely once intent is **mutual**, and exactly one
-  side offers (chosen deterministically, so the two never glare)
-- an invitation from somebody you have not selected is held as intent, never
-  answered
-- contacts live in their own IndexedDB database with a friendly name you choose;
-  names are local-only and never published
+Selecting a contact or a search result sends a chat request only — no SDP, no
+ICE, no handshake. Exactly one side offers, chosen deterministically so the two
+never glare.
 
 ---
 
