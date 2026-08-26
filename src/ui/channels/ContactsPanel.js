@@ -46,6 +46,20 @@ export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
         });
     });
 
+    // <div role="button"> needs explicit keyboard activation.
+    list?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const target = /** @type {HTMLElement} */ (event.target);
+        const row = target.closest('[data-contact-key]');
+        if (!row) return;
+        event.preventDefault();
+        onSelect({
+            nostrPublicKey: row.getAttribute('data-contact-key') || '',
+            npub: row.getAttribute('data-contact-npub') || '',
+            name: row.getAttribute('data-contact-name') || ''
+        });
+    });
+
     filter?.addEventListener('input', () => onFilter(filter.value.trim()));
 }
 
