@@ -27,13 +27,15 @@ The UI is organized into:
   - Seed signed output
 - **Browse / Load**
   - Existing torrent hash loading flow remains available
-  - Separate **Search WEB25 Registry** mode querying Nostr/DTAN for published sites
+  - Separate **Search NosNS** mode querying DTAN by category for published sites
   - Search by site name, infohash, EVM publisher address or `npub`
   - Each result shows its publisher verification state; **Open** reuses the same hash loader
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
-  - Transport state shown plainly: `P2P · WebRTC` or `Relay fallback · Nostr`
+  - Unknown peers are never auto-answered — their invitation waits for you to accept
+  - Trusted contacts, encrypted with your wallet identity, reconnect directly
+  - One connection indicator: `Connected · WebRTC` or `Connected · Nostr`, green either way
   - Identity-bound encrypted/signed message exchange
   - Nostr relay fallback when WebRTC cannot be established
 
@@ -260,42 +262,123 @@ NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
 
-### 9) Public WEB25 website registry (NIP-35 / DTAN)
+### 8b) Consent, trusted contacts and presence
+
+**A cryptographically valid offer is not consent.** Verifying a gift wrap proves
+the sender is who they claim; it says nothing about whether you want to talk to
+them, and anyone who knows your npub can produce a valid offer.
+
+Answering is not free — it reveals your full ECIES public key, your EVM address,
+and, through ICE gathering, your machine's network addresses. So an unknown peer
+is never auto-answered:
+
+- an invitation from anyone who is not an approved contact is **held**, and shown
+  in a notifications area with their npub, profile name (best-effort), EVM
+  address, trust state and timestamp
+- while it is held, `createAnswerPayloadFromRemoteOffer()` is not called, **no
+  ICE is gathered**, no answer is sent and nothing is written to the contacts
+  store
+- **Accept** re-checks validity, expiry and the identity bindings, creates the
+  answer, sends it over Nostr, and only then persists the peer as a trusted
+  friend
+- **Decline** discards the invitation: no answer, no connection, no contact. The
+  peer is not notified, because that would confirm the npub is live
+- the gate **fails closed** — when trust cannot be determined (a locked wallet,
+  say), the peer is unknown
+
+Trusted friends reconnect directly without asking again, but every existing
+cryptographic check still runs, plus one more: the invitation's identity tuple
+(Nostr pubkey ↔ ECIES key ↔ EVM address) must validate *and* match the stored
+record. A matching contact record alone is never authorization, so somebody who
+takes over an npub does not inherit the trust attached to it. Authorization sits
+on top of authentication; it replaces none of it.
+
+**Contacts are wallet-protected.** Records are encrypted at rest with your own
+Nostr identity (NIP-44 v2 to self, through the existing wallet-worker
+operations) — the same passkey/wallet protection the app already uses, not a
+second password. IndexedDB holds `{ id, ownerTag, ciphertext, … }` and nothing
+else: no peer key, no EVM address, no display name. **No private key, PRF output
+or derived secret is persisted.** A locked wallet cannot read the list at all,
+locking clears it from memory, and unlocking restores it.
+
+The Friends list offers open, rename and remove. Removing is a local
+authorization change only — the peer is unknown again and their next invitation
+needs approval; **no key is deleted or rotated** on either side.
+
+Presence is a separate state again:
+
+```text
+presence  ->  "reachable right now"   public, coarse, NIP-38 beacon
+intent    ->  "I want to talk to you" private, gift-wrapped, one peer
+consent   ->  "I will answer you"     local, explicit, never inferred
+```
+
+Selecting a contact or a search result sends a chat request only — no SDP, no
+ICE, no handshake. Exactly one side offers, chosen deterministically so the two
+never glare.
+
+---
+
+### 9) NosNS — the public website directory over DTAN (NIP-35 kind 2003)
 
 A second, separate Nostr use case. Every deployed website can also be published
 as a public NIP-35 torrent event, so WEB25 sites become discoverable:
 
 ```text
 Direct Messenger  ->  private signalling + encrypted fallback (NIP-17/44/59)
-Registry          ->  public website discovery (NIP-35 kind 2003)
+NosNS             ->  public website discovery (NIP-35 kind 2003, via DTAN)
 ```
 
-- category is exactly `tcat:web25.cloud,websites` (`WEB25.cloud / Websites`)
+NosNS — the Nostr Name System — is a deliberately tiny convention:
+
+```text
+  NIP-35 kind 2003
++ one official DTAN category chosen by the publisher
++ wss://relay.dtan.xyz as the only directory relay
++ a torrent name ending exactly in ".nosns.torrent"
+```
+
+- **the suffix is the whole protocol.** No custom event kind, no custom
+  category, no `web25:website` marker, no `["t","nosns"]` hashtag. The check is
+  `title.endsWith('.nosns.torrent')`, and the suffix is the real BitTorrent
+  `info.name`, not a renamed download
+- the category is a **real DTAN category you choose** (`Applications`,
+  `Other / Archives`, `Video / Movies / 4k`, …), defaulting to
+  `tcat:application`, so entries are browsable in the actual DTAN index. The
+  taxonomy is mirrored as frontend config, so the picker works even when the
+  relay is down
 - the event carries the final BitTorrent infohash, the real torrent entries and
   the real tracker list
 - the existing `.torrentchain` EVM proof is mirrored into the event, so a
-  browser can show `Verified publisher: 0x...` before downloading
+  browser can show `Verified publisher: 0x...` before downloading. Discovery
+  does not *depend* on it: a suffix-only entry lists as `unverified`
 - **no second EVM signature**: the site was already signed when
-  `.torrentchain` was created; only a Nostr signature is added
-- registry relays default to `wss://relay.dtan.xyz` plus the generic relays;
-  no single relay is authoritative
-- registry publication never blocks or invalidates a deployment, and a retry
-  resubmits the identical signed event (same id, `created_at` and signature)
+  `.torrentchain` was created; only a Nostr signature is added, and choosing a
+  category changes nothing that was signed
+- entries go **only** to `wss://relay.dtan.xyz`; the general relays carry
+  private DM traffic and never receive a public website listing
+- publication never blocks or invalidates a deployment, and a retry resubmits
+  the identical signed event (same id, `created_at`, title, category, signature)
 
-**Publishing** (Deploy tab). The registry step runs after the site is already
-live and seeding, and the two outcomes are reported separately — `Deployment:
-Live / Seeding` next to `Registry: Published to 3 / 4 relays`, or
-`Registry: Not published · Retry`. The deploy wizard names which key signs what
-(`Sign .torrentchain · EVM`, then `Sign & publish registry · Nostr`), and
+**Publishing** (Deploy tab). Pick a DTAN category, then deploy. The NosNS step
+runs after the site is already live and seeding, and the two outcomes are
+reported separately — `Deployment: Live / Seeding` next to `NosNS: Published to
+1 / 1 relays`, or `NosNS: Not published · Retry`. A chip reports the directory
+relay itself (`NosNS Directory relay.dtan.xyz · Connected` / `· Unreachable`),
+kept distinct from category loading. The deploy wizard names which key signs
+what (`Sign .torrentchain · EVM`, then `Publish to NosNS · Nostr`), and
 *View technical details* breaks the artifact into six sections: WEB25 bundle,
-`.torrentchain` payload, EVM signature, torrent artifact, NIP-35 registry event,
-and per-relay publication results.
+`.torrentchain` payload, EVM signature, torrent artifact, NIP-35 NosNS event,
+and the publication result.
 
-**Discovery** (Browse tab). *Search WEB25 Registry* queries `kind: 2003` events
-carrying `tcat:web25.cloud,websites` and nothing else. You can search the
-results by site name, infohash, EVM publisher address, or `npub` / Nostr
-pubkey. Each row shows the site name, EVM publisher, Nostr identity, publish
-date, infohash and a verification state:
+**Discovery** (Browse tab). *Search NosNS* asks the relay for `kind: 2003` in
+one DTAN category (`{"kinds":[2003],"#i":["tcat:application"]}`) — never the
+whole index — keeps only titles ending in `.nosns.torrent`, and filters the
+results locally. There is deliberately **no NIP-50 dependency**. You can search
+by site name, infohash, EVM publisher address, or `npub` / Nostr pubkey; results
+are cached per category. Each row shows the site name (suffix stripped for
+display), EVM publisher, Nostr identity, publish date, infohash and a
+verification state:
 
 | State | Meaning |
 | --- | --- |
@@ -305,9 +388,9 @@ date, infohash and a verification state:
 | `unverified` | there is no WEB25 proof to check |
 
 A valid Nostr signature alone never means `verified` — that only says who wrote
-the registry entry. **Open** hands the infohash to the existing loader, so there
+the directory entry. **Open** hands the infohash to the existing loader, so there
 is one website loading implementation and the `.torrentchain` render gate is
-unchanged. Registry availability never affects loading by hash.
+unchanged. NosNS availability never affects loading by hash.
 
 Trust model:
 
@@ -316,15 +399,15 @@ DTAN / Nostr        -> tells users that a website exists
 BitTorrent infohash -> identifies the distributed artifact
 .torrentchain       -> proves the contents and the publisher
 EVM signature       -> proves the WEB25 publisher identity
-Nostr signature     -> proves who published the registry entry
+Nostr signature     -> proves who published the directory entry
 ```
 
-Registry metadata is an early signal only. The final load path is unchanged:
+Directory metadata is an early signal only. The final load path is unchanged:
 download, read `.torrentchain`, verify the EVM signature and bundle hash, then
-render in the sandbox. When a site is opened from a registry result, the claim is
+render in the sandbox. When a site is opened from a NosNS result, the claim is
 additionally compared against the manifest that actually arrived; any
-disagreement is surfaced and the registry claim is withdrawn, because the
-downloaded manifest always wins. See `docs/web25-nostr-registry.md`.
+disagreement is surfaced and the directory claim is withdrawn, because the
+downloaded manifest always wins. See `docs/nosns-over-dtan.md`.
 
 ---
 
@@ -368,9 +451,10 @@ src/
 │   ├── NostrDirectMessageBootstrap.js
 │   ├── NostrDirectMessageSession.js
 │   └── ecies.js
-├── registry/
-│   ├── Web25RegistryEvent.js
-│   └── Web25RegistryService.js
+├── nosns/
+│   ├── NosNSProtocol.js
+│   ├── NosNSEvent.js
+│   └── NosNSService.js
 ├── nostr/
 │   ├── NostrIdentityPreference.js
 │   ├── NostrProfileLookup.js
@@ -459,7 +543,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - STUN: `stun:stun.l.google.com:19302`
 - Nostr relays (configurable in `src/config/nostr.config.js`):
   - Direct Messenger: `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
-  - Website registry: `wss://relay.dtan.xyz` plus the relays above
+  - NosNS directory: `wss://relay.dtan.xyz` only — the two lists are disjoint
 
 ---
 

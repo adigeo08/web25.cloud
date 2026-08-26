@@ -25,18 +25,11 @@ export const DEFAULT_NOSTR_RELAYS = Object.freeze([
 export const DEFAULT_NOSTR_DM_RELAYS = DEFAULT_NOSTR_RELAYS;
 
 /**
- * Relays used for the public WEB25 website registry (NIP-35 kind 2003).
- *
- * `relay.dtan.xyz` is the specialised torrent-index relay this registry targets
- * first; the generic relays follow for redundancy so a DTAN outage cannot make
- * a published site undiscoverable. The two purposes are kept in separate pools
- * even though they share the same relay client: registry events are public, DM
- * events are not, and nothing should ever cross between them.
+ * The NosNS directory relay list lives in `src/nosns/NosNSProtocol.js`, next to
+ * the rest of the convention it belongs to. It is deliberately not re-exported
+ * here: NosNS publishes to exactly one relay, and a second name for that list
+ * is a second place for it to drift.
  */
-export const DEFAULT_NOSTR_REGISTRY_RELAYS = Object.freeze([
-    'wss://relay.dtan.xyz',
-    ...DEFAULT_NOSTR_RELAYS
-]);
 
 export const NOSTR_CONFIG = Object.freeze({
     /** Per-relay socket open timeout. */
@@ -60,6 +53,27 @@ export const NOSTR_CONFIG = Object.freeze({
 
     /** Kind of the NIP-59 rumor carrying a Web25 WebRTC invitation. */
     WEB25_SIGNALING_KIND: 25510,
+    /**
+     * Kind of the NIP-59 rumor carrying a chat request — "I would like to talk
+     * to you". Private and gift-wrapped like everything else in the DM path,
+     * and deliberately separate from the invitation: intent carries no SDP.
+     */
+    WEB25_CHAT_REQUEST_KIND: 25511,
+
+    /**
+     * NIP-38 user status, used as a presence beacon. Addressable, so a peer can
+     * be asked "are you around?" without both sides being subscribed at the
+     * same moment.
+     */
+    PRESENCE_KIND: 30315,
+    /** `d` tag namespacing our presence away from a user's general status. */
+    PRESENCE_IDENTIFIER: 'web25-dm',
+    /** Presence is republished on this interval while the messenger is open. */
+    PRESENCE_REPUBLISH_MS: 60 * 1000,
+    /** A presence beacon older than this is treated as offline. */
+    PRESENCE_TTL_MS: 3 * 60 * 1000,
+    /** A chat request older than this no longer counts towards mutual intent. */
+    CHAT_REQUEST_TTL_MS: 30 * 60 * 1000,
     /** NIP-17 private chat message kind, used for the encrypted relay fallback. */
     NIP17_CHAT_KIND: 14,
 
@@ -85,18 +99,17 @@ export const NOSTR_CONFIG = Object.freeze({
  * artifact, and the `.torrentchain` inside it remains the authority on contents
  * and publisher. Nothing here is ever trusted over a downloaded manifest.
  */
-export const NOSTR_REGISTRY_CONFIG = Object.freeze({
+export const NOSNS_CONFIG = Object.freeze({
     /** NIP-35 torrent event. */
     TORRENT_EVENT_KIND: 2003,
 
     /**
-     * The WEB25 website category, as a NIP-35 `i` tag.
-     * Namespace `web25.cloud`, category `websites`.
+     * NosNS identification is the torrent name suffix and nothing else — see
+     * `NOSNS_TORRENT_SUFFIX` in `src/nosns/NosNSProtocol.js`. There is no NosNS
+     * category, marker tag or hashtag: the category on an entry is a real DTAN
+     * category chosen by the publisher, so the entry stays a first-class DTAN
+     * torrent rather than a WEB25-only record parked in the DTAN index.
      */
-    WEB25_CATEGORY: 'tcat:web25.cloud,websites',
-
-    /** Generic hashtags added alongside the category. */
-    WEB25_HASHTAGS: Object.freeze(['web25', 'website', 'static-site']),
 
     /** Namespaced tags mirroring the `.torrentchain` proof into the event. */
     PROOF_TAGS: Object.freeze({
@@ -115,7 +128,7 @@ export const NOSTR_REGISTRY_CONFIG = Object.freeze({
     QUERY_TIMEOUT_MS: 6000,
     /** Cap on results held from one query. */
     QUERY_LIMIT: 100,
-    /** How far back a registry query looks. */
+    /** How far back a NosNS query looks. */
     QUERY_LOOKBACK_SECONDS: 365 * 24 * 60 * 60,
     /** Hard cap on the mirrored signed message, so one event cannot be huge. */
     MAX_PROOF_MESSAGE_BYTES: 8192,

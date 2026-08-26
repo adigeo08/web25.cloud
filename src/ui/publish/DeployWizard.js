@@ -26,13 +26,9 @@ let techDetails = null;
  * Call once after DOM is ready.
  */
 export function initDeployWizard() {
-    stepChips = /** @type {NodeListOf<HTMLElement>} */ (
-        document.querySelectorAll('#tab-publish .step-chip')
-    );
+    stepChips = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#tab-publish .step-chip'));
     wizardNextEl = document.getElementById('deploy-wizard-next');
-    techDetails = /** @type {HTMLDetailsElement | null} */ (
-        document.getElementById('deploy-tech-details')
-    );
+    techDetails = /** @type {HTMLDetailsElement | null} */ (document.getElementById('deploy-tech-details'));
 }
 
 /**
@@ -47,10 +43,10 @@ export function updateDeployWizard(state) {
 
     // Determine active step (1-based, matching the 7 step chips)
     // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign (EVM/.torrentchain)
-    // 5 – Deploy  6 – Live and seeding  7 – Publish to the WEB25 registry
-    // `skipped` means no registry event was ever created (a locked wallet, say):
+    // 5 – Deploy  6 – Live and seeding  7 – Publish to NosNS
+    // `skipped` means no NosNS event was ever created (a locked wallet, say):
     // nothing is in progress and there is nothing to retry, so the wizard should
-    // not advance onto — or highlight — the registry step.
+    // not advance onto — or highlight — the NosNS step.
     const registryStarted = registryState !== 'idle' && registryState !== 'skipped';
     let activeStep;
     if (hasDeployResult && registryStarted) {
@@ -81,7 +77,7 @@ export function updateDeployWizard(state) {
         }
     });
 
-    // The registry step is the only one that can complete *and* fail without
+    // The NosNS step is the only one that can complete *and* fail without
     // invalidating the deployment, so it gets its own visual state.
     if (stepChips.length >= 7) {
         const registryChip = stepChips[6];
@@ -101,11 +97,11 @@ export function updateDeployWizard(state) {
     if (wizardNextEl) {
         let nextText;
         if (hasDeployResult && registryState === 'published') {
-            nextText = '🎉 Live and seeding, and listed in the WEB25 registry — share the link below!';
+            nextText = '🎉 Live and seeding, and listed in the NosNS directory — share the link below!';
         } else if (hasDeployResult && registryState === 'failed') {
-            nextText = '🎉 Live and seeding. The registry entry did not publish — you can retry it below.';
+            nextText = '🎉 Live and seeding. The NosNS entry did not publish — you can retry it below.';
         } else if (hasDeployResult && registryState === 'skipped') {
-            nextText = '🎉 Your site is live and seeding. No registry entry was created for it.';
+            nextText = '🎉 Your site is live and seeding. No NosNS entry was created for it.';
         } else if (hasDeployResult) {
             nextText = '🎉 Your site is live and seeding — share the link below!';
         } else if (hasFiles && hasSignature) {

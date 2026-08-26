@@ -39,7 +39,9 @@ const ANSWER_DESC = { type: 'answer', sdp: 'mock-answer-sdp' };
 // ─── Helper: build a mock manifest that appears to have verified the given publisher
 async function makeMockManifest(publisherAddress, envelopeBuffer) {
     const digest = await crypto.subtle.digest('SHA-256', envelopeBuffer);
-    const sha256 = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const sha256 = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
     return {
         payload: { publisher: publisherAddress },
         signature: 'mock-sig-not-real',
@@ -135,7 +137,10 @@ test('createEncryptedDMBootstrapArtifact produces an encrypted offer only the in
     // SDP and sessionId must NOT appear in plaintext envelope
     const envelopeJson = new TextDecoder().decode(artifact.envelopeBytes);
     assert.ok(!envelopeJson.includes('mock-offer-sdp'), 'SDP must not be in plaintext envelope');
-    assert.ok(!envelopeJson.includes(artifact.innerPayload.session.sessionId), 'sessionId must not be in plaintext envelope');
+    assert.ok(
+        !envelopeJson.includes(artifact.innerPayload.session.sessionId),
+        'sessionId must not be in plaintext envelope'
+    );
 
     // Inner payload is accessible after decryption
     assert.equal(artifact.innerPayload.from.evmAddress, HOST_ADDR);
@@ -161,13 +166,14 @@ test('a different private key cannot decrypt the offer', async () => {
 
     // Third party trying to decrypt
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: artifact.envelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(THIRD_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: artifact.envelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(THIRD_PRIV)
+            }),
         /decrypt/i
     );
 });
@@ -176,13 +182,14 @@ test('a missing wallet decryption handle is rejected with a clear error', async 
     const artifact = await makeHostOffer();
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: artifact.envelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: null
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: artifact.envelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: null
+            }),
         /wallet decryption handle is required/i
     );
 });
@@ -237,14 +244,15 @@ test('answer with wrong replyToSessionId is rejected', async () => {
     });
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: answerArtifact.envelope,
-            envelopeBuffer: answerArtifact.envelopeBytes,
-            verifiedPublisher: GUEST_ADDR,
-            localAddress: HOST_ADDR,
-            decryptFn: decryptorFor(HOST_PRIV),
-            expectedReplyToSessionId: 'different-session-id-00000000'
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: answerArtifact.envelope,
+                envelopeBuffer: answerArtifact.envelopeBytes,
+                verifiedPublisher: GUEST_ADDR,
+                localAddress: HOST_ADDR,
+                decryptFn: decryptorFor(HOST_PRIV),
+                expectedReplyToSessionId: 'different-session-id-00000000'
+            }),
         /expected offer session/i
     );
 });
@@ -259,8 +267,14 @@ test('containerKey is absent from the v2 protocol envelope and inner payload', a
     assert.ok(!('containerKey' in (artifact.envelope.session || {})), 'containerKey must not be in envelope.session');
 
     // Not in inner payload
-    assert.ok(!('containerKey' in (artifact.innerPayload.session || {})), 'containerKey must not be in innerPayload.session');
-    assert.ok(!('replyToContainerKey' in (artifact.innerPayload.session || {})), 'replyToContainerKey must not be in innerPayload.session');
+    assert.ok(
+        !('containerKey' in (artifact.innerPayload.session || {})),
+        'containerKey must not be in innerPayload.session'
+    );
+    assert.ok(
+        !('replyToContainerKey' in (artifact.innerPayload.session || {})),
+        'replyToContainerKey must not be in innerPayload.session'
+    );
 
     // Not in serialized bytes
     const envelopeJson = new TextDecoder().decode(artifact.envelopeBytes);
@@ -280,26 +294,28 @@ test('decryptAndVerifyDMBootstrapArtifact does not check or require containerKey
 
 test('malformed recipient public key is rejected at creation time', async () => {
     await assert.rejects(
-        () => createEncryptedDMBootstrapArtifact({
-            identity: { address: HOST_ADDR },
-            eciesPublicKey: HOST_PUB,
-            role: 'offer',
-            webrtcDescription: OFFER_DESC,
-            recipientPublicKey: 'not-a-valid-key'
-        }),
+        () =>
+            createEncryptedDMBootstrapArtifact({
+                identity: { address: HOST_ADDR },
+                eciesPublicKey: HOST_PUB,
+                role: 'offer',
+                webrtcDescription: OFFER_DESC,
+                recipientPublicKey: 'not-a-valid-key'
+            }),
         /public key must be/i
     );
 });
 
 test('empty recipient public key is rejected', async () => {
     await assert.rejects(
-        () => createEncryptedDMBootstrapArtifact({
-            identity: { address: HOST_ADDR },
-            eciesPublicKey: HOST_PUB,
-            role: 'offer',
-            webrtcDescription: OFFER_DESC,
-            recipientPublicKey: ''
-        }),
+        () =>
+            createEncryptedDMBootstrapArtifact({
+                identity: { address: HOST_ADDR },
+                eciesPublicKey: HOST_PUB,
+                role: 'offer',
+                webrtcDescription: OFFER_DESC,
+                recipientPublicKey: ''
+            }),
         /public key is required/i
     );
 });
@@ -316,13 +332,14 @@ test('expired bootstrap is rejected', async () => {
     };
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: expiredEnvelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: expiredEnvelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /expired/i
     );
 });
@@ -338,13 +355,14 @@ test('bootstrap with future creation time exceeding skew is rejected', async () 
     };
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: futureEnvelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: futureEnvelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /too far in the future/i
     );
 });
@@ -354,13 +372,14 @@ test('publisher/sender mismatch is rejected', async () => {
 
     // verifiedPublisher claims to be GUEST but envelope.from is HOST
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: artifact.envelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: GUEST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: artifact.envelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: GUEST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /publisher does not match/i
     );
 });
@@ -370,13 +389,14 @@ test('wrong recipient is rejected (envelope.to does not match localAddress)', as
 
     // THIRD party trying to accept an offer addressed to GUEST
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: artifact.envelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: THIRD_ADDR,
-            decryptFn: decryptorFor(THIRD_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: artifact.envelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: THIRD_ADDR,
+                decryptFn: decryptorFor(THIRD_PRIV)
+            }),
         /recipient does not match/i
     );
 });
@@ -393,13 +413,14 @@ test('tampered ciphertext (corrupted bytes) is rejected', async () => {
     };
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: tamperedEnvelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: tamperedEnvelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /decrypt/i
     );
 });
@@ -416,13 +437,14 @@ test('unsupported encryption algorithm is rejected', async () => {
     };
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: badAlgEnvelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: badAlgEnvelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /unsupported encryption algorithm/i
     );
 });
@@ -434,18 +456,25 @@ test('v1 bootstrap type is rejected with a migration message', async () => {
         role: 'offer',
         from: { evmAddress: HOST_ADDR, eciesPublicKey: HOST_PUB },
         to: { evmAddress: GUEST_ADDR },
-        session: { sessionId: 'aabbccdd00112233', containerKey: 'x'.repeat(64), createdAt: Date.now(), expiresAt: Date.now() + 900000, nonce: 'abc' },
+        session: {
+            sessionId: 'aabbccdd00112233',
+            containerKey: 'x'.repeat(64),
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 900000,
+            nonce: 'abc'
+        },
         webrtc: { description: OFFER_DESC }
     };
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: legacyEnvelope,
-            envelopeBuffer: new TextEncoder().encode(JSON.stringify(legacyEnvelope)),
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: legacyEnvelope,
+                envelopeBuffer: new TextEncoder().encode(JSON.stringify(legacyEnvelope)),
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /v1.*no longer supported|legacy/i
     );
 });
@@ -455,13 +484,14 @@ test('unknown/future version is rejected', async () => {
     const futureEnvelope = { ...artifact.envelope, version: 99 };
 
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: futureEnvelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: futureEnvelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /unsupported bootstrap version/i
     );
 });
@@ -479,13 +509,14 @@ test('inner sender mismatch (decrypted from.evmAddress ≠ envelope from.evmAddr
     // but the tampered envelope claims it's from THIRD.
     // After decryption, inner.from.evmAddress === HOST_ADDR which !== THIRD_ADDR.
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: tamperedEnvelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: THIRD_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: tamperedEnvelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: THIRD_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /inner payload sender does not match/i
     );
 });
@@ -514,14 +545,15 @@ test('verifyDirectMessageTorrentchain rejects when torrentchain signature is inv
 
     const failingVerify = () => Promise.resolve({ verified: false, reason: 'bad-sig' });
     await assert.rejects(
-        () => verifyDirectMessageTorrentchain({
-            manifest: {},
-            envelope: artifact.envelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV),
-            _verifyManifestFn: failingVerify
-        }),
+        () =>
+            verifyDirectMessageTorrentchain({
+                manifest: {},
+                envelope: artifact.envelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV),
+                _verifyManifestFn: failingVerify
+            }),
         /invalid .torrentchain signature/i
     );
 });
@@ -555,9 +587,12 @@ test('createDirectMessageBootstrapTorrent + loadDirectMessageBootstrapFromMagnet
             // Capture the dm-bootstrap.json file bytes
             const bootstrapFile = files.find((f) => f.name === 'dm-bootstrap.json');
             if (bootstrapFile) {
-                bootstrapFile.arrayBuffer().then((buf) => {
-                    capturedEnvelopeBytes = new Uint8Array(buf);
-                }).catch(() => {});
+                bootstrapFile
+                    .arrayBuffer()
+                    .then((buf) => {
+                        capturedEnvelopeBytes = new Uint8Array(buf);
+                    })
+                    .catch(() => {});
             }
             client.seed(files, options, callback);
         },
@@ -585,13 +620,17 @@ test('createDirectMessageBootstrapTorrent + loadDirectMessageBootstrapFromMagnet
     const mockManifest = {
         payload: { publisher: HOST_ADDR },
         signature: 'mock',
-        files: [{
-            path: 'dm-bootstrap.json',
-            sha256: await (async () => {
-                const digest = await crypto.subtle.digest('SHA-256', offerArtifact.envelopeBytes);
-                return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
-            })()
-        }]
+        files: [
+            {
+                path: 'dm-bootstrap.json',
+                sha256: await (async () => {
+                    const digest = await crypto.subtle.digest('SHA-256', offerArtifact.envelopeBytes);
+                    return Array.from(new Uint8Array(digest))
+                        .map((b) => b.toString(16).padStart(2, '0'))
+                        .join('');
+                })()
+            }
+        ]
     };
 
     // Store torrent in mock client
@@ -604,16 +643,22 @@ test('createDirectMessageBootstrapTorrent + loadDirectMessageBootstrapFromMagnet
             {
                 name: '.torrentchain',
                 getBuffer: (cb) =>
-                    chainFile.arrayBuffer().then((buf) => {
-                        // Return a buffer with the actual mock manifest
-                        const manifestBytes = new TextEncoder().encode(JSON.stringify(mockManifest));
-                        cb(null, Buffer.from(manifestBytes));
-                    }).catch(cb)
+                    chainFile
+                        .arrayBuffer()
+                        .then((buf) => {
+                            // Return a buffer with the actual mock manifest
+                            const manifestBytes = new TextEncoder().encode(JSON.stringify(mockManifest));
+                            cb(null, Buffer.from(manifestBytes));
+                        })
+                        .catch(cb)
             },
             {
                 name: 'dm-bootstrap.json',
                 getBuffer: (cb) =>
-                    envelopeFile.arrayBuffer().then((buf) => cb(null, Buffer.from(buf))).catch(cb)
+                    envelopeFile
+                        .arrayBuffer()
+                        .then((buf) => cb(null, Buffer.from(buf)))
+                        .catch(cb)
             }
         ]
     });
@@ -657,13 +702,14 @@ test('replay of the same bootstrap nonce/session is rejected', async () => {
 
     // Same artifact again — should be rejected as replay
     await assert.rejects(
-        () => decryptAndVerifyDMBootstrapArtifact({
-            envelope: artifact.envelope,
-            envelopeBuffer: artifact.envelopeBytes,
-            verifiedPublisher: HOST_ADDR,
-            localAddress: GUEST_ADDR,
-            decryptFn: decryptorFor(GUEST_PRIV)
-        }),
+        () =>
+            decryptAndVerifyDMBootstrapArtifact({
+                envelope: artifact.envelope,
+                envelopeBuffer: artifact.envelopeBytes,
+                verifiedPublisher: HOST_ADDR,
+                localAddress: GUEST_ADDR,
+                decryptFn: decryptorFor(GUEST_PRIV)
+            }),
         /replay/i
     );
 });

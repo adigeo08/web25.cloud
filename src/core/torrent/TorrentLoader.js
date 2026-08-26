@@ -3,8 +3,12 @@
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
 import { verifyTorrentChainManifest } from '../../torrent/TorrentChainProtocol.js';
-import { matchesDownloadedManifest } from '../../registry/Web25RegistryEvent.js';
-import { decodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
+import { matchesDownloadedManifest } from '../../nosns/NosNSEvent.js';
+import {
+    decodeSiteBundleGzip,
+    SITE_BUNDLE_FILE_NAME,
+    supportsNativeGzipStreams
+} from '../../torrent/SiteBundleCodec.js';
 import { SIGNATURE_STATE_VERIFICATION_VERSION } from '../cache/SignatureStateVersion.js';
 import { evaluateRenderGate } from '../../torrent/RenderGate.js';
 
@@ -81,7 +85,9 @@ export async function loadSite(hash, _retryAttempt = 0) {
         .filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl))
         .map((trackerUrl) => encodeURIComponent(trackerUrl));
     if (trackerList.length === 0) {
-        this.log('[TorrentLoader] WARN: No browser-friendly trackers in magnet URI; fallback will rely on DHT/local peers');
+        this.log(
+            '[TorrentLoader] WARN: No browser-friendly trackers in magnet URI; fallback will rely on DHT/local peers'
+        );
     }
     const trackerQuery = trackerList.length > 0 ? `&tr=${trackerList.join('&tr=')}` : '';
     const magnetURI = `magnet:?xt=urn:btih:${sanitizedHash}${trackerQuery}`;
@@ -192,9 +198,15 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     magnetURI,
                     expectedSize: torrent.length || null
                 });
-                if (!this.processingInProgress && this.currentHash === sanitizedHash && _retryAttempt < LOAD_RETRY_MAX) {
+                if (
+                    !this.processingInProgress &&
+                    this.currentHash === sanitizedHash &&
+                    _retryAttempt < LOAD_RETRY_MAX
+                ) {
                     const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
-                    this.log(`Torrent error, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`);
+                    this.log(
+                        `Torrent error, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+                    );
                     if (this.processingTimeout) {
                         clearTimeout(this.processingTimeout);
                         this.processingTimeout = null;
@@ -221,7 +233,9 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     return;
                 }
                 const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
-                this.log(`No peers found, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`);
+                this.log(
+                    `No peers found, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+                );
                 if (this.processingTimeout) {
                     clearTimeout(this.processingTimeout);
                     this.processingTimeout = null;
@@ -243,10 +257,10 @@ export async function loadSite(hash, _retryAttempt = 0) {
             this.currentTorrentSize = torrent.length;
             this.currentFileCount = torrent.files.length;
             const torrentSizeMB = this.currentTorrentSize / (1024 * 1024);
-            
+
             this.log(`Torrent size: ${this.formatBytes(this.currentTorrentSize)} (${torrentSizeMB.toFixed(2)} MB)`);
             this.log(`File count: ${this.currentFileCount}`);
-            
+
             if (PEERWEB_CONFIG.SITE_BUNDLE_MODE !== 'gzip') {
                 // Find entry file (wait briefly for metadata/file list stabilization)
                 const indexFile = await this.waitForEntryFile(torrent);
@@ -270,7 +284,11 @@ export async function loadSite(hash, _retryAttempt = 0) {
                             publisher: entryVerified.publisher,
                             torrentHash: sanitizedHash
                         });
-                        this.notifySignatureAbort(sanitizedHash, entryVerified.publisher || 'unknown', entryVerified.reason);
+                        this.notifySignatureAbort(
+                            sanitizedHash,
+                            entryVerified.publisher || 'unknown',
+                            entryVerified.reason
+                        );
                         this.hideLoadingOverlay();
                         this.sendToServiceWorker('SITE_LOADING', {
                             hash: sanitizedHash,
@@ -297,14 +315,18 @@ export async function loadSite(hash, _retryAttempt = 0) {
             // Calculate dynamic timeout based on torrent size and file count
             const dynamicTimeout = this.calculateProcessingTimeout(torrent);
             this.log(`Dynamic processing timeout set to: ${(dynamicTimeout / 1000).toFixed(1)} seconds`);
-            
+
             // Set a timeout to process the site even if it doesn't reach 100%
             this.processingTimeout = setTimeout(() => {
                 if (this.isTorrentComplete(torrent)) {
                     void processCompletedTorrent('processing-timeout-complete');
                     return;
                 }
-                if (!this.processingInProgress && PEERWEB_CONFIG.SITE_BUNDLE_MODE !== 'gzip' && torrent.progress > 0.8) {
+                if (
+                    !this.processingInProgress &&
+                    PEERWEB_CONFIG.SITE_BUNDLE_MODE !== 'gzip' &&
+                    torrent.progress > 0.8
+                ) {
                     this.log('Processing site due to timeout (80%+ downloaded)');
                     this.processingInProgress = true;
                     this.processTorrentEarly(torrent, sanitizedHash);
@@ -380,7 +402,11 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             });
             this.currentSiteSignatureStatus = signatureState;
             this.log(`Invalid .torrentchain signature for hash ${hash}.`);
-            this.notifySignatureAbort(hash, verification.publisher || manifest?.payload?.publisher || 'unknown', 'signature-invalid');
+            this.notifySignatureAbort(
+                hash,
+                verification.publisher || manifest?.payload?.publisher || 'unknown',
+                'signature-invalid'
+            );
             this.hideLoadingOverlay();
             this.reportVerificationIssue('Signature validation failed. Download stopped.');
             try {
@@ -389,8 +415,8 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             return { ok: false, manifest: null, legacy: false, signatureState };
         }
 
-        // If this site was opened from a registry result, the downloaded
-        // manifest is the authority: any disagreement makes the registry
+        // If this site was opened from a NosNS result, the downloaded
+        // manifest is the authority: any disagreement makes the directory
         // metadata untrusted. It never blocks the load — .torrentchain has
         // already verified on its own — but the claim is withdrawn from the UI.
         const registryClaim = this.pendingRegistryClaim;
@@ -600,7 +626,9 @@ export async function processTorrentEarly(torrent, hash) {
 
             // Calculate dynamic timeout based on file size
             const dynamicTimeout = this.calculateFileTimeout(file);
-            this.log(`File timeout for ${file.name}: ${(dynamicTimeout / 1000).toFixed(1)} seconds (${this.formatBytes(file.length)})`);
+            this.log(
+                `File timeout for ${file.name}: ${(dynamicTimeout / 1000).toFixed(1)} seconds (${this.formatBytes(file.length)})`
+            );
             const buffer = await this.getFileBufferWithTimeout(file, dynamicTimeout);
 
             siteData[file.name] = {
@@ -794,7 +822,10 @@ export async function processTorrentGzipBundle(torrent, hash) {
         });
         if (!gate.allowed) {
             this.currentSiteSignatureStatus = this.buildSignatureState({
-                label: gate.reason === 'bundle-hash-mismatch' ? '❌ Bundle hash mismatch against .torrentchain' : '❌ Signature validation gate blocked render',
+                label:
+                    gate.reason === 'bundle-hash-mismatch'
+                        ? '❌ Bundle hash mismatch against .torrentchain'
+                        : '❌ Signature validation gate blocked render',
                 verified: false,
                 source: 'torrentchain',
                 publisher: this.currentSiteSignatureStatus?.publisher,
@@ -821,7 +852,11 @@ export async function processTorrentGzipBundle(torrent, hash) {
         if (entryPath && !siteData[entryPath]) {
             throw new Error(`Invalid bundle entryPath: ${entryPath}`);
         }
-        if (!Object.keys(siteData).some((name) => name.toLowerCase() === 'index.html' || name.toLowerCase().endsWith('/index.html'))) {
+        if (
+            !Object.keys(siteData).some(
+                (name) => name.toLowerCase() === 'index.html' || name.toLowerCase().endsWith('/index.html')
+            )
+        ) {
             throw new Error('Bundle is missing index.html');
         }
 
@@ -1053,7 +1088,7 @@ export function displaySite(siteData, hash, fromCache = false) {
             hash,
             fileCount: Object.keys(siteData).length,
             fileList: Object.keys(siteData), // Send the list of available files
-            entryFile: indexFileName          // Tell SW the canonical entry path
+            entryFile: indexFileName // Tell SW the canonical entry path
         });
 
         setTimeout(() => {

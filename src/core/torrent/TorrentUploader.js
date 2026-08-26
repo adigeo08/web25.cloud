@@ -1,6 +1,7 @@
 // @ts-check
 
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { ensureNosnsTorrentName } from '../../nosns/NosNSProtocol.js';
 
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
@@ -213,7 +214,6 @@ export async function handleTorrentFile(torrentFile) {
         const buffer = await this.readFileAsArrayBuffer(torrentFile);
         const bufferSize = buffer instanceof ArrayBuffer ? buffer.byteLength : buffer.length;
         this.log(`Torrent file read: ${bufferSize} bytes`);
-
 
         try {
             const signedMeta = await readSignedTorrentMetadata(buffer);
@@ -564,7 +564,9 @@ export async function seedInMemoryDeployBundle(inMemoryFiles, sourceFiles, onPro
                 inMemoryFiles,
                 {
                     announce: this.trackers,
-                    name: this.generateTorrentName(sourceFiles || inMemoryFiles),
+                    // NosNS discriminator lives in the real BitTorrent `info.name`,
+                    // not in a renamed download, so it survives every re-share.
+                    name: ensureNosnsTorrentName(this.generateTorrentName(sourceFiles || inMemoryFiles)),
                     comment: 'Web25 Deploy Artifact (in-memory bundle)',
                     createdBy: 'WEB25.cloud Deploy',
                     private: false,
@@ -665,9 +667,17 @@ export function showUploadResult(hash, torrentFile, torrent) {
     // Sanitize hash before displaying
     const sanitizedHash = this.sanitizeHash(hash);
     const url = `${window.location.origin}${window.location.pathname}?orc=${sanitizedHash}`;
-    this.lastPublishCandidate = {
+
+    // Display state only. This used to overwrite `lastPublishCandidate` with
+    // just { hash, siteName }, destroying the seeded `torrent`, `torrentFile`,
+    // `signedTorrentFile` and `createdAt` that the deploy flow had put there —
+    // and NosNS publication, which runs immediately afterwards and needs
+    // `candidate.torrent`, then returned silently. Deploy state is owned by the
+    // deploy flow; this function only renders.
+    this.lastResultDisplay = {
         hash: sanitizedHash,
-        siteName: torrent?.name || 'website'
+        siteName: torrent?.name || 'website',
+        url
     };
 
     const hashEl = document.getElementById('result-hash');
@@ -689,7 +699,7 @@ export function showUploadResult(hash, torrentFile, torrent) {
                 URL.revokeObjectURL(downloadLink.href);
             }
             downloadLink.href = this.createTrackedObjectURL(new Blob([torrentFile]));
-            downloadLink.download = `website-${sanitizedHash.substring(0, 8)}.torrent`;
+            downloadLink.download = ensureNosnsTorrentName(torrent?.name || `website-${sanitizedHash.substring(0, 8)}`);
             downloadLink.style.display = 'inline-flex';
         }
     } else {

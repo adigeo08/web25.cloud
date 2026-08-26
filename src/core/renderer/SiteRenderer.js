@@ -181,6 +181,7 @@ export function sanitizeHtml(html) {
         ADD_ATTR: ['href', 'src', 'type', 'rel', 'crossorigin', 'integrity', 'target', 'data', 'srcset'],
         ALLOW_UNKNOWN_PROTOCOLS: true, // Preserve compatibility for torrent/web3 linked content
         ALLOWED_URI_REGEXP:
+            // eslint-disable-next-line no-useless-escape -- explicit \- kept: this is a URL sanitizer, not a place to golf a regex
             /^(?:(?:(?:https?|wss?|magnet|ipfs|ipns|blob|data|mailto|tel):)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
     };
     return DOMPurify.sanitize(html, config);
