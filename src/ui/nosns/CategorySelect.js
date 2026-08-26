@@ -14,7 +14,8 @@ import {
     listDtanCategories,
     dtanCategoryLabel,
     normalizeDtanCategory,
-    DTAN_CATEGORIES
+    DTAN_CATEGORIES,
+    NOSNS_DEFAULT_CATEGORY
 } from '../../nosns/NosNSProtocol.js';
 
 /**
@@ -23,10 +24,20 @@ import {
  * @param {HTMLSelectElement|null} select
  * @param {string} [selected] a `tcat:` value to preselect
  */
-export function populateCategorySelect(select, selected) {
+export function populateCategorySelect(select, selected, { placeholder = '' } = {}) {
     if (!select) return;
 
     select.textContent = '';
+
+    if (placeholder) {
+        // An empty first option, so "no category chosen" is a visible state
+        // rather than one the user has to notice is a default.
+        const none = document.createElement('option');
+        none.value = '';
+        none.textContent = placeholder;
+        select.appendChild(none);
+    }
+
     const entries = listDtanCategories();
 
     for (const top of DTAN_CATEGORIES) {
@@ -46,7 +57,9 @@ export function populateCategorySelect(select, selected) {
         select.appendChild(group);
     }
 
-    select.value = normalizeDtanCategory(selected || '');
+    // With a placeholder present, an unrecognised value stays unselected rather
+    // than silently resolving to the default category.
+    select.value = placeholder ? normalizeDtanCategory(selected || '', '') : normalizeDtanCategory(selected || '');
 }
 
 /**
@@ -54,8 +67,8 @@ export function populateCategorySelect(select, selected) {
  * @param {HTMLSelectElement|null} select
  * @returns {string} a valid `tcat:` value
  */
-export function readCategorySelect(select) {
-    return normalizeDtanCategory(select?.value || '');
+export function readCategorySelect(select, fallback = NOSNS_DEFAULT_CATEGORY) {
+    return normalizeDtanCategory(select?.value || '', fallback);
 }
 
 /**
@@ -64,7 +77,8 @@ export function readCategorySelect(select) {
  */
 export function setCategorySelect(select, tcat) {
     if (!select) return;
-    select.value = normalizeDtanCategory(tcat);
+    const hasPlaceholder = Boolean(select.querySelector('option[value=""]'));
+    select.value = hasPlaceholder ? normalizeDtanCategory(tcat, '') : normalizeDtanCategory(tcat);
 }
 
 /**

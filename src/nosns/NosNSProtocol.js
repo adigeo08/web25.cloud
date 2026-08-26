@@ -116,7 +116,7 @@ export const DTAN_CATEGORIES = Object.freeze([
         tag: 'other',
         sub: [
             { name: 'Archives', tag: 'archive' },
-            { name: 'E-Books', tag: 'ebook' },
+            { name: 'E-Books', tag: 'e-book' },
             { name: 'Comics', tag: 'comic' },
             { name: 'Pictures', tag: 'picture' }
         ]
@@ -170,7 +170,12 @@ export function ensureNosnsTorrentName(name) {
  * @param {string} title a NIP-35 title / torrent name
  */
 export function isNosnsTorrentName(title) {
-    return `${title || ''}`.trim().toLowerCase().endsWith(NOSNS_TORRENT_SUFFIX);
+    // Deliberately strict: no trim, no case folding. The suffix is a protocol
+    // token, and `ensureNosnsTorrentName()` is the one place that canonicalises
+    // it. Accepting `.NOSNS.TORRENT` here would mean two different byte strings
+    // both counted as NosNS, so the same site could be listed twice and a
+    // lookup by name would depend on which spelling a client happened to use.
+    return `${title || ''}`.endsWith(NOSNS_TORRENT_SUFFIX);
 }
 
 /**
@@ -260,11 +265,16 @@ export function dtanCategoryLabel(tcat) {
 }
 
 /**
- * Validate a user-selected category, falling back to the default rather than
- * letting an unknown value reach a published event.
+ * Validate a user-selected category, falling back rather than letting an
+ * unknown value reach a published event.
  * @param {string} tcat
+ * @param {string} [fallback] what to return when `tcat` is not a real category
  */
-export function normalizeDtanCategory(tcat) {
+export function normalizeDtanCategory(tcat, fallback = NOSNS_DEFAULT_CATEGORY) {
     const normalized = `${tcat || ''}`.trim().toLowerCase();
-    return isValidDtanCategory(normalized) ? normalized : NOSNS_DEFAULT_CATEGORY;
+    if (isValidDtanCategory(normalized)) return normalized;
+    // Pass `''` to make the absence of a real choice visible to the caller.
+    // Publication uses that: a category is something the publisher picks, not
+    // something the app picks for them and files their site under.
+    return fallback;
 }

@@ -33,6 +33,9 @@ import {
 import { nostrCore } from '../src/nostr/nostr.js';
 import { npubEncode } from '../src/nostr/nip19.js';
 
+/** Publication no longer defaults a category, so tests name one explicitly. */
+const CATEGORY = 'tcat:application';
+
 const INFOHASH = 'e5a1c0d4b7f28369ac015be47d3902fa6c8b1d47';
 const PUBLISHER = '0x1111111111111111111111111111111111111111';
 const OTHER_PUBLISHER = '0x2222222222222222222222222222222222222222';
@@ -105,7 +108,7 @@ function buildSigned(params = {}) {
         buildNosnsEventTemplate({
             torrent: gzipTorrent(),
             chainArtifact: chainArtifact(),
-            siteName: 'My Site',
+            category: CATEGORY,
             ...params
         })
     );
@@ -114,18 +117,30 @@ function buildSigned(params = {}) {
 // ─── 1. Event construction ───────────────────────────────────────────────
 
 test('the NosNS event is a NIP-35 kind 2003 torrent event', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     assert.equal(template.kind, 2003);
     assert.equal(NOSNS_CONFIG.TORRENT_EVENT_KIND, 2003);
 });
 
 test('the event carries the final torrent infohash in the x tag', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     assert.equal(firstTagValue(template.tags, 'x'), INFOHASH);
 });
 
 test('the category is one DTAN actually indexes', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
 
     // DTAN resolves `tcat` against a fixed tree — video, audio, application,
     // game, porn, other. An invented path matches no filter there, so the entry
@@ -139,7 +154,11 @@ test('the category is one DTAN actually indexes', () => {
 });
 
 test('the only i tag is the real DTAN category — no NosNS marker', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const markers = allTagValues(template.tags, 'i');
 
     // NosNS identification is the title suffix and nothing else, so nothing is
@@ -171,7 +190,11 @@ test('a category outside the DTAN taxonomy cannot be published', () => {
 });
 
 test('the event matches the NIP-35 tag vocabulary', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const NIP35_TAGS = new Set(['title', 'x', 'file', 'tracker', 'i', 't']);
 
     // Everything outside the NIP-35 vocabulary must be a namespaced WEB25 tag,
@@ -184,7 +207,11 @@ test('the event matches the NIP-35 tag vocabulary', () => {
 });
 
 test('no hashtags are added at all — not nosns, not the old web25 ones', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     assert.deepEqual(allTagValues(template.tags, 't'), []);
 
     const wire = JSON.stringify(template).toLowerCase();
@@ -194,7 +221,11 @@ test('no hashtags are added at all — not nosns, not the old web25 ones', () =>
 });
 
 test('the title is the real torrent name and ends in the NosNS suffix', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const title = firstTagValue(template.tags, 'title');
 
     assert.equal(title, 'my-site.nosns.torrent');
@@ -203,17 +234,54 @@ test('the title is the real torrent name and ends in the NosNS suffix', () => {
     assert.equal(title, gzipTorrent().name);
 });
 
-test('a human site name is normalized into the NosNS torrent name', () => {
+test('a display name never becomes the title — the torrent name does', () => {
+    // NIP-35 says the title names the torrent. A separately derived site name
+    // could drift from `info.name`, leaving the entry unfindable by the name it
+    // is actually distributed under, so `siteName` is an assertion and a
+    // disagreement is a hard failure rather than a silent relabel.
+    assert.throws(
+        () =>
+            buildNosnsEventTemplate({
+                torrent: gzipTorrent(),
+                chainArtifact: chainArtifact(),
+                category: CATEGORY,
+                siteName: 'Some Other Name'
+            }),
+        /does not match the torrent name/i
+    );
+
+    // A site name that agrees is accepted, and the title is still info.name.
     const template = buildNosnsEventTemplate({
         torrent: gzipTorrent(),
         chainArtifact: chainArtifact(),
-        siteName: 'My Site'
+        category: CATEGORY,
+        siteName: 'my-site'
     });
-    assert.equal(firstTagValue(template.tags, 'title'), `My Site${NOSNS_TORRENT_SUFFIX}`);
+    assert.equal(firstTagValue(template.tags, 'title'), gzipTorrent().name);
+    assert.ok(firstTagValue(template.tags, 'title').endsWith(NOSNS_TORRENT_SUFFIX));
+});
+
+test('a torrent seeded without the NosNS suffix cannot be published', () => {
+    // The suffix has to be in the real BitTorrent info.name. If the seeder did
+    // not put it there, inventing it in the title would advertise a name the
+    // torrent does not have.
+    assert.throws(
+        () =>
+            buildNosnsEventTemplate({
+                torrent: { ...gzipTorrent(), name: 'my-site' },
+                chainArtifact: chainArtifact(),
+                category: CATEGORY
+            }),
+        /not a NosNS name/i
+    );
 });
 
 test('gzip mode advertises the actual torrent entries, not the bundled site files', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const files = template.tags.filter((tag) => tag[0] === 'file');
 
     assert.deepEqual(files, [
@@ -226,7 +294,11 @@ test('gzip mode advertises the actual torrent entries, not the bundled site file
 });
 
 test('files mode advertises the real per-file torrent layout', () => {
-    const template = buildNosnsEventTemplate({ torrent: filesTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: filesTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const files = template.tags.filter((tag) => tag[0] === 'file');
 
     assert.deepEqual(files, [
@@ -238,11 +310,18 @@ test('files mode advertises the real per-file torrent layout', () => {
 
 test('the torrent name prefix is stripped from advertised file paths', () => {
     const artifact = describeTorrentArtifact(gzipTorrent());
-    assert.deepEqual(artifact.files.map((file) => file.path), ['.torrentchain', 'site.bundle.json.gz']);
+    assert.deepEqual(
+        artifact.files.map((file) => file.path),
+        ['.torrentchain', 'site.bundle.json.gz']
+    );
 });
 
 test('the actual tracker list is included', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     assert.deepEqual(allTagValues(template.tags, 'tracker'), [TRACKER]);
 });
 
@@ -250,26 +329,47 @@ test('trackers fall back to the deployment configuration when the torrent has no
     const template = buildNosnsEventTemplate({
         torrent: gzipTorrent({ announce: [] }),
         chainArtifact: chainArtifact(),
+        category: CATEGORY,
         trackers: ['wss://tracker.example/']
     });
     assert.deepEqual(allTagValues(template.tags, 'tracker'), ['wss://tracker.example/']);
 });
 
 test('the title falls back to the torrent name', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     assert.equal(firstTagValue(template.tags, 'title'), 'my-site.nosns.torrent');
 });
 
 test('an unseeded torrent or a missing .torrentchain cannot produce an event', () => {
-    assert.throws(() => buildNosnsEventTemplate({ torrent: { infoHash: 'nope' }, chainArtifact: chainArtifact() }), /infohash/i);
     assert.throws(
-        () => buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: { payload: null, message: '', signature: '' } }),
+        () =>
+            buildNosnsEventTemplate({
+                torrent: { infoHash: 'nope' },
+                chainArtifact: chainArtifact(),
+                category: CATEGORY
+            }),
+        /infohash/i
+    );
+    assert.throws(
+        () =>
+            buildNosnsEventTemplate({
+                torrent: gzipTorrent(),
+                chainArtifact: { payload: null, message: '', signature: '' }
+            }),
         /signed .torrentchain artifact is required/i
     );
 });
 
 test('no private DM material can appear in a public NosNS event', () => {
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const wire = JSON.stringify(template);
 
     for (const forbidden of ['sdp', 'candidate', 'ice', 'nsec', 'eciesPublicKey', 'nip44']) {
@@ -281,7 +381,7 @@ test('no private DM material can appear in a public NosNS event', () => {
 
 test('NosNS mirrors the .torrentchain proof field for field', () => {
     const artifact = chainArtifact();
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: artifact });
+    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: artifact, category: CATEGORY });
 
     assert.equal(firstTagValue(template.tags, 'web25-publisher'), artifact.payload.publisher);
     assert.equal(firstTagValue(template.tags, 'web25-signature'), artifact.signature);
@@ -294,7 +394,7 @@ test('NosNS mirrors the .torrentchain proof field for field', () => {
 
 test('the mirrored message is the exact string the wallet signed', () => {
     const artifact = chainArtifact();
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: artifact });
+    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: artifact, category: CATEGORY });
 
     // Byte-identical, not re-serialized: a re-derived payload could differ in
     // key order and would no longer verify.
@@ -316,7 +416,8 @@ test('building a NosNS event performs no EVM signing at all', async () => {
                 evmSignCalls += 1;
                 return artifact.signature;
             }
-        }
+        },
+        category: CATEGORY
     });
 
     assert.equal(evmSignCalls, 1, 'the existing signature is read once, never regenerated');
@@ -328,7 +429,7 @@ test('a site without a gzip bundle omits the bundle tags rather than inventing t
     delete artifact.payload.bundle;
     artifact.message = JSON.stringify(artifact.payload);
 
-    const template = buildNosnsEventTemplate({ torrent: filesTorrent(), chainArtifact: artifact });
+    const template = buildNosnsEventTemplate({ torrent: filesTorrent(), chainArtifact: artifact, category: CATEGORY });
     assert.equal(firstTagValue(template.tags, 'web25-bundle-sha256'), '');
 });
 
@@ -340,9 +441,9 @@ test('a signed NosNS event parses into a normalized result', () => {
 
     assert.equal(result.eventId, event.id);
     // The raw title stays the protocol value; display strips the suffix.
-    assert.equal(result.title, 'My Site.nosns.torrent');
-    assert.equal(result.displayName, 'My Site');
-    assert.equal(nosnsDisplayName(result.title), 'My Site');
+    assert.equal(result.title, 'my-site.nosns.torrent');
+    assert.equal(result.displayName, 'my-site');
+    assert.equal(nosnsDisplayName(result.title), 'my-site');
     assert.equal(result.infohash, INFOHASH);
     assert.equal(result.nostrPubkey, nostrCore.getNostrPublicKey(NOSTR_PRIV));
     assert.equal(result.npub, npubEncode(result.nostrPubkey));
@@ -361,7 +462,11 @@ test('unrelated torrents without the suffix are ignored', () => {
     const foreign = signNosnsEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'Some Linux ISO'], ['x', INFOHASH], ['i', 'tcat:video,movie']],
+        tags: [
+            ['title', 'Some Linux ISO'],
+            ['x', INFOHASH],
+            ['i', 'tcat:video,movie']
+        ],
         content: ''
     });
 
@@ -374,20 +479,29 @@ test('a NosNS entry in any DTAN category is recognised by its suffix alone', () 
         const event = signNosnsEvent({
             kind: 2003,
             created_at: 1800000000,
-            tags: [['title', 'somewhere.nosns.torrent'], ['x', INFOHASH], ['i', category]],
+            tags: [
+                ['title', 'somewhere.nosns.torrent'],
+                ['x', INFOHASH],
+                ['i', category]
+            ],
             content: ''
         });
         assert.equal(isNosnsEvent(event), true, category);
     }
 });
 
-test('someone else\'s application torrent is not mistaken for a NosNS site', () => {
+test("someone else's application torrent is not mistaken for a NosNS site", () => {
     // NosNS shares DTAN's real categories, so the category alone must never
     // identify us — only the `.nosns.torrent` suffix may.
     const neighbour = signNosnsEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'Some Windows App'], ['x', INFOHASH], ['i', 'tcat:application'], ['t', 'windows']],
+        tags: [
+            ['title', 'Some Windows App'],
+            ['x', INFOHASH],
+            ['i', 'tcat:application'],
+            ['t', 'windows']
+        ],
         content: ''
     });
 
@@ -399,11 +513,21 @@ test('the old WEB25 marker and hashtags no longer identify anything', () => {
     const base = { kind: 2003, created_at: 1800000000, content: '' };
     const byMarker = signNosnsEvent({
         ...base,
-        tags: [['title', 'A'], ['x', INFOHASH], ['i', 'tcat:application'], ['i', 'web25:website']]
+        tags: [
+            ['title', 'A'],
+            ['x', INFOHASH],
+            ['i', 'tcat:application'],
+            ['i', 'web25:website']
+        ]
     });
     const byHashtag = signNosnsEvent({
         ...base,
-        tags: [['title', 'B'], ['x', INFOHASH], ['i', 'tcat:application'], ['t', 'web25']]
+        tags: [
+            ['title', 'B'],
+            ['x', INFOHASH],
+            ['i', 'tcat:application'],
+            ['t', 'web25']
+        ]
     });
 
     assert.equal(isNosnsEvent(byMarker), false);
@@ -414,7 +538,11 @@ test('events of the wrong kind are ignored even with the right suffix', () => {
     const wrongKind = signNosnsEvent({
         kind: 1,
         created_at: 1800000000,
-        tags: [['title', 'not-a-torrent.nosns.torrent'], ['x', INFOHASH], ['i', 'tcat:application']],
+        tags: [
+            ['title', 'not-a-torrent.nosns.torrent'],
+            ['x', INFOHASH],
+            ['i', 'tcat:application']
+        ],
         content: ''
     });
 
@@ -426,19 +554,29 @@ test('structurally broken entries are dropped rather than listed', () => {
     const noHash = signNosnsEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'no-hash.nosns.torrent'], ['i', 'tcat:application']],
+        tags: [
+            ['title', 'no-hash.nosns.torrent'],
+            ['i', 'tcat:application']
+        ],
         content: ''
     });
     const badHash = signNosnsEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'bad-hash.nosns.torrent'], ['x', 'not-a-hash'], ['i', 'tcat:application']],
+        tags: [
+            ['title', 'bad-hash.nosns.torrent'],
+            ['x', 'not-a-hash'],
+            ['i', 'tcat:application']
+        ],
         content: ''
     });
     const noTitle = signNosnsEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['x', INFOHASH], ['i', 'tcat:application']],
+        tags: [
+            ['x', INFOHASH],
+            ['i', 'tcat:application']
+        ],
         content: ''
     });
 
@@ -501,8 +639,14 @@ test('a verifier that throws yields invalid, never verified', async () => {
 
 test('convenience tags that disagree with the signed message are malformed', async () => {
     // A hostile publisher displays one address while proving another.
-    const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
-    const tampered = template.tags.map((tag) => (tag[0] === 'web25-publisher' ? ['web25-publisher', OTHER_PUBLISHER] : tag));
+    const template = buildNosnsEventTemplate({
+        torrent: gzipTorrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
+    const tampered = template.tags.map((tag) =>
+        tag[0] === 'web25-publisher' ? ['web25-publisher', OTHER_PUBLISHER] : tag
+    );
     const event = signNosnsEvent({ ...template, tags: tampered });
 
     const result = parseNosnsEvent(event, { npubEncode });
@@ -522,7 +666,11 @@ test('malformed WEB25 metadata is rejected in every shape', () => {
     };
 
     for (const [label, [tagName, badValue]] of Object.entries(cases)) {
-        const template = buildNosnsEventTemplate({ torrent: gzipTorrent(), chainArtifact: chainArtifact() });
+        const template = buildNosnsEventTemplate({
+            torrent: gzipTorrent(),
+            chainArtifact: chainArtifact(),
+            category: CATEGORY
+        });
         const tags = template.tags.map((tag) => (tag[0] === tagName ? [tagName, badValue] : tag));
         const result = parseNosnsEvent(signNosnsEvent({ ...template, tags }), { npubEncode });
 
@@ -536,7 +684,11 @@ test('a suffix-only entry with no WEB25 proof is listed but never verifiable', a
     const event = signNosnsEvent({
         kind: 2003,
         created_at: 1800000000,
-        tags: [['title', 'no-proof.nosns.torrent'], ['x', INFOHASH], ['i', 'tcat:application']],
+        tags: [
+            ['title', 'no-proof.nosns.torrent'],
+            ['x', INFOHASH],
+            ['i', 'tcat:application']
+        ],
         content: ''
     });
 

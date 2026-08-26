@@ -37,7 +37,12 @@ test('the NosNS relay list is exactly one relay', () => {
 });
 
 test('no generic relay is smuggled into the directory list', () => {
-    for (const relay of ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band', 'wss://relay.snort.social']) {
+    for (const relay of [
+        'wss://relay.damus.io',
+        'wss://nos.lol',
+        'wss://relay.nostr.band',
+        'wss://relay.snort.social'
+    ]) {
         assert.ok(!NOSNS_RELAYS.includes(relay), `${relay} must not be a NosNS directory relay`);
     }
 });
@@ -58,7 +63,7 @@ test('NosNS uses the standard NIP-35 kind, not a custom one', () => {
 
 // ─── 2. The DTAN taxonomy ────────────────────────────────────────────────
 
-test('the mirrored taxonomy has DTAN\'s six top-level categories', () => {
+test("the mirrored taxonomy has DTAN's six top-level categories", () => {
     assert.deepEqual(
         DTAN_CATEGORIES.map((entry) => entry.tag),
         ['video', 'audio', 'application', 'game', 'porn', 'other']
@@ -149,15 +154,44 @@ test('an empty or whitespace name still produces a valid NosNS name', () => {
 
 test('the suffix check is the whole NosNS protocol check', () => {
     assert.equal(isNosnsTorrentName('example.nosns.torrent'), true);
-    assert.equal(isNosnsTorrentName('EXAMPLE.NOSNS.TORRENT'), true);
     assert.equal(isNosnsTorrentName('example.torrent'), false);
     assert.equal(isNosnsTorrentName('example.nosns'), false);
     assert.equal(isNosnsTorrentName('nosns.torrent.example'), false);
     assert.equal(isNosnsTorrentName(''), false);
 });
 
+test('the suffix is matched strictly, in canonical lowercase only', () => {
+    // Two spellings both counting as NosNS would let the same site be listed
+    // twice, and make a lookup by name depend on which spelling a client used.
+    assert.equal(isNosnsTorrentName('EXAMPLE.NOSNS.TORRENT'), false);
+    assert.equal(isNosnsTorrentName('example.NoSnS.torrent'), false);
+    assert.equal(isNosnsTorrentName('example.nosns.Torrent'), false);
+    assert.equal(isNosnsTorrentName('example.nosns.torrent '), false, 'no trailing whitespace');
+
+    // `ensureNosnsTorrentName()` is the one place that canonicalises, and what
+    // it returns always passes the strict check.
+    for (const input of ['EXAMPLE.NOSNS.TORRENT', 'example.NoSnS.torrent', 'example.nosns.torrent ', 'Example']) {
+        assert.equal(isNosnsTorrentName(ensureNosnsTorrentName(input)), true, input);
+    }
+});
+
 test('display names drop the suffix but leave other names alone', () => {
     assert.equal(nosnsDisplayName('example-site.nosns.torrent'), 'example-site');
     assert.equal(nosnsDisplayName('Some Linux ISO'), 'Some Linux ISO');
     assert.equal(nosnsDisplayName(''), '');
+});
+
+// ─── 4. A category is chosen, never assumed ──────────────────────────────
+
+test('normalizeDtanCategory can refuse instead of substituting a default', () => {
+    // The default is right for browsing (some category has to be shown first)
+    // and wrong for publishing, where it would file a site somewhere the
+    // publisher never chose and cannot see.
+    assert.equal(normalizeDtanCategory('', NOSNS_DEFAULT_CATEGORY), NOSNS_DEFAULT_CATEGORY);
+    assert.equal(normalizeDtanCategory('', ''), '');
+    assert.equal(normalizeDtanCategory('tcat:web25.cloud,websites', ''), '');
+    assert.equal(normalizeDtanCategory('tcat:nosns', ''), '');
+
+    // A real category is returned whatever the fallback is.
+    assert.equal(normalizeDtanCategory('tcat:other,archive', ''), 'tcat:other,archive');
 });

@@ -17,6 +17,9 @@ import { isNosnsTorrentName, NOSNS_DEFAULT_CATEGORY } from '../src/nosns/NosNSPr
 import { nostrCore, verifyNostrEvent } from '../src/nostr/nostr.js';
 import { npubEncode } from '../src/nostr/nip19.js';
 
+/** Publication no longer defaults a category, so tests name one explicitly. */
+const CATEGORY = 'tcat:application';
+
 const PRIV = '1111111111111111111111111111111111111111111111111111111111111111';
 const INFOHASH = 'e5a1c0d4b7f28369ac015be47d3902fa6c8b1d47';
 const PUBLISHER = '0x1111111111111111111111111111111111111111';
@@ -32,22 +35,35 @@ function chainArtifact() {
         totalBytes: 1200,
         merkleRoot: 'a'.repeat(64),
         filesSemantics: 'bundle-contents',
-        bundle: { name: 'site.bundle.json.gz', sha256: 'b'.repeat(64), contentEncoding: 'gzip', schema: 'web25-sitebundle-v1' }
+        bundle: {
+            name: 'site.bundle.json.gz',
+            sha256: 'b'.repeat(64),
+            contentEncoding: 'gzip',
+            schema: 'web25-sitebundle-v1'
+        }
     };
     return { payload, message: JSON.stringify(payload), signature: EVM_SIGNATURE };
 }
 
-function torrent() {
+/**
+ * The title is the real `info.name`, so a differently named site means a
+ * differently named torrent — not a display name layered on top of one.
+ */
+function torrent(siteName = 'my-site') {
+    const name = `${siteName}.nosns.torrent`;
     return {
         infoHash: INFOHASH,
-        name: 'my-site.nosns.torrent',
-        files: [{ path: 'my-site.nosns.torrent/.torrentchain', name: '.torrentchain', length: 1234 }],
+        name,
+        files: [{ path: `${name}/.torrentchain`, name: '.torrentchain', length: 1234 }],
         announce: ['wss://tracker.openwebtorrent.com/']
     };
 }
 
-function nosnsEvent(siteName = 'My Site') {
-    return nostrCore.signEvent(buildNosnsEventTemplate({ torrent: torrent(), chainArtifact: chainArtifact(), siteName }), PRIV);
+function nosnsEvent(siteName = 'my-site') {
+    return nostrCore.signEvent(
+        buildNosnsEventTemplate({ torrent: torrent(siteName), chainArtifact: chainArtifact(), category: CATEGORY }),
+        PRIV
+    );
 }
 
 /**
@@ -74,7 +90,7 @@ test('a well-formed NosNS entry survives the whole pipeline', () => {
     const results = browsePipeline([nosnsEvent()]);
     assert.equal(results.length, 1);
     assert.equal(results[0].infohash, INFOHASH);
-    assert.equal(results[0].displayName, 'My Site');
+    assert.equal(results[0].displayName, 'my-site');
 });
 
 test('an event with a forged signature is discarded before anything else', () => {
@@ -94,7 +110,11 @@ test('a NIP-35 torrent without the suffix is discarded, whatever its category', 
         {
             kind: 2003,
             created_at: 1800000000,
-            tags: [['title', 'Ubuntu 26.04'], ['x', INFOHASH], ['i', NOSNS_DEFAULT_CATEGORY]],
+            tags: [
+                ['title', 'Ubuntu 26.04'],
+                ['x', INFOHASH],
+                ['i', NOSNS_DEFAULT_CATEGORY]
+            ],
             content: ''
         },
         PRIV
@@ -120,7 +140,11 @@ test('a suffix-only entry with no WEB25 proof is kept and shown unverified', () 
         {
             kind: 2003,
             created_at: 1800000000,
-            tags: [['title', 'bare.nosns.torrent'], ['x', INFOHASH], ['i', NOSNS_DEFAULT_CATEGORY]],
+            tags: [
+                ['title', 'bare.nosns.torrent'],
+                ['x', INFOHASH],
+                ['i', NOSNS_DEFAULT_CATEGORY]
+            ],
             content: ''
         },
         PRIV
@@ -132,7 +156,11 @@ test('a suffix-only entry with no WEB25 proof is kept and shown unverified', () 
 });
 
 test('an entry whose proof tags contradict the signed message is marked malformed, not hidden', () => {
-    const template = buildNosnsEventTemplate({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const template = buildNosnsEventTemplate({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const tags = template.tags.map((tag) =>
         tag[0] === 'web25-publisher' ? ['web25-publisher', '0x2222222222222222222222222222222222222222'] : tag
     );

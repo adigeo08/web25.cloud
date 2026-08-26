@@ -27,7 +27,7 @@
 import { NOSNS_CONFIG } from '../config/nostr.config.js';
 import {
     NOSNS_EVENT_KIND,
-    NOSNS_DEFAULT_CATEGORY,
+    NOSNS_TORRENT_SUFFIX,
     ensureNosnsTorrentName,
     isNosnsTorrentName,
     isValidDtanCategory,
@@ -146,7 +146,7 @@ export function buildNosnsEventTemplate({
     chainArtifact,
     siteName = '',
     trackers = [],
-    category = NOSNS_DEFAULT_CATEGORY,
+    category = '',
     createdAtSeconds = Math.floor(Date.now() / 1000)
 }) {
     const artifact = describeTorrentArtifact(torrent, trackers);
@@ -161,15 +161,35 @@ export function buildNosnsEventTemplate({
         throw new Error('The .torrentchain signed message is too large to mirror into a NosNS record.');
     }
 
+    if (!category) {
+        // Never defaulted. The category decides where the site appears in DTAN,
+        // so filing it under `application` because nobody chose is a decision
+        // the publisher did not make and cannot see.
+        throw new Error('Select a DTAN category before publishing to NosNS.');
+    }
     if (!isValidDtanCategory(category)) {
         // An unknown category is one nobody can browse to — exactly the failure
         // the old custom WEB25 category produced.
         throw new Error(`"${category}" is not an official DTAN category.`);
     }
 
-    // DTAN uses the torrent name as the event title, so the two must agree —
-    // and the title is where NosNS identification lives.
-    const title = ensureNosnsTorrentName(siteName || artifact.name);
+    // NIP-35 uses the torrent name as the event title, and NosNS identification
+    // lives entirely in that name. So the title is the real BitTorrent
+    // `info.name` verbatim — never a display name derived alongside it, which
+    // could drift from what the torrent actually says and leave the entry
+    // unfindable by the name it is distributed under.
+    const title = text(artifact.name);
+    if (!isNosnsTorrentName(title)) {
+        throw new Error(
+            `The torrent is named "${title}", which is not a NosNS name. It must be seeded with the ` +
+                `${NOSNS_TORRENT_SUFFIX} suffix in its BitTorrent info.name.`
+        );
+    }
+    // `siteName` is an assertion, not an input: if the caller believes the site
+    // is called something else, that disagreement is a bug worth failing on.
+    if (siteName && ensureNosnsTorrentName(siteName) !== title) {
+        throw new Error(`Site name "${siteName}" does not match the torrent name "${title}".`);
+    }
 
     /** @type {string[][]} */
     const tags = [

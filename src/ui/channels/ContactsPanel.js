@@ -172,7 +172,12 @@ function renderContactActions(contact) {
 
 /**
  * Presence shown next to a searched address, before any conversation exists.
- * @param {boolean|null} online null when presence is unknown
+ *
+ * Presence is a beacon that has to arrive, so there is a real third state: we
+ * have subscribed but nothing has come back yet. Showing "offline" during that
+ * window would be a guess presented as fact, so it gets its own label.
+ *
+ * @param {boolean|null|'checking'} online null clears, 'checking' is pending
  */
 export function renderSearchPresence(online) {
     const el = document.getElementById('dm-search-result-presence');
@@ -180,6 +185,11 @@ export function renderSearchPresence(online) {
     if (online === null) {
         el.textContent = '';
         el.className = 'dm-search-result-presence';
+        return;
+    }
+    if (online === 'checking') {
+        el.textContent = '⏳ Checking whether they are online…';
+        el.className = 'dm-search-result-presence is-checking';
         return;
     }
     // Being online is not an invitation: say so plainly.

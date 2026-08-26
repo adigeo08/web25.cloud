@@ -196,6 +196,23 @@ friend.
 no connection, no contact record. The peer is not notified, because notifying
 them would itself confirm that the npub is live and listening.
 
+### Presence for an address you are looking up
+
+Typing an `npub` into the search box temporarily subscribes to that address's
+NIP-38 beacon, so the user can see whether a request is likely to be seen before
+they send one. It is strictly read-only: no offer is created, no ICE is
+gathered and nothing is sent to that peer — being online is not an invitation.
+
+`watch()` replaces its whole subscription set rather than adding to it, so the
+searched address and the contacts are combined in one place; layering them would
+silently unsubscribe one or the other. The address is dropped again when the
+search is cleared or a conversation is left.
+
+Because a beacon has to arrive, there is a real third state. Immediately after
+subscribing nothing has come back yet, and reporting that as "offline" would be
+a guess presented as fact, so it shows as "checking" until either a beacon lands
+or the grace window closes.
+
 ### Presence is not consent either
 
 Presence and conversation are deliberately separate states:

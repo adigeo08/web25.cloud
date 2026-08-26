@@ -397,7 +397,7 @@ test('names are stripped of control and bidi characters, and capped', async () =
 
 // ─── 5. Migrating the v1 plaintext store ─────────────────────────────────
 
-test('a v1 contact\'s ECIES key is recovered, not guessed', () => {
+test("a v1 contact's ECIES key is recovered, not guessed", () => {
     // The Nostr key is the x coordinate; the stored EVM address picks the
     // parity. The result is verified against that address, so it is a recovery.
     assert.equal(recoverEciesPublicKey(ALICE.nostrPublicKey, ALICE.evmAddress), ALICE.eciesPublicKey);
@@ -424,7 +424,11 @@ test('existing v1 contacts survive the upgrade, encrypted', async () => {
         const store = new ContactsStore({ signer: wallet.signer });
 
         const contacts = await store.list();
-        assert.deepEqual(contacts.map((c) => c.name), ['Alice', 'Bob'], 'nobody is lost');
+        assert.deepEqual(
+            contacts.map((c) => c.name),
+            ['Alice', 'Bob'],
+            'nobody is lost'
+        );
 
         const alice = await store.get(ALICE.nostrPublicKey);
         assert.equal(alice.eciesPublicKey, ALICE.eciesPublicKey, 'the missing key was recovered');
@@ -473,7 +477,10 @@ test('a v1 contact with no EVM address is dropped rather than trusted', async ()
         await wallet.unlock();
         const store = new ContactsStore({ signer: wallet.signer });
 
-        assert.deepEqual((await store.list()).map((c) => c.name), ['Bob']);
+        assert.deepEqual(
+            (await store.list()).map((c) => c.name),
+            ['Bob']
+        );
         assert.equal(await store.isTrusted(ALICE.nostrPublicKey), false);
         assert.deepEqual(fake.legacyRows(), [], 'dropped rows are deleted too, not left in plaintext');
     } finally {
@@ -547,10 +554,22 @@ const ROWS = [
 ];
 
 test('contacts are searchable by name, npub, pubkey and EVM address', () => {
-    assert.deepEqual(filterContacts(ROWS, 'alice').map((c) => c.name), ['Alice']);
-    assert.deepEqual(filterContacts(ROWS, BOB.npub.slice(0, 12)).map((c) => c.name), ['Bob']);
-    assert.deepEqual(filterContacts(ROWS, ALICE.nostrPublicKey.slice(0, 10)).map((c) => c.name), ['Alice']);
-    assert.deepEqual(filterContacts(ROWS, BOB.evmAddress.slice(0, 8)).map((c) => c.name), ['Bob']);
+    assert.deepEqual(
+        filterContacts(ROWS, 'alice').map((c) => c.name),
+        ['Alice']
+    );
+    assert.deepEqual(
+        filterContacts(ROWS, BOB.npub.slice(0, 12)).map((c) => c.name),
+        ['Bob']
+    );
+    assert.deepEqual(
+        filterContacts(ROWS, ALICE.nostrPublicKey.slice(0, 10)).map((c) => c.name),
+        ['Alice']
+    );
+    assert.deepEqual(
+        filterContacts(ROWS, BOB.evmAddress.slice(0, 8)).map((c) => c.name),
+        ['Bob']
+    );
 });
 
 test('an empty filter lists everyone and an unmatched one lists nobody', () => {

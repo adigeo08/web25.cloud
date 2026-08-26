@@ -21,16 +21,21 @@ import * as ecies from '../src/channels/ecies.js';
 import { nostrCore } from '../src/nostr/nostr.js';
 import { npubEncode } from '../src/nostr/nip19.js';
 
+/** Publication no longer defaults a category, so tests name one explicitly. */
+const CATEGORY = 'tcat:application';
+
 const WALLET_PRIV = '0x1111111111111111111111111111111111111111111111111111111111111111';
 const INFOHASH = 'e5a1c0d4b7f28369ac015be47d3902fa6c8b1d47';
 const PUBLISHER = '0x1111111111111111111111111111111111111111';
 const EVM_SIGNATURE = `0x${'9'.repeat(130)}`;
 const TRACKER = 'wss://tracker.openwebtorrent.com/';
 
-function torrent() {
+function torrent(siteName = 'my-site') {
     return {
         infoHash: INFOHASH,
-        name: 'my-site.nosns.torrent',
+        // The title is the real `info.name`, so a different site name means a
+        // different torrent name rather than a separate display label.
+        name: `${siteName}.nosns.torrent`,
         files: [
             { path: 'my-site.nosns.torrent/.torrentchain', name: '.torrentchain', length: 1234 },
             { path: 'my-site.nosns.torrent/site.bundle.json.gz', name: 'site.bundle.json.gz', length: 56789 }
@@ -49,7 +54,12 @@ function chainArtifact() {
         totalBytes: 1200,
         merkleRoot: 'a'.repeat(64),
         filesSemantics: 'bundle-contents',
-        bundle: { name: 'site.bundle.json.gz', sha256: 'b'.repeat(64), contentEncoding: 'gzip', schema: 'web25-sitebundle-v1' }
+        bundle: {
+            name: 'site.bundle.json.gz',
+            sha256: 'b'.repeat(64),
+            contentEncoding: 'gzip',
+            schema: 'web25-sitebundle-v1'
+        }
     };
     return { payload, message: JSON.stringify(payload), signature: EVM_SIGNATURE };
 }
@@ -151,7 +161,7 @@ async function serviceWith(pool, { wallet = null } = {}) {
 
 function signedNosnsEvent(privateKey = WALLET_PRIV.slice(2)) {
     return nostrCore.signEvent(
-        buildNosnsEventTemplate({ torrent: torrent(), chainArtifact: chainArtifact(), siteName: 'My Site' }),
+        buildNosnsEventTemplate({ torrent: torrent(), chainArtifact: chainArtifact(), category: CATEGORY }),
         privateKey
     );
 }
@@ -186,7 +196,11 @@ test('the DM relay pool is left completely untouched', async () => {
 
 test('the NosNS event is signed by the wallet-derived Nostr identity', async () => {
     const { service, wallet } = await serviceWith(new FakePool());
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
 
     assert.equal(event.pubkey, wallet.nostrPublicKey, 'the same key that backs the EVM identity');
     assert.equal(nostrCore.verifyEvent(event), true);
@@ -196,7 +210,11 @@ test('the NosNS event is signed by the wallet-derived Nostr identity', async () 
 
 test('publishing to NosNS generates no second EVM signature', async () => {
     const { service, wallet } = await serviceWith(new FakePool());
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     await service.publishSignedEvent(event);
 
     assert.equal(wallet.calls.evmSignMessage, 0, 'the site was already signed when .torrentchain was created');
@@ -208,25 +226,31 @@ test('a locked wallet cannot create a NosNS event', async () => {
     const service = new NosNSService({ signer: wallet.signer, pool: new FakePool() });
 
     await assert.rejects(
-        () => service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() }),
+        () =>
+            service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact(), category: CATEGORY }),
         /unlock your wallet|locked/i
     );
 });
 
 test('locking mid-session stops further NosNS signing', async () => {
     const { service, wallet } = await serviceWith(new FakePool());
-    await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact(), category: CATEGORY });
 
     await wallet.lock();
     await assert.rejects(
-        () => service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() }),
+        () =>
+            service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact(), category: CATEGORY }),
         /locked|unlock/i
     );
 });
 
 test('no private key or nsec appears in a published NosNS event', async () => {
     const { service } = await serviceWith(new FakePool());
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const wire = JSON.stringify(event);
 
     assert.ok(!wire.includes(WALLET_PRIV), 'the private key must never be published');
@@ -240,7 +264,11 @@ test('a partial relay failure still counts as published', async () => {
     const pool = new FakePool({ failing: ['wss://relay.dtan.xyz'] });
     const { service } = await serviceWith(pool);
 
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const result = await service.publishSignedEvent(event);
 
     assert.equal(result.ok, true);
@@ -252,7 +280,11 @@ test('DTAN being unavailable is reported, never thrown', async () => {
     const pool = new FakePool({ relays: ['wss://relay.dtan.xyz'], failing: ['wss://relay.dtan.xyz'] });
     const { service } = await serviceWith(pool);
 
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const result = await service.publishSignedEvent(event);
 
     // A deployment is valid without a NosNS entry, so this resolves with a
@@ -269,7 +301,11 @@ test('a completely unreachable relay pool reports failure without throwing', asy
     await wallet.unlock();
     const service = new NosNSService({ signer: wallet.signer, pool });
 
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const result = await service.publishSignedEvent(event);
 
     assert.equal(result.ok, false);
@@ -282,7 +318,11 @@ test('a retry resubmits the exact same signed event', async () => {
     const pool = new FakePool({ relays: ['wss://relay.dtan.xyz'], failing: ['wss://relay.dtan.xyz'] });
     const { service } = await serviceWith(pool);
 
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const first = await service.publishSignedEvent(event);
     assert.equal(first.ok, false);
 
@@ -303,7 +343,11 @@ test('a retry never re-signs, so it cannot become a second torrent entry', async
     const pool = new FakePool({ relays: ['wss://relay.dtan.xyz'], failing: ['wss://relay.dtan.xyz'] });
     const { service, wallet } = await serviceWith(pool);
 
-    const event = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const event = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     const signCallsAfterBuild = wallet.calls.nostrSignEvent;
 
     await service.publishSignedEvent(event);
@@ -320,9 +364,17 @@ test('rebuilding instead of retrying would produce a different event — the rea
     await wallet.unlock();
     const service = new NosNSService({ signer: wallet.signer, pool: new FakePool(), now: () => clock });
 
-    const first = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const first = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
     clock += 60_000;
-    const rebuilt = await service.createSignedNosnsEvent({ torrent: torrent(), chainArtifact: chainArtifact() });
+    const rebuilt = await service.createSignedNosnsEvent({
+        torrent: torrent(),
+        chainArtifact: chainArtifact(),
+        category: CATEGORY
+    });
 
     assert.notEqual(first.id, rebuilt.id);
     assert.notEqual(first.created_at, rebuilt.created_at);
@@ -363,7 +415,10 @@ test('an unknown category cannot reach a relay filter', async () => {
 
     // The old invented category is refused outright rather than quietly
     // rewritten, so nothing can query — or publish — outside the taxonomy.
-    assert.throws(() => service.buildNosnsFilter({ category: 'tcat:web25.cloud,websites' }), /not an official DTAN category/i);
+    assert.throws(
+        () => service.buildNosnsFilter({ category: 'tcat:web25.cloud,websites' }),
+        /not an official DTAN category/i
+    );
     assert.throws(() => service.buildNosnsFilter({ category: 'tcat:nosns' }), /not an official DTAN category/i);
 });
 
@@ -412,7 +467,11 @@ test('unrelated torrents delivered by a relay are ignored', async () => {
                 kind: 2003,
                 created_at: 1800000000,
                 // Right kind, right category, no NosNS suffix.
-                tags: [['title', 'Linux ISO'], ['x', INFOHASH], ['i', 'tcat:application']],
+                tags: [
+                    ['title', 'Linux ISO'],
+                    ['x', INFOHASH],
+                    ['i', 'tcat:application']
+                ],
                 content: ''
             },
             WALLET_PRIV.slice(2)
@@ -443,11 +502,25 @@ test('a bounded query returns verified results newest first', async () => {
     const { service } = await serviceWith(pool);
 
     const older = nostrCore.signEvent(
-        { ...buildNosnsEventTemplate({ torrent: torrent(), chainArtifact: chainArtifact(), siteName: 'Older' }), created_at: 1000 },
+        {
+            ...buildNosnsEventTemplate({
+                torrent: torrent('Older'),
+                chainArtifact: chainArtifact(),
+                category: CATEGORY
+            }),
+            created_at: 1000
+        },
         WALLET_PRIV.slice(2)
     );
     const newer = nostrCore.signEvent(
-        { ...buildNosnsEventTemplate({ torrent: torrent(), chainArtifact: chainArtifact(), siteName: 'Newer' }), created_at: 2000 },
+        {
+            ...buildNosnsEventTemplate({
+                torrent: torrent('Newer'),
+                chainArtifact: chainArtifact(),
+                category: CATEGORY
+            }),
+            created_at: 2000
+        },
         WALLET_PRIV.slice(2)
     );
 
@@ -459,8 +532,14 @@ test('a bounded query returns verified results newest first', async () => {
     pool.deliver(newer);
 
     const results = await pending;
-    assert.deepEqual(results.map((r) => r.displayName), ['Newer', 'Older']);
-    assert.deepEqual(results.map((r) => r.title), ['Newer.nosns.torrent', 'Older.nosns.torrent']);
+    assert.deepEqual(
+        results.map((r) => r.displayName),
+        ['Newer', 'Older']
+    );
+    assert.deepEqual(
+        results.map((r) => r.title),
+        ['Newer.nosns.torrent', 'Older.nosns.torrent']
+    );
     assert.equal(results[0].web25VerificationState, WEB25_VERIFICATION.VERIFIED);
     assert.equal(pool.subscriptions[0].closed, true, 'a query must not leak its subscription');
 });

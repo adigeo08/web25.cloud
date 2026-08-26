@@ -35,21 +35,39 @@ const RESULTS = [
 // ─── Search ──────────────────────────────────────────────────────────────
 
 test('search matches on site name', () => {
-    assert.deepEqual(filterNosnsResults(RESULTS, 'bob').map((r) => r.displayName), ['Bob Blog']);
-    assert.deepEqual(filterNosnsResults(RESULTS, 'ALICE').map((r) => r.displayName), ['Alice Homepage']);
+    assert.deepEqual(
+        filterNosnsResults(RESULTS, 'bob').map((r) => r.displayName),
+        ['Bob Blog']
+    );
+    assert.deepEqual(
+        filterNosnsResults(RESULTS, 'ALICE').map((r) => r.displayName),
+        ['Alice Homepage']
+    );
 });
 
 test('search matches on infohash', () => {
-    assert.deepEqual(filterNosnsResults(RESULTS, 'e5a1c0d4').map((r) => r.displayName), ['Alice Homepage']);
+    assert.deepEqual(
+        filterNosnsResults(RESULTS, 'e5a1c0d4').map((r) => r.displayName),
+        ['Alice Homepage']
+    );
 });
 
 test('search matches on EVM publisher address', () => {
-    assert.deepEqual(filterNosnsResults(RESULTS, '0x4de1').map((r) => r.displayName), ['Alice Homepage']);
+    assert.deepEqual(
+        filterNosnsResults(RESULTS, '0x4de1').map((r) => r.displayName),
+        ['Alice Homepage']
+    );
 });
 
 test('search matches on npub and on the raw Nostr pubkey', () => {
-    assert.deepEqual(filterNosnsResults(RESULTS, 'npub180cvv').map((r) => r.displayName), ['Alice Homepage']);
-    assert.deepEqual(filterNosnsResults(RESULTS, '3bf0c63f').map((r) => r.displayName), ['Alice Homepage']);
+    assert.deepEqual(
+        filterNosnsResults(RESULTS, 'npub180cvv').map((r) => r.displayName),
+        ['Alice Homepage']
+    );
+    assert.deepEqual(
+        filterNosnsResults(RESULTS, '3bf0c63f').map((r) => r.displayName),
+        ['Alice Homepage']
+    );
 });
 
 test('an empty query lists everything', () => {
@@ -99,13 +117,27 @@ function simulateWizardStep({ hasFiles, hasSignature, hasDeployResult, registryS
 }
 
 test('the NosNS step is only reached once a deployment exists', () => {
-    assert.equal(simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: false, registryState: 'publishing' }), 5);
-    assert.equal(simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: true, registryState: 'idle' }), 6);
-    assert.equal(simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: true, registryState: 'publishing' }), 7);
+    assert.equal(
+        simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: false, registryState: 'publishing' }),
+        5
+    );
+    assert.equal(
+        simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: true, registryState: 'idle' }),
+        6
+    );
+    assert.equal(
+        simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: true, registryState: 'publishing' }),
+        7
+    );
 });
 
 test('a failed NosNS publication still leaves the deployment complete', () => {
-    const step = simulateWizardStep({ hasFiles: true, hasSignature: true, hasDeployResult: true, registryState: 'failed' });
+    const step = simulateWizardStep({
+        hasFiles: true,
+        hasSignature: true,
+        hasDeployResult: true,
+        registryState: 'failed'
+    });
 
     // Still past "live and seeding": the site is deployed either way, and only
     // the NosNS step is shown as unfinished.

@@ -41,7 +41,12 @@ class FakePool {
     subscribe(filters, onEvent) {
         const sub = { filters, onEvent, closed: false };
         this.subscriptions.push(sub);
-        return { id: `s${this.subscriptions.length}`, close: () => { sub.closed = true; } };
+        return {
+            id: `s${this.subscriptions.length}`,
+            close: () => {
+                sub.closed = true;
+            }
+        };
     }
     deliver(event) {
         for (const sub of this.subscriptions) if (!sub.closed) sub.onEvent(event, 'wss://fake');
@@ -60,7 +65,10 @@ function presenceBeacon(privateKey, atMs = Date.now()) {
         {
             kind: NOSTR_CONFIG.PRESENCE_KIND,
             created_at: seconds,
-            tags: [['d', NOSTR_CONFIG.PRESENCE_IDENTIFIER], ['expiration', `${seconds + 180}`]],
+            tags: [
+                ['d', NOSTR_CONFIG.PRESENCE_IDENTIFIER],
+                ['expiration', `${seconds + 180}`]
+            ],
             content: ''
         },
         privateKey
@@ -96,7 +104,10 @@ test('the presence beacon carries no content beyond being reachable', async () =
         ['d', 'web25-dm'],
         'namespaced away from a general NIP-38 status'
     );
-    assert.ok(beacon.tags.some((tag) => tag[0] === 'expiration'), 'beacons expire');
+    assert.ok(
+        beacon.tags.some((tag) => tag[0] === 'expiration'),
+        'beacons expire'
+    );
     service.stop();
 });
 
@@ -382,4 +393,92 @@ test('the old competing transport indicator is gone', async () => {
     assert.equal(panel.renderDmTransport, undefined, 'no second connection flag may remain');
     assert.equal(panel.renderChannelsStatus, undefined);
     assert.equal(typeof panel.renderDmConnectionState, 'function');
+});
+
+// ─── Presence for a searched address ─────────────────────────────────────
+
+// `Lifecycle.js` is browser code and reads `window` at module scope through the
+// shared config; a minimal stand-in lets the real module load unchanged.
+globalThis.window = globalThis.window || {
+    location: { hostname: 'localhost', origin: 'http://localhost', pathname: '/' }
+};
+globalThis.document = globalThis.document || {
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => []
+};
+globalThis.localStorage = globalThis.localStorage || {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {}
+};
+
+/**
+ * Looking someone up should say whether they are reachable *before* a request
+ * is sent — but `watch()` replaces its whole subscription set, so the searched
+ * address and the contacts have to be combined rather than layered, or one
+ * silently unsubscribes the other.
+ */
+function presenceApp() {
+    const rendered = [];
+    const app = {
+        dmContacts: [{ nostrPublicKey: 'aa'.repeat(32) }, { nostrPublicKey: 'bb'.repeat(32) }],
+        dmSearchedPeer: '',
+        watched: [],
+        online: new Set(),
+        presenceService: {
+            watch(keys) {
+                app.watched = [...keys];
+            },
+            isOnline: (key) => app.online.has(key)
+        },
+        rendered
+    };
+    return app;
+}
+
+test('watching a searched address keeps the contacts subscribed too', async () => {
+    const { watchPresenceTargets } = await import('../src/core/bootstrap/Lifecycle.js');
+    const app = presenceApp();
+    const run = watchPresenceTargets.bind(app);
+
+    run();
+    assert.deepEqual(app.watched, ['aa'.repeat(32), 'bb'.repeat(32)]);
+
+    app.dmSearchedPeer = 'cc'.repeat(32);
+    run();
+    assert.deepEqual(
+        app.watched,
+        ['aa'.repeat(32), 'bb'.repeat(32), 'cc'.repeat(32)],
+        'the search must not unsubscribe the contacts'
+    );
+});
+
+test('clearing the search stops watching that address but keeps the contacts', async () => {
+    const { watchPresenceTargets } = await import('../src/core/bootstrap/Lifecycle.js');
+    const app = presenceApp();
+    const run = watchPresenceTargets.bind(app);
+
+    app.dmSearchedPeer = 'cc'.repeat(32);
+    run();
+    assert.equal(app.watched.length, 3);
+
+    app.dmSearchedPeer = '';
+    run();
+    assert.deepEqual(app.watched, ['aa'.repeat(32), 'bb'.repeat(32)]);
+});
+
+test('watching a searched address is read-only — it starts no handshake', async () => {
+    const source = await import('node:fs/promises').then((fs) =>
+        fs.readFile(new URL('../src/core/bootstrap/Lifecycle.js', import.meta.url), 'utf8')
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const fn = code.slice(code.indexOf('export function watchSearchedPeer'));
+    const body = fn.slice(0, fn.indexOf('\n}'));
+
+    // Being online is not an invitation: subscribing to a public beacon must
+    // not create an offer, gather ICE, or send anything to the peer.
+    for (const forbidden of ['createOffer', 'createAnswer', 'sendInvitation', 'sendChatRequest', 'sendGiftWrapped']) {
+        assert.ok(!body.includes(forbidden), `looking someone up must not ${forbidden}`);
+    }
 });

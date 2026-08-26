@@ -54,14 +54,14 @@ export function bindCategoryPicker(onChange, initial) {
     const select = /** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-category-select'));
     if (!select) return;
     if (!select.dataset.populated) {
-        populateCategorySelect(select, initial);
+        populateCategorySelect(select, initial, { placeholder: '— Select a DTAN category —' });
         select.dataset.populated = '1';
     } else if (initial) {
         setCategorySelect(select, initial);
     }
     if (select.dataset.bound) return;
     select.dataset.bound = '1';
-    select.addEventListener('change', () => onChange(readCategorySelect(select)));
+    select.addEventListener('change', () => onChange(readCategorySelect(select, '')));
 }
 
 /** @param {string} category */
@@ -84,7 +84,7 @@ export function setCategoryFrozen(frozen) {
  * @param {{ state: 'idle'|'signing'|'publishing'|'published'|'failed'|'skipped',
  *           accepted?: string[], attempted?: number, error?: string|null,
  *           npub?: string|null, eventId?: string|null, category?: string|null,
- *           title?: string|null }} status
+ *           title?: string|null, canRetry?: boolean }} status
  */
 export function renderNosnsStatus(status) {
     const row = document.getElementById('result-registry-row');
@@ -132,9 +132,12 @@ export function renderNosnsStatus(status) {
         stateEl.className = className;
     }
 
-    // Retry is offered only when there is a signed event to resubmit.
+    // Retry is offered when there is a signed event to resubmit, and also when
+    // the caller says the situation is recoverable — a deployment that skipped
+    // publication only because no category was chosen becomes publishable the
+    // moment one is.
     if (retryBtn) {
-        const canRetry = status.state === 'failed' && Boolean(status.eventId);
+        const canRetry = (status.state === 'failed' && Boolean(status.eventId)) || Boolean(status.canRetry);
         retryBtn.classList.toggle('hidden', !canRetry);
     }
 }

@@ -114,6 +114,21 @@ that name. The check is one line:
 title.endsWith('.nosns.torrent')
 ```
 
+Matched **strictly**, in canonical lowercase: `Foo.NOSNS.TORRENT` is not a NosNS
+name. Two accepted spellings would let one site be listed twice and make a
+lookup by name depend on which spelling a client happened to use.
+`ensureNosnsTorrentName()` is the single place that canonicalises, and what it
+returns always passes the strict check.
+
+The event title is the real `info.name` **verbatim** — never a display or site
+name derived alongside it. NIP-35 says the title names the torrent, so a
+separately derived name could drift from what the torrent actually says and
+leave the entry unfindable by the name it is distributed under. A `siteName`
+passed to the builder is treated as an assertion: if it disagrees with the
+torrent name, publication fails rather than silently relabelling. A torrent
+seeded without the suffix cannot be published at all, since inventing it in the
+title would advertise a name the torrent does not have.
+
 The UI strips the suffix for display; the raw title stays the protocol value.
 
 ### Choosing a real DTAN category
@@ -135,8 +150,25 @@ relay connectivity are separate facts and are never reported as one.
 Applications            -> tcat:application
 Applications / UNIX     -> tcat:application,unix
 Other / Archives        -> tcat:other,archive
+Other / E-Books         -> tcat:other,e-book
 Video / Movies / 4k     -> tcat:video,movie,4k
 ```
+
+The tags are compared against upstream path by path in
+`tests/nosns-dtan-taxonomy.test.mjs`, because a mirror can drift and drift is
+not cosmetic: a `tcat` DTAN does not recognise matches no filter, so the entry
+is published and invisible. A one-character difference — `ebook` where upstream
+says `e-book` — fails exactly like the old custom category while looking
+perfectly reasonable in review. Display labels are deliberately local: the
+picker nests options under their parent, so upstream's "4k Movies" inside a
+"Movies" group would read as "Movies / 4k Movies".
+
+**The category is chosen, never assumed.** There is no silent default at
+publication: the picker opens on "— Select a DTAN category —", and deploying
+without one skips publication rather than filing the site somewhere the
+publisher did not pick and would not think to look. That skip never blocks the
+deployment, and it is recoverable — choosing a category and pressing Retry
+builds and publishes the entry.
 
 The UI can only emit a value from that tree; an arbitrary category is refused
 outright by both the event builder and the query filter, rather than quietly

@@ -85,6 +85,8 @@ const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
  * would otherwise silently reset it. Public directory metadata only.
  */
 const NOSNS_CATEGORY_STORAGE_KEY = 'web25.nosns.category.v1';
+/** How long a searched address shows "checking" before it is called offline. */
+const DM_SEARCH_PRESENCE_GRACE_MS = 3000;
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
@@ -225,7 +227,7 @@ export function setNosnsCategory(category) {
         setCategoryFrozen(true);
         return;
     }
-    this.nosnsCategory = normalizeDtanCategory(category);
+    this.nosnsCategory = normalizeDtanCategory(category, '');
     showSelectedCategory(this.nosnsCategory);
     try {
         localStorage.setItem(NOSNS_CATEGORY_STORAGE_KEY, this.nosnsCategory);
@@ -246,9 +248,11 @@ export function setNosnsCategory(category) {
 export function restoreNosnsCategory() {
     try {
         const stored = localStorage.getItem(NOSNS_CATEGORY_STORAGE_KEY);
-        return stored ? normalizeDtanCategory(stored) : NOSNS_DEFAULT_CATEGORY;
+        // `''` when nothing valid is stored: the publisher has not chosen yet,
+        // and that is a state the publish path has to see rather than paper over.
+        return stored ? normalizeDtanCategory(stored, '') : '';
     } catch (_) {
-        return NOSNS_DEFAULT_CATEGORY;
+        return '';
     }
 }
 
@@ -304,7 +308,33 @@ export async function publishNosnsEntry() {
     const signature = this.lastSignature;
     if (!candidate?.torrent || !signature?.signature) return;
 
-    const category = normalizeDtanCategory(this.nosnsCategory);
+    const category = normalizeDtanCategory(this.nosnsCategory, '');
+    if (!category) {
+        // Deployment already succeeded and must not be undone by this. The
+        // entry is simply not created, and Retry picks it up once a category
+        // has been chosen.
+        this.registryPublication = {
+            ok: false,
+            error: 'No DTAN category selected.',
+            accepted: [],
+            rejected: {},
+            attempted: 0,
+            eventId: null
+        };
+        renderNosnsStatus({
+            state: 'skipped',
+            npub: null,
+            error: 'Select a DTAN category, then retry to list this site.',
+            category: null,
+            canRetry: true
+        });
+        renderNosnsTechnicalDetails({ event: null, publication: this.registryPublication, category: null });
+        renderDeployStage('Deployment complete', 'Live and seeding · pick a DTAN category to list it in NosNS');
+        updateDeployProgress({ label: 'Live and seeding · NosNS category not chosen', percent: 100, state: 'success' });
+        this.refreshDeployUiState();
+        this.toast.info('Your site is live. Choose a DTAN category to list it in the NosNS directory.', 'NosNS');
+        return;
+    }
 
     let npub = null;
     try {
@@ -369,7 +399,7 @@ export async function sendNosnsEvent(npub = null) {
     const event = this.lastRegistryEvent;
     if (!event) return;
 
-    const category = normalizeDtanCategory(this.nosnsCategory);
+    const category = normalizeDtanCategory(this.nosnsCategory, '');
     const publication = await this.nosnsService.publishSignedEvent(event);
     this.registryPublication = publication;
 
@@ -415,6 +445,13 @@ export async function sendNosnsEvent(npub = null) {
 /** Resubmit the exact same signed event: same id, created_at, category and signature. */
 export async function retryNosnsPublish() {
     if (!this.lastRegistryEvent) {
+        // Nothing was signed yet. If the artifact is still here, this is the
+        // "category chosen after deploying" case, so build and publish now
+        // rather than telling the user there is nothing to retry.
+        if (this.lastPublishCandidate?.torrent && this.lastSignature?.signature) {
+            await this.publishNosnsEntry();
+            return;
+        }
         this.toast.warning('There is no signed NosNS event to retry.', 'NosNS');
         return;
     }
@@ -424,7 +461,7 @@ export async function retryNosnsPublish() {
     } catch (_) {
         npub = null;
     }
-    renderNosnsStatus({ state: 'publishing', npub, category: normalizeDtanCategory(this.nosnsCategory) });
+    renderNosnsStatus({ state: 'publishing', npub, category: normalizeDtanCategory(this.nosnsCategory, '') });
     await this.sendNosnsEvent(npub);
 }
 
@@ -451,7 +488,7 @@ export function setupChannels() {
     this.presenceService = new NostrPresenceService({
         pool: this.nostrPool,
         signer,
-        onPresenceChange: () => this.refreshContactList(),
+        onPresenceChange: (pubkey) => this.handlePresenceChange(pubkey),
         onIntentChange: (peer, state) => this.handleIntentChange(peer, state),
         onMutualIntent: (peer) => void this.startMutualConversation(peer),
         onError: (error) => this.log(`Nostr presence: ${error.message}`)
@@ -467,6 +504,12 @@ export function setupChannels() {
     this.dmContacts = [];
     this.dmContactFilter = '';
     this.dmSelectedPeer = '';
+    /**
+     * A pubkey typed into the search box. Watched for presence alongside the
+     * contacts so the user can see whether somebody is reachable *before*
+     * requesting a chat, and dropped again when the search is cleared.
+     */
+    this.dmSearchedPeer = '';
 
     // Offers from peers who are not approved contacts wait here. Nothing is
     // answered from this queue without a person pressing Accept.
@@ -517,6 +560,10 @@ export function setupChannels() {
                 this.log(`Nostr profile lookup unavailable: ${error.message}`);
             }
 
+            // Presence for the address on screen, so the user can see whether a
+            // request is likely to be seen. Read-only: it starts no handshake.
+            this.watchSearchedPeer(nostrPublicKey);
+
             const npub = npubEncode(nostrPublicKey);
             return { nostrPublicKey, npub, shortNpub: shortNpub(npub), profile };
         },
@@ -539,6 +586,7 @@ export function setupChannels() {
             if (this.dmSelectedPeer) this.presenceService?.clearIntent(this.dmSelectedPeer);
             this.dmSelectedPeer = '';
             this.dmOfferSessionId = null;
+            this.stopWatchingSearchedPeer();
             clearDmSearch();
             renderDmConnectionState('idle');
             showDmStep('dm-choose-role');
@@ -862,9 +910,23 @@ export async function acceptDmInvitation(peerNostrPublicKey) {
         });
         await this.refreshContactList();
 
-        // Presence intent is recorded too, so the existing WebRTC-first /
-        // Nostr-fallback path continues exactly as before.
-        this.presenceService?.sendChatRequest(sender);
+        // Record our own outgoing intent, so presence sees the pair as mutual
+        // and the existing WebRTC-first / Nostr-fallback path continues as
+        // before. `sendChatRequest` needs the gift-wrap sender as its second
+        // argument — called with one, it rejects and the intent is never
+        // recorded.
+        //
+        // Best-effort on purpose: the answer is already sent and the contact
+        // already stored by this point, so a relay hiccup here must not report
+        // the acceptance as failed.
+        try {
+            await this.presenceService?.sendChatRequest(sender, (peer, kind, content) =>
+                this.nostrDmSession.sendGiftWrapped(peer, kind, content)
+            );
+        } catch (error) {
+            this.log(`Accepted ${sender} but could not announce intent: ${error.message}`);
+        }
+
         this.toast.success('Invitation accepted; connecting…', 'Direct Messenger');
         return Boolean(answerSignal);
     } catch (error) {
@@ -963,13 +1025,76 @@ export async function refreshContactList() {
         return;
     }
 
-    // Watch exactly the contacts on screen; presence for anyone else is noise.
-    this.presenceService?.watch(this.dmContacts.map((contact) => contact.nostrPublicKey));
+    this.watchPresenceTargets();
 
     renderContacts(filterContacts(this.dmContacts, this.dmContactFilter), {
         isOnline: (pubkey) => Boolean(this.presenceService?.isOnline(pubkey)),
         selectedKey: this.dmSelectedPeer
     });
+}
+
+/**
+ * Everyone whose presence beacon is worth subscribing to right now.
+ *
+ * `watch()` replaces the whole subscription set rather than adding to it, so
+ * the contacts and any address currently in the search box have to be combined
+ * here. Anyone else is noise.
+ */
+export function watchPresenceTargets() {
+    const targets = (this.dmContacts || []).map((contact) => contact.nostrPublicKey);
+    if (this.dmSearchedPeer) targets.push(this.dmSearchedPeer);
+    this.presenceService?.watch(targets);
+}
+
+/**
+ * A beacon arrived (or lapsed) for someone we are watching.
+ * @param {string} pubkey
+ */
+export function handlePresenceChange(pubkey) {
+    const peer = `${pubkey || ''}`.toLowerCase();
+    if (this.dmSearchedPeer && peer === this.dmSearchedPeer) {
+        renderSearchPresence(Boolean(this.presenceService?.isOnline(this.dmSearchedPeer)));
+    }
+    void this.refreshContactList();
+}
+
+/**
+ * Watch a searched address for presence, temporarily.
+ *
+ * Being online is not an invitation and this starts no handshake: it is a
+ * read-only subscription to a public NIP-38 beacon, so the user can see whether
+ * a request is likely to be seen soon before they send one.
+ *
+ * @param {string} nostrPublicKey
+ */
+export function watchSearchedPeer(nostrPublicKey) {
+    this.dmSearchedPeer = `${nostrPublicKey || ''}`.toLowerCase();
+    if (!this.dmSearchedPeer) {
+        renderSearchPresence(null);
+        this.watchPresenceTargets();
+        return;
+    }
+
+    // Subscribing is instant; a beacon is not. Say "checking" rather than
+    // reporting a not-yet-received beacon as offline.
+    renderSearchPresence(this.presenceService?.isOnline(this.dmSearchedPeer) ? true : 'checking');
+    this.watchPresenceTargets();
+
+    // If nothing has arrived within the beacon window, offline is now the
+    // honest answer rather than a guess.
+    clearTimeout(this._dmSearchPresenceTimer);
+    this._dmSearchPresenceTimer = setTimeout(() => {
+        if (!this.dmSearchedPeer) return;
+        renderSearchPresence(Boolean(this.presenceService?.isOnline(this.dmSearchedPeer)));
+    }, DM_SEARCH_PRESENCE_GRACE_MS);
+}
+
+/** Stop watching a searched address once it is no longer on screen. */
+export function stopWatchingSearchedPeer() {
+    clearTimeout(this._dmSearchPresenceTimer);
+    this.dmSearchedPeer = '';
+    renderSearchPresence(null);
+    this.watchPresenceTargets();
 }
 
 /**
@@ -1826,7 +1951,7 @@ export function persistDeploySession() {
             // Public metadata only — it carries no key material of any kind.
             registryEvent: this.lastRegistryEvent || null,
             registryPublication: this.registryPublication || null,
-            nosnsCategory: normalizeDtanCategory(this.nosnsCategory),
+            nosnsCategory: normalizeDtanCategory(this.nosnsCategory, ''),
             savedAt: Date.now()
         };
         localStorage.setItem(DEPLOY_SESSION_STORAGE_KEY, JSON.stringify(payload));
@@ -1886,7 +2011,7 @@ export async function restoreDeploySession() {
         // Restore the signed NosNS event so Retry resubmits it unchanged.
         this.lastRegistryEvent = savedSession.registryEvent || null;
         this.registryPublication = savedSession.registryPublication || null;
-        this.nosnsCategory = normalizeDtanCategory(savedSession.nosnsCategory || this.nosnsCategory);
+        this.nosnsCategory = normalizeDtanCategory(savedSession.nosnsCategory || this.nosnsCategory, '');
         showSelectedCategory(this.nosnsCategory);
         if (this.lastRegistryEvent) {
             // The category is inside a signed event again, so it re-freezes.

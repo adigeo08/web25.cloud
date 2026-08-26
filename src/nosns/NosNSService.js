@@ -122,13 +122,7 @@ export class NosNSService {
      *           siteName?: string, trackers?: string[] }} params
      * @returns {Promise<any>} the signed Nostr event
      */
-    async createSignedNosnsEvent({
-        torrent,
-        chainArtifact,
-        siteName = '',
-        trackers = [],
-        category = NOSNS_DEFAULT_CATEGORY
-    }) {
+    async createSignedNosnsEvent({ torrent, chainArtifact, siteName = '', trackers = [], category = '' }) {
         const identity = await this.signer.getNostrIdentity();
         if (!identity?.nostrPublicKey) {
             throw new Error('Nostr identity is unavailable: unlock your wallet to publish to NosNS.');

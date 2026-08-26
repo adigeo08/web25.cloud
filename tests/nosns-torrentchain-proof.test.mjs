@@ -31,6 +31,9 @@ import {
 import { nostrCore } from '../src/nostr/nostr.js';
 import { npubEncode } from '../src/nostr/nip19.js';
 
+/** Publication no longer defaults a category, so tests name one explicitly. */
+const CATEGORY = 'tcat:application';
+
 const WALLET_PRIV = '0x1111111111111111111111111111111111111111111111111111111111111111';
 const INFOHASH = 'e5a1c0d4b7f28369ac015be47d3902fa6c8b1d47';
 
@@ -122,10 +125,10 @@ async function deployWebsite({ signCounter }) {
     // back into the signed payload.
     const torrent = {
         infoHash: INFOHASH,
-        name: 'hello-web25',
+        name: 'hello-web25.nosns.torrent',
         files: [
-            { path: 'hello-web25/.torrentchain', length: JSON.stringify(manifest, null, 2).length },
-            { path: 'hello-web25/site.bundle.json.gz', length: 4096 }
+            { path: 'hello-web25.nosns.torrent/.torrentchain', length: JSON.stringify(manifest, null, 2).length },
+            { path: 'hello-web25.nosns.torrent/site.bundle.json.gz', length: 4096 }
         ],
         announce: ['wss://tracker.openwebtorrent.com/']
     };
@@ -139,7 +142,7 @@ test('a registry event mirrors a real .torrentchain proof that independently ver
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
 
-    const template = buildNosnsEventTemplate({ torrent, chainArtifact, siteName: 'Hello WEB25' });
+    const template = buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY, siteName: 'hello-web25' });
     signCounter.nostr += 1;
     const event = nostrCore.signEvent(template, WALLET_PRIV.slice(2));
 
@@ -156,7 +159,7 @@ test('exactly one EVM signature is produced per website, and none for the regist
     assert.equal(signCounter.evm, 1, 'the website is signed once, when .torrentchain is built');
 
     // Building and signing the registry event adds a Nostr signature only.
-    const template = buildNosnsEventTemplate({ torrent, chainArtifact, siteName: 'Hello WEB25' });
+    const template = buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY, siteName: 'hello-web25' });
     nostrCore.signEvent(template, WALLET_PRIV.slice(2));
     signCounter.nostr += 1;
 
@@ -168,7 +171,7 @@ test('the two signatures are distinct and prove different things', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
     const event = nostrCore.signEvent(
-        buildNosnsEventTemplate({ torrent, chainArtifact, siteName: 'Hello WEB25' }),
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY, siteName: 'hello-web25' }),
         WALLET_PRIV.slice(2)
     );
 
@@ -186,7 +189,7 @@ test('both identities come from the same local wallet key', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
     const event = nostrCore.signEvent(
-        buildNosnsEventTemplate({ torrent, chainArtifact }),
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY }),
         WALLET_PRIV.slice(2)
     );
 
@@ -209,7 +212,8 @@ test('a forged publisher claim fails EVM verification', async () => {
     );
     const template = buildNosnsEventTemplate({
         torrent,
-        chainArtifact: { ...chainArtifact, signature: forgedSignature }
+        chainArtifact: { ...chainArtifact, signature: forgedSignature },
+        category: CATEGORY
     });
     const event = nostrCore.signEvent(template, WALLET_PRIV.slice(2));
 
@@ -222,7 +226,10 @@ test('a forged publisher claim fails EVM verification', async () => {
 test('registry metadata is checked against the downloaded .torrentchain', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
-    const event = nostrCore.signEvent(buildNosnsEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const event = nostrCore.signEvent(
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY }),
+        WALLET_PRIV.slice(2)
+    );
     const result = parseNosnsEvent(event, { npubEncode });
 
     // The honest case: registry and manifest agree.
@@ -253,7 +260,10 @@ test('the signed .torrentchain payload never contains the final infohash', async
 test('the registry event is where the infohash and the proof finally meet', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
-    const event = nostrCore.signEvent(buildNosnsEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const event = nostrCore.signEvent(
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY }),
+        WALLET_PRIV.slice(2)
+    );
 
     // Created after the torrent exists, so it can safely carry both.
     assert.equal(firstTagValue(event.tags, 'x'), INFOHASH);
@@ -279,7 +289,10 @@ function simulateLoadPathCrossCheck({ registryClaim, hash, manifest }) {
 test('opening from the registry compares the claim against the downloaded manifest', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
-    const event = nostrCore.signEvent(buildNosnsEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const event = nostrCore.signEvent(
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY }),
+        WALLET_PRIV.slice(2)
+    );
     const claim = parseNosnsEvent(event, { npubEncode });
 
     const check = simulateLoadPathCrossCheck({ registryClaim: claim, hash: INFOHASH, manifest });
@@ -290,7 +303,10 @@ test('opening from the registry compares the claim against the downloaded manife
 test('a lying registry entry is detected but never blocks a valid load', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
-    const event = nostrCore.signEvent(buildNosnsEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const event = nostrCore.signEvent(
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY }),
+        WALLET_PRIV.slice(2)
+    );
     const claim = parseNosnsEvent(event, { npubEncode });
 
     // The swarm serves a genuinely signed site by somebody else.
@@ -318,7 +334,10 @@ test('a site loaded by hash carries no registry claim to check', () => {
 test('a claim for a different infohash is not applied to this load', async () => {
     const signCounter = { evm: 0, nostr: 0 };
     const { manifest, torrent, chainArtifact } = await deployWebsite({ signCounter });
-    const event = nostrCore.signEvent(buildNosnsEventTemplate({ torrent, chainArtifact }), WALLET_PRIV.slice(2));
+    const event = nostrCore.signEvent(
+        buildNosnsEventTemplate({ torrent, chainArtifact, category: CATEGORY }),
+        WALLET_PRIV.slice(2)
+    );
     const claim = parseNosnsEvent(event, { npubEncode });
 
     const check = simulateLoadPathCrossCheck({ registryClaim: claim, hash: 'f'.repeat(40), manifest });

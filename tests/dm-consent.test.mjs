@@ -16,12 +16,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-
 // `Lifecycle.js` is browser code: it reads `window` at module scope, through
 // the shared config. A minimal stand-in lets the real module load unchanged, so
 // these tests exercise the gate that actually ships rather than a copy of it.
-globalThis.window = globalThis.window || { location: { hostname: 'localhost', origin: 'http://localhost', pathname: '/' } };
-globalThis.document = globalThis.document || { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] };
+globalThis.window = globalThis.window || {
+    location: { hostname: 'localhost', origin: 'http://localhost', pathname: '/' }
+};
+globalThis.document = globalThis.document || {
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => []
+};
 
 const {
     handleNostrInvitation,
@@ -127,6 +132,7 @@ class LeakCountingChannels {
 class RecordingDmSession {
     constructor() {
         this.sent = [];
+        this.giftWrapped = [];
         this.peerNostrPublicKey = '';
     }
 
@@ -136,6 +142,10 @@ class RecordingDmSession {
 
     async sendInvitation(params) {
         this.sent.push(params);
+    }
+
+    async sendGiftWrapped(peer, kind, content) {
+        this.giftWrapped.push({ peer, kind, content });
     }
 }
 
@@ -154,7 +164,22 @@ async function makeApp({ unlocked = true } = {}) {
         dmInvitations: new PendingInvitations(),
         channelsService: new LeakCountingChannels(),
         nostrDmSession: new RecordingDmSession(),
-        presenceService: { sendChatRequest: () => {}, clearIntent: () => {}, watch: () => {} },
+        presenceService: {
+            // Mirrors the real signature: `sendChatRequest(peer, sendGiftWrapped)`
+            // awaits its second argument, so calling it with one rejects.
+            chatRequests: [],
+            async sendChatRequest(peer, sendGiftWrapped) {
+                if (typeof sendGiftWrapped !== 'function') {
+                    throw new TypeError('sendGiftWrapped is not a function');
+                }
+                await sendGiftWrapped(peer, 25511, '{}');
+                this.chatRequests.push(peer);
+                return 'mutual';
+            },
+            clearIntent: () => {},
+            watch: () => {},
+            isOnline: () => false
+        },
         nostrPool: null,
         dmContacts: [],
         dmContactFilter: '',
@@ -348,6 +373,44 @@ test('an invitation whose identity tuple is broken is refused at accept time', a
         assert.equal(accepted, false);
         assertNothingRevealed(app, 'forged tuple');
         assert.equal(await app.contactsStore.get(MALLORY.nostrPublicKey), null);
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('accepting records outgoing intent with the real sendChatRequest signature', async () => {
+    const app = await makeApp();
+    try {
+        await app.handleNostrInvitation(offerFrom(ALICE), { senderNostrPublicKey: ALICE.nostrPublicKey });
+        const accepted = await app.acceptDmInvitation(ALICE.nostrPublicKey);
+
+        assert.equal(accepted, true);
+        // Called with two arguments, so the intent is actually recorded rather
+        // than lost to a rejected promise nobody awaited.
+        assert.deepEqual(app.presenceService.chatRequests, [ALICE.nostrPublicKey]);
+        assert.equal(app.nostrDmSession.giftWrapped.length, 1, 'the gift-wrap sender was really invoked');
+        assert.equal(app.nostrDmSession.giftWrapped[0].peer, ALICE.nostrPublicKey);
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a relay failure while announcing intent does not fail the acceptance', async () => {
+    const app = await makeApp();
+    try {
+        await app.handleNostrInvitation(offerFrom(ALICE), { senderNostrPublicKey: ALICE.nostrPublicKey });
+        app.nostrDmSession.sendGiftWrapped = async () => {
+            throw new Error('every relay is unreachable');
+        };
+
+        const accepted = await app.acceptDmInvitation(ALICE.nostrPublicKey);
+
+        // The answer is already sent and the contact already stored by then, so
+        // this is reported as a log line, not as a failed acceptance.
+        assert.equal(accepted, true);
+        assert.equal(app.nostrDmSession.sent.length, 1, 'the answer still went out');
+        assert.ok(await app.contactsStore.get(ALICE.nostrPublicKey), 'the friend is still stored');
+        assert.ok(app.logs.some((line) => /could not announce intent/i.test(line)));
     } finally {
         app.fake.restore();
     }
