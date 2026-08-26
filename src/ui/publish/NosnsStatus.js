@@ -8,7 +8,12 @@
  */
 
 import { dtanCategoryLabel } from '../../nosns/NosNSProtocol.js';
-import { populateCategorySelect, readCategorySelect, setCategorySelect, freezeCategorySelect } from '../nosns/CategorySelect.js';
+import {
+    populateCategorySelect,
+    readCategorySelect,
+    setCategorySelect,
+    freezeCategorySelect
+} from '../nosns/CategorySelect.js';
 
 /**
  * Reachability of `relay.dtan.xyz` itself.
@@ -61,12 +66,18 @@ export function bindCategoryPicker(onChange, initial) {
 
 /** @param {string} category */
 export function showSelectedCategory(category) {
-    setCategorySelect(/** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-category-select')), category);
+    setCategorySelect(
+        /** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-category-select')),
+        category
+    );
 }
 
 /** @param {boolean} frozen */
 export function setCategoryFrozen(frozen) {
-    freezeCategorySelect(/** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-category-select')), frozen);
+    freezeCategorySelect(
+        /** @type {HTMLSelectElement|null} */ (document.getElementById('nosns-category-select')),
+        frozen
+    );
 }
 
 /**

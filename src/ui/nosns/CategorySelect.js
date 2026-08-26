@@ -10,7 +10,12 @@
  * category DTAN does not know: there is no free-text path into the value.
  */
 
-import { listDtanCategories, dtanCategoryLabel, normalizeDtanCategory, DTAN_CATEGORIES } from '../../nosns/NosNSProtocol.js';
+import {
+    listDtanCategories,
+    dtanCategoryLabel,
+    normalizeDtanCategory,
+    DTAN_CATEGORIES
+} from '../../nosns/NosNSProtocol.js';
 
 /**
  * Fill a `<select>` with the DTAN tree, grouped by top-level category.
@@ -70,9 +75,7 @@ export function setCategorySelect(select, tcat) {
 export function freezeCategorySelect(select, frozen) {
     if (!select) return;
     select.disabled = Boolean(frozen);
-    select.title = frozen
-        ? 'Category is part of the signed NosNS event and cannot change for this deployment.'
-        : '';
+    select.title = frozen ? 'Category is part of the signed NosNS event and cannot change for this deployment.' : '';
 }
 
 export { dtanCategoryLabel };

@@ -215,7 +215,6 @@ export async function handleTorrentFile(torrentFile) {
         const bufferSize = buffer instanceof ArrayBuffer ? buffer.byteLength : buffer.length;
         this.log(`Torrent file read: ${bufferSize} bytes`);
 
-
         try {
             const signedMeta = await readSignedTorrentMetadata(buffer);
             if (signedMeta) {

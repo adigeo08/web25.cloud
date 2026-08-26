@@ -160,9 +160,33 @@ export function installFakeIndexedDb() {
 
     return {
         databases,
-        rawRows(dbName = 'web25-contacts', storeName = 'contacts') {
+        rawRows(dbName = 'web25-contacts', storeName = 'secure_contacts') {
             const store = databases.get(dbName)?.stores.get(storeName);
             return store ? [...store.rows.values()] : [];
+        },
+        /**
+         * Pre-seed a v1 plaintext database, so an upgrade to v2 is exercised
+         * exactly as it would be for a user who already had contacts.
+         *
+         * @param {any[]} contacts v1 records: { nostrPublicKey, npub, evmAddress, name }
+         */
+        seedLegacy(contacts, dbName = 'web25-contacts') {
+            const db = new FakeDatabase(dbName);
+            db.version = 1;
+            const legacy = db.createObjectStore('contacts', { keyPath: 'nostrPublicKey' });
+            legacy.createIndex('byEvmAddress', 'evmAddress');
+            for (const contact of contacts) {
+                legacy.rows.set(contact.nostrPublicKey, structuredClone({ createdAt: Date.now(), ...contact }));
+            }
+            databases.set(dbName, db);
+            return db;
+        },
+        legacyRows(dbName = 'web25-contacts') {
+            const store = databases.get(dbName)?.stores.get('contacts');
+            return store ? [...store.rows.values()] : [];
+        },
+        hasStore(name, dbName = 'web25-contacts') {
+            return Boolean(databases.get(dbName)?.stores.has(name));
         },
         restore() {
             if (previous === undefined) delete globalThis.indexedDB;

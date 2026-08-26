@@ -432,13 +432,10 @@ async function handlePeerWebRequest(request) {
     if (!currentSiteHash) {
         console.log('[PeerWeb SW] Site not ready yet, waiting...');
 
-        // Dynamic wait time: start with 30 seconds, can be extended
-        // We give more time for larger sites to initialize
-        const baseWait = 30000; // 30 seconds base
+        // Poll every 100ms until the site is ready or the ceiling is reached.
         const maxWait = 120000; // Maximum 2 minutes
 
         const startTime = Date.now();
-        const waitTime = baseWait;
 
         while (!currentSiteHash && (Date.now() - startTime) < maxWait) {
             await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms

@@ -162,7 +162,8 @@ function renderNosnsRow(result) {
     main.appendChild(hash);
 
     const verification = document.createElement('p');
-    const label = VERIFICATION_LABELS[result.web25VerificationState] || VERIFICATION_LABELS[WEB25_VERIFICATION.UNVERIFIED];
+    const label =
+        VERIFICATION_LABELS[result.web25VerificationState] || VERIFICATION_LABELS[WEB25_VERIFICATION.UNVERIFIED];
     verification.className = label.className;
     verification.textContent = label.text;
     main.appendChild(verification);

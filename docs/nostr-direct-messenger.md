@@ -256,6 +256,15 @@ Consequences, all of them intended:
   invitations, so nothing survives in memory either;
 - unlocking again restores access to exactly the same contacts.
 
+Contacts saved before this layer existed are **migrated, not discarded**. A v1
+record stored the Nostr key and the EVM address but not the ECIES key; the Nostr
+key *is* the x coordinate of that peer's secp256k1 point, so there are exactly
+two candidate points and the stored EVM address says which one is real. The
+recovered key is verified against that address, so this is a recovery rather
+than a guess. A v1 row that cannot be turned into a verifiable tuple — one saved
+from a bare npub search, with no EVM address — is dropped rather than trusted.
+Either way the plaintext row is deleted on the first unlocked operation.
+
 The friendly name is the user's own label and is **never published** — attaching
 a human name to a public key on a relay would deanonymise the contact for
 everyone.

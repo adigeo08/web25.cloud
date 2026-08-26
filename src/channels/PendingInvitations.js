@@ -29,6 +29,7 @@ const MAX_NAME_LENGTH = 64;
  * is untrusted text: without this it could reorder the notification it appears
  * in, or impersonate another row.
  */
+// eslint-disable-next-line no-control-regex -- matching control characters is the purpose
 const UNSAFE_NAME_CHARS = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** @param {string} value */

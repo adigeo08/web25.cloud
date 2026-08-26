@@ -31,17 +31,29 @@
  */
 
 import { sha256 } from '@noble/hashes/sha256';
+import { secp256k1 } from '@noble/curves/secp256k1';
 import { evmAddressFromPublicKey } from './ecies.js';
 
 const DB_NAME = 'web25-contacts';
 /**
- * v2 replaces the v1 plaintext store. The old store is dropped on upgrade
- * rather than migrated: plaintext contacts written before this layer existed
- * cannot be re-encrypted without the wallet, and keeping them would leave
- * exactly the readable-while-locked copy this store exists to remove.
+ * v2 adds the encrypted store beside the v1 plaintext one and migrates across.
+ *
+ * The upgrade cannot re-encrypt anything itself: sealing a record needs the
+ * wallet worker, which is asynchronous and unavailable inside a versionchange
+ * transaction. So v2 creates the new store and leaves the old one to be drained
+ * by `_drainLegacy()` on the next operation.
+ *
+ * That is safe because every public method calls `_owner()` — which requires an
+ * unlocked wallet — *before* it opens the database. The upgrade therefore only
+ * ever fires while unlocked, and the drain runs microseconds later in the same
+ * call, so the plaintext rows are re-encrypted and deleted immediately rather
+ * than lingering.
  */
 const DB_VERSION = 2;
-const STORE_CONTACTS = 'contacts';
+/** The encrypted store. */
+const STORE_CONTACTS = 'secure_contacts';
+/** The v1 plaintext store, kept only long enough to migrate out of. */
+const LEGACY_STORE = 'contacts';
 /** Secondary index so one owner's records can be listed without decrypting. */
 const INDEX_OWNER = 'byOwner';
 
@@ -54,6 +66,7 @@ const MAX_NAME_LENGTH = 64;
  * Control and bidi characters, which would let a name taken from an invitation
  * or a relay profile reorder what the contact list shows.
  */
+// eslint-disable-next-line no-control-regex -- matching control characters is the purpose
 const UNSAFE_NAME_CHARS = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** Trust states a contact record can hold. */
@@ -95,6 +108,36 @@ export function contactOwnerTag(ownerNostrPublicKey) {
     return hashHex(`web25-contact-owner:${ownerNostrPublicKey}`);
 }
 
+/**
+ * Recover a peer's full ECIES public key from a v1 record.
+ *
+ * A v1 contact stored the Nostr public key and the EVM address but not the
+ * ECIES key, which the new tuple check needs. Nothing is guessed: the Nostr key
+ * *is* the x coordinate of the peer's secp256k1 point, so there are exactly two
+ * candidates — one per y parity — and the stored EVM address says which. If
+ * neither candidate derives that address the record was never self-consistent,
+ * and `null` drops it rather than inventing an identity.
+ *
+ * @param {string} nostrPublicKey 32-byte hex x coordinate
+ * @param {string} evmAddress
+ * @returns {string|null} the uncompressed `04…` key, or null
+ */
+export function recoverEciesPublicKey(nostrPublicKey, evmAddress) {
+    const x = `${nostrPublicKey || ''}`.trim().toLowerCase();
+    const address = `${evmAddress || ''}`.trim().toLowerCase();
+    if (!HEX32_RE.test(x) || !EVM_ADDRESS_RE.test(address)) return null;
+
+    for (const parity of ['02', '03']) {
+        try {
+            const uncompressed = secp256k1.ProjectivePoint.fromHex(`${parity}${x}`).toHex(false);
+            if (evmAddressFromPublicKey(uncompressed).toLowerCase() === address) return uncompressed.toLowerCase();
+        } catch (_) {
+            // Not a point on the curve for this parity; try the other.
+        }
+    }
+    return null;
+}
+
 function openDb() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -103,6 +146,8 @@ function openDb() {
             if (db.objectStoreNames.contains(STORE_CONTACTS)) db.deleteObjectStore(STORE_CONTACTS);
             const created = db.createObjectStore(STORE_CONTACTS, { keyPath: 'id' });
             created.createIndex(INDEX_OWNER, 'ownerTag', { unique: false });
+            // `LEGACY_STORE` is deliberately left alone here: it still holds the
+            // v1 rows, and `_drainLegacy()` is what moves them across.
         };
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -224,6 +269,73 @@ export class ContactsStore {
     }
 
     /**
+     * Move any v1 plaintext contacts into the encrypted store, then delete them.
+     *
+     * Runs on every operation, which is cheap because the common case is an
+     * absent legacy store. It can only run with an unlocked wallet — every
+     * caller has already been through `_owner()` — so the plaintext never
+     * survives the first post-upgrade operation.
+     *
+     * A row that cannot be turned into a verifiable identity tuple is dropped
+     * rather than stored: v1 allowed a contact saved from a bare npub search,
+     * with no EVM address, and such a record was never a verified peer.
+     *
+     * @param {IDBDatabase} db
+     * @param {string} owner
+     * @returns {Promise<{ migrated: number, dropped: number }>}
+     */
+    async _drainLegacy(db, owner) {
+        const result = { migrated: 0, dropped: 0 };
+        if (!db.objectStoreNames.contains(LEGACY_STORE)) return result;
+
+        const legacyStore = () => db.transaction(LEGACY_STORE, 'readwrite').objectStore(LEGACY_STORE);
+        const rows = /** @type {any[]} */ ((await promisify(legacyStore().getAll())) || []);
+        if (rows.length === 0) return result;
+
+        for (const row of rows) {
+            const nostrPublicKey = `${row?.nostrPublicKey || ''}`.trim().toLowerCase();
+            const evmAddress = `${row?.evmAddress || ''}`.trim().toLowerCase();
+            const eciesPublicKey = recoverEciesPublicKey(nostrPublicKey, evmAddress);
+
+            if (eciesPublicKey && verifyIdentityTuple({ nostrPublicKey, eciesPublicKey, evmAddress }).ok) {
+                const now = this.now();
+                const contact = {
+                    nostrPublicKey,
+                    npub: `${row.npub || ''}`.trim(),
+                    eciesPublicKey,
+                    evmAddress,
+                    name: safeName(row.name),
+                    // A v1 contact was only ever written by an explicit "save
+                    // this peer" on a verified, open conversation, so carrying
+                    // it across as trusted matches what the user chose.
+                    trust: TRUST.TRUSTED,
+                    createdAt: Number(row.createdAt) || now,
+                    updatedAt: now
+                };
+
+                await promisify(
+                    db.transaction(STORE_CONTACTS, 'readwrite').objectStore(STORE_CONTACTS).put({
+                        id: contactRecordId(owner, nostrPublicKey),
+                        ownerTag: contactOwnerTag(owner),
+                        ciphertext: await this._seal(owner, contact),
+                        createdAt: contact.createdAt,
+                        updatedAt: contact.updatedAt
+                    })
+                );
+                result.migrated += 1;
+            } else {
+                result.dropped += 1;
+            }
+
+            // Deleted either way: a v1 row is plaintext, and leaving one behind
+            // is the exact exposure this store exists to remove.
+            await promisify(legacyStore().delete(row.nostrPublicKey));
+        }
+
+        return result;
+    }
+
+    /**
      * Create or update a trusted contact.
      *
      * The identity tuple is re-verified on every write, so a record can never
@@ -244,6 +356,7 @@ export class ContactsStore {
 
         const db = await openDb();
         try {
+            await this._drainLegacy(db, owner);
             const existingRow = /** @type {any} */ (await promisify(store(db, 'readonly').get(id)));
             let existing = null;
             if (existingRow?.ciphertext) {
@@ -294,6 +407,7 @@ export class ContactsStore {
         const owner = await this._owner();
         const db = await openDb();
         try {
+            await this._drainLegacy(db, owner);
             const row = /** @type {any} */ (await promisify(store(db, 'readonly').get(contactRecordId(owner, key))));
             if (!row?.ciphertext) return null;
 
@@ -333,6 +447,7 @@ export class ContactsStore {
         const ownerTag = contactOwnerTag(owner);
         const db = await openDb();
         try {
+            await this._drainLegacy(db, owner);
             const rows = /** @type {any[]} */ (
                 (await promisify(store(db, 'readonly').index(INDEX_OWNER).getAll(ownerTag))) || []
             );
@@ -383,6 +498,7 @@ export class ContactsStore {
         const owner = await this._owner();
         const db = await openDb();
         try {
+            await this._drainLegacy(db, owner);
             await promisify(store(db, 'readwrite').delete(contactRecordId(owner, key)));
             return true;
         } finally {

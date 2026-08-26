@@ -43,8 +43,23 @@ export const DTAN_CATEGORIES = Object.freeze([
         name: 'Video',
         tag: 'video',
         sub: [
-            { name: 'Movies', tag: 'movie', sub: [{ name: 'DVDR', tag: 'dvdr' }, { name: 'HD', tag: 'hd' }, { name: '4k', tag: '4k' }] },
-            { name: 'TV', tag: 'tv', sub: [{ name: 'HD', tag: 'hd' }, { name: '4k', tag: '4k' }] }
+            {
+                name: 'Movies',
+                tag: 'movie',
+                sub: [
+                    { name: 'DVDR', tag: 'dvdr' },
+                    { name: 'HD', tag: 'hd' },
+                    { name: '4k', tag: '4k' }
+                ]
+            },
+            {
+                name: 'TV',
+                tag: 'tv',
+                sub: [
+                    { name: 'HD', tag: 'hd' },
+                    { name: '4k', tag: '4k' }
+                ]
+            }
         ]
     },
     {
@@ -83,7 +98,15 @@ export const DTAN_CATEGORIES = Object.freeze([
         name: 'Porn',
         tag: 'porn',
         sub: [
-            { name: 'Movies', tag: 'movie', sub: [{ name: 'DVDR', tag: 'dvdr' }, { name: 'HD', tag: 'hd' }, { name: '4k', tag: '4k' }] },
+            {
+                name: 'Movies',
+                tag: 'movie',
+                sub: [
+                    { name: 'DVDR', tag: 'dvdr' },
+                    { name: 'HD', tag: 'hd' },
+                    { name: '4k', tag: '4k' }
+                ]
+            },
             { name: 'Pictures', tag: 'picture' },
             { name: 'Games', tag: 'game' }
         ]

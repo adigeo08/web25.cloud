@@ -13,7 +13,12 @@ import { renderPublishReview } from '../../ui/publish/PublishReviewModal.js';
 import { renderSignatureStatus } from '../../ui/publish/SignatureStatus.js';
 import { attachPublishMetadata } from '../../torrent/TorrentPublishService.js';
 import { createTorrentChainArtifact } from '../../torrent/TorrentChainProtocol.js';
-import { encodeSiteBundleGzip, SITE_BUNDLE_FILE_NAME, SITE_BUNDLE_SCHEMA, supportsNativeGzipStreams } from '../../torrent/SiteBundleCodec.js';
+import {
+    encodeSiteBundleGzip,
+    SITE_BUNDLE_FILE_NAME,
+    SITE_BUNDLE_SCHEMA,
+    supportsNativeGzipStreams
+} from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import {
@@ -34,7 +39,12 @@ import {
     showBrowseMode
 } from '../../ui/browse/NosnsPanel.js';
 import { NosNSService } from '../../nosns/NosNSService.js';
-import { NOSNS_DEFAULT_CATEGORY, NOSNS_RELAY, dtanCategoryLabel, normalizeDtanCategory } from '../../nosns/NosNSProtocol.js';
+import {
+    NOSNS_DEFAULT_CATEGORY,
+    NOSNS_RELAY,
+    dtanCategoryLabel,
+    normalizeDtanCategory
+} from '../../nosns/NosNSProtocol.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
@@ -326,7 +336,14 @@ export async function publishNosnsEntry() {
         setCategoryFrozen(true);
     } catch (error) {
         this.lastRegistryEvent = null;
-        this.registryPublication = { ok: false, error: error.message, accepted: [], rejected: {}, attempted: 0, eventId: null };
+        this.registryPublication = {
+            ok: false,
+            error: error.message,
+            accepted: [],
+            rejected: {},
+            attempted: 0,
+            eventId: null
+        };
         renderNosnsStatus({ state: 'skipped', npub, error: error.message, category });
         renderNosnsTechnicalDetails({ event: null, publication: this.registryPublication, category });
         // The site is deployed and seeding regardless of what happened here.
@@ -509,7 +526,10 @@ export function setupChannels() {
                 this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
                 return false;
             }
-            return this.requestChatWith(result.nostrPublicKey, result.profile?.displayName || result.profile?.name || '');
+            return this.requestChatWith(
+                result.nostrPublicKey,
+                result.profile?.displayName || result.profile?.name || ''
+            );
         },
         onLeave: async () => {
             await this.channelsService.leaveChannel();
@@ -551,8 +571,13 @@ export function setupChannels() {
             renderDmConnectionState(event.state, { peerLabel: this.dmPeerLabel() });
             return;
         }
-        if (event.type === 'transport' || event.type === 'connecting' || event.type === 'connected' ||
-            event.type === 'disconnected' || event.type === 'peer-count') {
+        if (
+            event.type === 'transport' ||
+            event.type === 'connecting' ||
+            event.type === 'connected' ||
+            event.type === 'disconnected' ||
+            event.type === 'peer-count'
+        ) {
             return;
         }
         if (event.type === 'left') {
@@ -560,9 +585,20 @@ export function setupChannels() {
         } else if (event.type === 'message') {
             appendChannelsMessage(event.message, event.local === true);
         } else if (event.type === 'file-incoming' || event.type === 'file-progress') {
-            appendFileTransfer({ fileId: event.fileId, fileName: event.fileName, fileSize: event.fileSize || 0, received: event.received || 0 });
+            appendFileTransfer({
+                fileId: event.fileId,
+                fileName: event.fileName,
+                fileSize: event.fileSize || 0,
+                received: event.received || 0
+            });
         } else if (event.type === 'file-ready') {
-            appendFileTransfer({ fileId: event.fileId, fileName: event.fileName, fileSize: 0, received: 0, url: event.url });
+            appendFileTransfer({
+                fileId: event.fileId,
+                fileName: event.fileName,
+                fileSize: 0,
+                received: 0,
+                url: event.url
+            });
         } else if (event.type === 'error') {
             this.toast.error(event.error?.message || 'Unexpected direct messenger error', 'Direct Messenger');
         }
@@ -745,7 +781,11 @@ export async function answerDmInvitation(bootstrap, sender, identity) {
         evmAddress: bootstrap.from.evmAddress,
         publicKey: bootstrap.from.eciesPublicKey
     };
-    const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(derivedRoom, offerPayload, identity);
+    const answerSignal = await this.channelsService.createAnswerPayloadFromRemoteOffer(
+        derivedRoom,
+        offerPayload,
+        identity
+    );
     this.nostrDmSession.setPeer(sender);
     this.dmSelectedPeer = sender;
     await this.nostrDmSession.sendInvitation({
@@ -1074,7 +1114,6 @@ export function hideDirectMessageProgress() {
     this.hideUploadProgress();
 }
 
-
 export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
     const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
@@ -1153,7 +1192,9 @@ export async function signStagedPayload() {
     updateDeployProgress({ label: 'Normalizing bundle paths', percent: 25, state: 'running' });
 
     if (this.lastPublishCandidate?.torrent?.destroy) {
-        try { this.lastPublishCandidate.torrent.destroy(); } catch (_) {}
+        try {
+            this.lastPublishCandidate.torrent.destroy();
+        } catch (_) {}
     }
 
     const inMemoryFiles = await this.buildInMemoryDeployBundle(this.pendingDeployFiles, ({ label, percent }) =>
@@ -1165,7 +1206,9 @@ export async function signStagedPayload() {
     let bundleMetadata = null;
 
     if (PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && !supportsNativeGzipStreams) {
-        this.log('Gzip bundle mode requested but CompressionStream/DecompressionStream is unavailable. Falling back to files mode.');
+        this.log(
+            'Gzip bundle mode requested but CompressionStream/DecompressionStream is unavailable. Falling back to files mode.'
+        );
         this.toast?.warning?.(
             'Gzip bundle mode is unavailable in this browser (missing CompressionStream/DecompressionStream). Falling back to standard files mode.',
             'Gzip mode unavailable'
@@ -1195,7 +1238,9 @@ export async function signStagedPayload() {
             contentEncoding: 'gzip',
             schema: SITE_BUNDLE_SCHEMA
         };
-        deployPayloadFiles = [this.createVirtualBundleFile(SITE_BUNDLE_FILE_NAME, encodedBundle.gzipBytes, 'application/gzip')];
+        deployPayloadFiles = [
+            this.createVirtualBundleFile(SITE_BUNDLE_FILE_NAME, encodedBundle.gzipBytes, 'application/gzip')
+        ];
     }
 
     updateDeployProgress({ label: 'Generating .torrentchain signature manifest', percent: 55, state: 'running' });
@@ -1449,7 +1494,7 @@ export function setupAuthAwareUi(state) {
     }
 
     if (hasJustAuthenticated) {
-        const identityTab = document.querySelector('[data-tab=\"auth\"]');
+        const identityTab = document.querySelector('[data-tab="auth"]');
         if (identityTab instanceof HTMLElement) {
             identityTab.click();
         }
@@ -1551,9 +1596,13 @@ export async function initializeWebTorrent() {
 
     return new Promise((resolve) => {
         try {
-            const browserTrackers = (this.trackers || []).filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl));
+            const browserTrackers = (this.trackers || []).filter((trackerUrl) =>
+                this.isBrowserSupportedTracker(trackerUrl)
+            );
             if (browserTrackers.length === 0) {
-                this.log('[WebTorrent] WARN: No browser-friendly trackers configured. Falling back to DHT/local peers only.');
+                this.log(
+                    '[WebTorrent] WARN: No browser-friendly trackers configured. Falling back to DHT/local peers only.'
+                );
             } else {
                 this.log(`[WebTorrent] Browser trackers enabled: ${browserTrackers.length}`);
             }
@@ -1611,10 +1660,7 @@ export function isBrowserSupportedTracker(trackerUrl) {
     }
 
     const normalized = trackerUrl.trim().toLowerCase();
-    return (
-        normalized.startsWith('wss://') ||
-        normalized.startsWith('https://')
-    );
+    return normalized.startsWith('wss://') || normalized.startsWith('https://');
 }
 
 export function setupEventListeners() {
@@ -1871,33 +1917,28 @@ export async function restoreDeploySession() {
         );
 
         await new Promise((resolve, reject) => {
-            this.client.add(
-                signedTorrentBytes,
-                { announce: this.trackers },
-                (torrent) => {
-                    this.lastPublishCandidate.torrent = torrent;
-                    this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
+            this.client.add(signedTorrentBytes, { announce: this.trackers }, (torrent) => {
+                this.lastPublishCandidate.torrent = torrent;
+                this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
 
-                    if (savedSession.deployed) {
-                        const url = `${window.location.origin}${window.location.pathname}?orc=${savedSession.hash}`;
-                        this.lastDeployResult =
-                            savedSession.deployResult || {
-                                hash: savedSession.hash,
-                                url,
-                                signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
-                            };
-                        this.showUploadResult(savedSession.hash, signedTorrentBuffer, torrent);
-                        this.renderDeploymentSummary({
-                            hash: savedSession.hash,
-                            url: this.lastDeployResult.url,
-                            signedBy: this.lastDeployResult.signedBy,
-                            signature: this.lastSignature.signature,
-                            signatureStatus: 'VERIFIED'
-                        });
-                    }
-                    resolve();
+                if (savedSession.deployed) {
+                    const url = `${window.location.origin}${window.location.pathname}?orc=${savedSession.hash}`;
+                    this.lastDeployResult = savedSession.deployResult || {
+                        hash: savedSession.hash,
+                        url,
+                        signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
+                    };
+                    this.showUploadResult(savedSession.hash, signedTorrentBuffer, torrent);
+                    this.renderDeploymentSummary({
+                        hash: savedSession.hash,
+                        url: this.lastDeployResult.url,
+                        signedBy: this.lastDeployResult.signedBy,
+                        signature: this.lastSignature.signature,
+                        signatureStatus: 'VERIFIED'
+                    });
                 }
-            );
+                resolve();
+            });
 
             setTimeout(() => reject(new Error('Timed out while restoring deploy session')), 12000);
         });
@@ -1999,5 +2040,8 @@ export async function clearCache(options = {}) {
         this.clearInMemoryStreamingState({ resetDeploySession });
     }
     this.log('Cache cleared');
-    this.toast.success('All cached sites and in-memory streaming state have been removed.', 'Cache Cleared Successfully');
+    this.toast.success(
+        'All cached sites and in-memory streaming state have been removed.',
+        'Cache Cleared Successfully'
+    );
 }

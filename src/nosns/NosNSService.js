@@ -95,7 +95,11 @@ export class NosNSService {
         try {
             await this.connect();
         } catch (error) {
-            return { relay: NOSNS_RELAY, reachable: false, error: error instanceof Error ? error.message : String(error) };
+            return {
+                relay: NOSNS_RELAY,
+                reachable: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
         }
         const reachable = this.pool.connectedCount > 0;
         return { relay: NOSNS_RELAY, reachable, error: reachable ? null : 'No connection to the directory relay.' };
@@ -118,7 +122,13 @@ export class NosNSService {
      *           siteName?: string, trackers?: string[] }} params
      * @returns {Promise<any>} the signed Nostr event
      */
-    async createSignedNosnsEvent({ torrent, chainArtifact, siteName = '', trackers = [], category = NOSNS_DEFAULT_CATEGORY }) {
+    async createSignedNosnsEvent({
+        torrent,
+        chainArtifact,
+        siteName = '',
+        trackers = [],
+        category = NOSNS_DEFAULT_CATEGORY
+    }) {
         const identity = await this.signer.getNostrIdentity();
         if (!identity?.nostrPublicKey) {
             throw new Error('Nostr identity is unavailable: unlock your wallet to publish to NosNS.');
@@ -259,7 +269,13 @@ export class NosNSService {
      * @param {{ since?: number, limit?: number, timeoutMs?: number, verify?: boolean }} [options]
      * @returns {Promise<any[]>} newest first
      */
-    async query({ category = NOSNS_DEFAULT_CATEGORY, since = undefined, limit = undefined, timeoutMs = undefined, verify = true } = {}) {
+    async query({
+        category = NOSNS_DEFAULT_CATEGORY,
+        since = undefined,
+        limit = undefined,
+        timeoutMs = undefined,
+        verify = true
+    } = {}) {
         if (!this.connected) await this.connect();
 
         const collected = [];

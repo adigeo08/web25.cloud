@@ -25,6 +25,7 @@ const DEFAULT_TIMEOUT_MS = 4000;
  * C0/C1 controls plus the bidi overrides, which a hostile profile could
  * otherwise use to reorder what the UI displays.
  */
+// eslint-disable-next-line no-control-regex -- matching control characters is the purpose
 const UNSAFE_TEXT_RE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /**

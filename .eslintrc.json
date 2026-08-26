@@ -7,38 +7,22 @@
     "extends": "eslint:recommended",
     "parserOptions": {
         "ecmaVersion": 2021,
-        "sourceType": "script"
+        "sourceType": "module"
     },
     "globals": {
         "WebTorrent": "readonly",
-        "DOMPurify": "readonly"
+        "DOMPurify": "readonly",
+        "PublicKeyCredential": "readonly",
+        "Buffer": "readonly",
+        "module": "readonly"
     },
     "rules": {
-        "indent": ["error", 4, { "SwitchCase": 1 }],
-        "linebreak-style": ["error", "windows"],
-        "quotes": ["error", "single", { "avoidEscape": true }],
-        "semi": ["error", "always"],
         "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
         "no-console": "off",
         "no-empty": ["error", { "allowEmptyCatch": true }],
         "prefer-const": "warn",
         "no-var": "error",
         "eqeqeq": ["error", "always"],
-        "curly": ["error", "all"],
-        "brace-style": ["error", "1tbs"],
-        "comma-dangle": ["error", "never"],
-        "no-trailing-spaces": "error",
-        "no-multiple-empty-lines": ["error", { "max": 2, "maxEOF": 1 }],
-        "space-before-function-paren": [
-            "error",
-            {
-                "anonymous": "always",
-                "named": "never",
-                "asyncArrow": "always"
-            }
-        ],
-        "keyword-spacing": ["error", { "before": true, "after": true }],
-        "space-infix-ops": "error",
-        "arrow-spacing": ["error", { "before": true, "after": true }]
+        "curly": ["error", "multi-line"]
     }
 }

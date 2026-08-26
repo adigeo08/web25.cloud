@@ -14,10 +14,9 @@ export function normalizeToTransferableArrayBuffer(input) {
         return new Uint8Array(input).buffer;
     }
 
-    if (input == null) {
+    if (input === null || input === undefined) {
         return null;
     }
 
     return new Uint8Array(input).buffer;
 }
-

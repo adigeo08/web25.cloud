@@ -26,13 +26,9 @@ let techDetails = null;
  * Call once after DOM is ready.
  */
 export function initDeployWizard() {
-    stepChips = /** @type {NodeListOf<HTMLElement>} */ (
-        document.querySelectorAll('#tab-publish .step-chip')
-    );
+    stepChips = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#tab-publish .step-chip'));
     wizardNextEl = document.getElementById('deploy-wizard-next');
-    techDetails = /** @type {HTMLDetailsElement | null} */ (
-        document.getElementById('deploy-tech-details')
-    );
+    techDetails = /** @type {HTMLDetailsElement | null} */ (document.getElementById('deploy-tech-details'));
 }
 
 /**

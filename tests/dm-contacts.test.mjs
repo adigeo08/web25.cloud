@@ -19,6 +19,7 @@ import {
     contactOwnerTag,
     contactRecordId,
     filterContacts,
+    recoverEciesPublicKey,
     verifyIdentityTuple
 } from '../src/channels/ContactsStore.js';
 import { getPublicKeyFromPrivateKey, evmAddressFromPublicKey } from '../src/channels/ecies.js';
@@ -389,6 +390,150 @@ test('names are stripped of control and bidi characters, and capped', async () =
 
         assert.ok(!/[ -‎‪-‮]/.test(saved.name), 'no bidi or control characters survive');
         assert.ok(saved.name.length <= 64);
+    } finally {
+        fake.restore();
+    }
+});
+
+// ─── 5. Migrating the v1 plaintext store ─────────────────────────────────
+
+test('a v1 contact\'s ECIES key is recovered, not guessed', () => {
+    // The Nostr key is the x coordinate; the stored EVM address picks the
+    // parity. The result is verified against that address, so it is a recovery.
+    assert.equal(recoverEciesPublicKey(ALICE.nostrPublicKey, ALICE.evmAddress), ALICE.eciesPublicKey);
+    assert.equal(recoverEciesPublicKey(BOB.nostrPublicKey, BOB.evmAddress), BOB.eciesPublicKey);
+});
+
+test('a v1 record whose two identities disagree recovers nothing', () => {
+    assert.equal(recoverEciesPublicKey(ALICE.nostrPublicKey, BOB.evmAddress), null);
+    assert.equal(recoverEciesPublicKey(ALICE.nostrPublicKey, ''), null, 'no EVM address, no recovery');
+    assert.equal(recoverEciesPublicKey('nope', ALICE.evmAddress), null);
+    assert.equal(recoverEciesPublicKey('ff'.repeat(32), ALICE.evmAddress), null, 'not a point on the curve');
+});
+
+test('existing v1 contacts survive the upgrade, encrypted', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        fake.seedLegacy([
+            { nostrPublicKey: ALICE.nostrPublicKey, npub: ALICE.npub, evmAddress: ALICE.evmAddress, name: 'Alice' },
+            { nostrPublicKey: BOB.nostrPublicKey, npub: BOB.npub, evmAddress: BOB.evmAddress, name: 'Bob' }
+        ]);
+
+        const wallet = makeWallet();
+        await wallet.unlock();
+        const store = new ContactsStore({ signer: wallet.signer });
+
+        const contacts = await store.list();
+        assert.deepEqual(contacts.map((c) => c.name), ['Alice', 'Bob'], 'nobody is lost');
+
+        const alice = await store.get(ALICE.nostrPublicKey);
+        assert.equal(alice.eciesPublicKey, ALICE.eciesPublicKey, 'the missing key was recovered');
+        assert.equal(alice.evmAddress, ALICE.evmAddress);
+        assert.equal(alice.trust, TRUST.TRUSTED, 'a v1 contact was an explicit, verified save');
+        assert.deepEqual(verifyIdentityTuple(alice), { ok: true, reason: null });
+    } finally {
+        fake.restore();
+    }
+});
+
+test('the v1 plaintext rows are deleted by the migration', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        fake.seedLegacy([
+            { nostrPublicKey: ALICE.nostrPublicKey, npub: ALICE.npub, evmAddress: ALICE.evmAddress, name: 'Alice' }
+        ]);
+
+        const wallet = makeWallet();
+        await wallet.unlock();
+        await new ContactsStore({ signer: wallet.signer }).list();
+
+        assert.deepEqual(fake.legacyRows(), [], 'no plaintext contact survives the first unlocked operation');
+
+        // And what replaced it reveals nothing.
+        const wire = JSON.stringify(fake.rawRows());
+        for (const secret of [ALICE.nostrPublicKey, ALICE.evmAddress, ALICE.npub, 'Alice']) {
+            assert.ok(!wire.includes(secret), `migrated row must not contain ${secret.slice(0, 20)}`);
+        }
+    } finally {
+        fake.restore();
+    }
+});
+
+test('a v1 contact with no EVM address is dropped rather than trusted', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        // v1 allowed saving a bare npub from a search: never a verified peer,
+        // so it cannot become a trusted contact under the new rules.
+        fake.seedLegacy([
+            { nostrPublicKey: ALICE.nostrPublicKey, npub: ALICE.npub, evmAddress: null, name: 'Unverified' },
+            { nostrPublicKey: BOB.nostrPublicKey, npub: BOB.npub, evmAddress: BOB.evmAddress, name: 'Bob' }
+        ]);
+
+        const wallet = makeWallet();
+        await wallet.unlock();
+        const store = new ContactsStore({ signer: wallet.signer });
+
+        assert.deepEqual((await store.list()).map((c) => c.name), ['Bob']);
+        assert.equal(await store.isTrusted(ALICE.nostrPublicKey), false);
+        assert.deepEqual(fake.legacyRows(), [], 'dropped rows are deleted too, not left in plaintext');
+    } finally {
+        fake.restore();
+    }
+});
+
+test('a v1 row whose identities disagree is dropped, never migrated', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        fake.seedLegacy([
+            { nostrPublicKey: ALICE.nostrPublicKey, npub: ALICE.npub, evmAddress: BOB.evmAddress, name: 'Impostor' }
+        ]);
+
+        const wallet = makeWallet();
+        await wallet.unlock();
+        const store = new ContactsStore({ signer: wallet.signer });
+
+        assert.deepEqual(await store.list(), []);
+        assert.equal(await store.isTrusted(ALICE.nostrPublicKey), false);
+    } finally {
+        fake.restore();
+    }
+});
+
+test('migration runs once and is not repeated on later operations', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        fake.seedLegacy([
+            { nostrPublicKey: ALICE.nostrPublicKey, npub: ALICE.npub, evmAddress: ALICE.evmAddress, name: 'Alice' }
+        ]);
+
+        const wallet = makeWallet();
+        await wallet.unlock();
+        const store = new ContactsStore({ signer: wallet.signer });
+
+        await store.list();
+        await store.rename(ALICE.nostrPublicKey, 'Alice renamed');
+        const contacts = await store.list();
+
+        assert.equal(contacts.length, 1, 'no duplicate is created by a second drain');
+        assert.equal(contacts[0].name, 'Alice renamed', 'and the rename is not undone by one');
+    } finally {
+        fake.restore();
+    }
+});
+
+test('a locked wallet cannot trigger the migration', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        fake.seedLegacy([
+            { nostrPublicKey: ALICE.nostrPublicKey, npub: ALICE.npub, evmAddress: ALICE.evmAddress, name: 'Alice' }
+        ]);
+
+        const store = new ContactsStore({ signer: makeWallet().signer });
+        await assert.rejects(() => store.list(), /unlock your wallet/i);
+
+        // The upgrade never fired, so nothing was read, written or destroyed.
+        assert.equal(fake.legacyRows().length, 1, 'v1 data is not touched while locked');
+        assert.equal(fake.hasStore('secure_contacts'), false);
     } finally {
         fake.restore();
     }
