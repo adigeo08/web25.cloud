@@ -49,6 +49,12 @@ import { PendingInvitations } from '../../channels/PendingInvitations.js';
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /** How long a searched address shows "checking" before it is called offline. */
 const DM_SEARCH_PRESENCE_GRACE_MS = 3000;
+/**
+ * How long the waiting side sits on "setting up the connection" before saying
+ * out loud that nothing is arriving. Comfortably longer than a relay round trip
+ * and an SDP, short enough that a dead peer is not mistaken for a slow one.
+ */
+const HANDSHAKE_STALL_MS = 20000;
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
@@ -134,7 +140,7 @@ export function setupChannels() {
     // A chat request is how a stranger reaches somebody for the first time, so
     // it has to be actionable: it is recorded as intent *and* surfaced as an
     // invitation the local user can accept or decline.
-    this.nostrDmSession.onChatRequest = (peer) => this.handleChatRequest(peer);
+    this.nostrDmSession.onChatRequest = (peer, context) => this.handleChatRequest(peer, context);
     // Contacts are authorization, not authentication. Every record is
     // encrypted to the wallet's own Nostr identity, so a locked wallet has
     // nothing to read and this list simply cannot be shown.
@@ -160,6 +166,8 @@ export function setupChannels() {
      * @type {Set<string>}
      */
     this.dmConsentedPeers = new Set();
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    this.dmHandshakeStallTimer = null;
     /**
      * Peers whose request was declined here. They are dropped in silence rather
      * than re-opening the panel on every retry — and still told nothing, since
@@ -236,6 +244,7 @@ export function setupChannels() {
             );
         },
         onLeave: async () => {
+            this.clearHandshakeStallTimer();
             await this.channelsService.leaveChannel();
             // Stay subscribed: leaving a conversation should not stop the user
             // being reachable at their npub.
@@ -321,6 +330,10 @@ export async function handleNostrInvitation(bootstrap, context) {
     const identity = this.authController.getActiveIdentity();
     if (!identity?.address) return;
 
+    // Something arrived from a peer, so the "nothing is happening" watchdog has
+    // done its job either way.
+    this.clearHandshakeStallTimer?.();
+
     try {
         if (bootstrap.role === 'offer') {
             // A cryptographically valid offer is not consent. Anyone who knows
@@ -329,6 +342,15 @@ export async function handleNostrInvitation(bootstrap, context) {
             // network position. So an offer from anyone who is not an approved
             // contact is parked, and nothing is sent back.
             const sender = `${context.senderNostrPublicKey}`.toLowerCase();
+
+            // A refusal holds for everything this peer sends, not only for
+            // their requests. Parking an unsolicited offer from somebody who
+            // was already declined would put them back in the panel and raise a
+            // notification — exactly the nagging the refusal is meant to stop.
+            if (this.dmDeclinedPeers?.has(sender)) {
+                this.log(`Ignoring an offer from ${sender}: previously declined.`);
+                return;
+            }
 
             let trusted = false;
             try {
@@ -412,14 +434,26 @@ export async function handleNostrInvitation(bootstrap, context) {
  * person presses Accept — but the decision is presented instead of implied.
  *
  * @param {string} peerNostrPublicKey
+ * @param {{ createdAtSeconds?: number }} [context] the rumor's own timestamp
  */
-export async function handleChatRequest(peerNostrPublicKey) {
+export async function handleChatRequest(peerNostrPublicKey, { createdAtSeconds = 0 } = {}) {
     const sender = `${peerNostrPublicKey || ''}`.toLowerCase();
     if (!sender) return;
 
+    // When the request was written, by the sender's clock inside the sealed
+    // rumor. The inbox looks days back on every start, so without this an old
+    // request would be presented as a fresh one on every reload. A timestamp in
+    // the future is clamped, so nobody can mint an invitation that never ages.
+    const now = Date.now();
+    const sentAt = createdAtSeconds > 0 ? Math.min(createdAtSeconds * 1000, now) : now;
+    if (now - sentAt > NOSTR_CONFIG.CHAT_REQUEST_TTL_MS) {
+        this.log(`Ignoring a chat request from ${sender}: it expired before it was read.`);
+        return;
+    }
+
     // Intent is recorded either way: it is what makes the pair mutual once the
     // local user consents, and it costs nothing to know somebody asked.
-    this.presenceService?.receiveChatRequest(sender);
+    this.presenceService?.receiveChatRequest(sender, sentAt);
 
     // Somebody who was already declined here is dropped in silence. They are
     // told nothing — an answer of any kind confirms the npub is live.
@@ -453,7 +487,7 @@ export async function handleChatRequest(peerNostrPublicKey) {
         return;
     }
 
-    await this.holdChatRequest(sender);
+    await this.holdChatRequest(sender, sentAt);
 }
 
 /**
@@ -465,8 +499,9 @@ export async function handleChatRequest(peerNostrPublicKey) {
  * their offer arrives after consent.
  *
  * @param {string} sender
+ * @param {number} [sentAt] when the request was written, in ms
  */
-export async function holdChatRequest(sender) {
+export async function holdChatRequest(sender, sentAt = Date.now()) {
     let profileName = '';
     try {
         const profile = await lookupNostrProfile({ pool: this.nostrPool, publicKey: sender });
@@ -482,8 +517,10 @@ export async function holdChatRequest(sender) {
         profileName,
         trustState: 'unknown',
         // A request is intent, and intent goes stale: the queue drops it on the
-        // same clock that stops it counting towards a mutual pair.
-        expiresAt: Date.now() + NOSTR_CONFIG.CHAT_REQUEST_TTL_MS
+        // same clock that stops it counting towards a mutual pair — the
+        // sender's, so an hour-old request in the inbox history is not offered
+        // as a decision to make now.
+        expiresAt: sentAt + NOSTR_CONFIG.CHAT_REQUEST_TTL_MS
     });
 
     this.log(`Holding a chat request from ${sender}. Nothing sent, no ICE gathered.`);
@@ -1000,7 +1037,10 @@ export async function startMutualConversation(peer) {
     renderDmConnectionState('handshake', { peerLabel: this.dmPeerLabel() });
 
     if (!this.presenceService.shouldInitiate(this.dmSelectedPeer)) {
-        // The other side offers; our invitation will arrive over Nostr.
+        // The other side offers; our invitation will arrive over Nostr. If it
+        // does not — they closed the tab between asking and us agreeing — the
+        // spinner would otherwise sit there forever saying nothing.
+        this.armHandshakeStallTimer(this.dmSelectedPeer);
         return;
     }
 
@@ -1022,6 +1062,42 @@ export async function startMutualConversation(peer) {
     } catch (error) {
         this.toast.error(error.message, 'Direct Messenger');
     }
+}
+
+/**
+ * Watch for a handshake that never arrives.
+ *
+ * After both sides agree, exactly one of them offers. The other has nothing to
+ * do but wait, and if the offerer has gone away there is no failure to report —
+ * no connection was ever attempted. So the wait is bounded: when it elapses the
+ * status goes back to waiting and says so, and the invitation stays valid, so
+ * the conversation still opens by itself if they come back within its lifetime.
+ *
+ * @param {string} peer
+ */
+export function armHandshakeStallTimer(peer) {
+    this.clearHandshakeStallTimer();
+    this.dmHandshakeStallTimer = setTimeout(() => {
+        this.dmHandshakeStallTimer = null;
+        // Anything past the handshake means it arrived after all.
+        if (this.channelsService?.connectionState !== 'handshake') return;
+        if (this.dmSelectedPeer !== peer) return;
+
+        this.channelsService.setPreConnectionState('awaiting-peer');
+        renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel() });
+        this.toast.info(
+            'They have not answered yet. Your invitation stays valid — the chat opens on its own if they come back.',
+            'Direct Messenger'
+        );
+        this.log(`No invitation arrived from ${peer} after mutual intent; back to waiting.`);
+    }, HANDSHAKE_STALL_MS);
+}
+
+/** Stop watching: the invitation arrived, or the conversation is over. */
+export function clearHandshakeStallTimer() {
+    if (!this.dmHandshakeStallTimer) return;
+    clearTimeout(this.dmHandshakeStallTimer);
+    this.dmHandshakeStallTimer = null;
 }
 
 /** Save whoever the current conversation is with, under a name of your choosing. */
@@ -1403,6 +1479,7 @@ export function setupAuthAwareUi(state) {
         // again.
         this.dmContacts = [];
         this.dmInvitations?.clear();
+        this.clearHandshakeStallTimer?.();
         // Consent is a decision about a conversation, and the conversation is
         // over: a locked wallet starts from nobody approved and nobody refused.
         this.dmConsentedPeers?.clear();

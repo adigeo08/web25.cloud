@@ -287,9 +287,17 @@ is never auto-answered:
   so there is nothing to answer yet and nothing to verify yet; the identity
   tuple is checked when the offer arrives
 - **Decline** discards the invitation: no answer, no connection, no contact. The
-  peer is not notified, because that would confirm the npub is live, and their
-  retries are dropped for the rest of the session so a refusal cannot be worn
-  down by repetition
+  peer is not notified, because that would confirm the npub is live, and every
+  later request *or offer* from them is dropped in silence for the rest of the
+  session, so a refusal cannot be worn down by repetition
+- a request ages on the **sender's** clock, taken from the timestamp inside the
+  sealed rumor. The inbox deliberately looks days back on every start, so
+  without that a week-old request would be presented as a decision to make now;
+  a timestamp in the future is clamped, so nobody can mint an invitation that
+  never expires
+- the count of waiting invitations also sits on the Direct Messenger tab, so an
+  invitation that arrives while you are on another tab is still there when the
+  toast has gone
 - the gate **fails closed** — when trust cannot be determined (a locked wallet,
   say), the peer is unknown
 
@@ -331,6 +339,13 @@ Selecting a contact or a search result sends a chat request only — no SDP, no
 ICE, no handshake. Exactly one side offers, chosen deterministically so the two
 never glare.
 
+The side that does not offer has nothing to do but wait, and if the other has
+closed their tab there is no failure to report — no connection was ever
+attempted. So the wait is bounded: after twenty seconds the status goes back to
+*waiting for them to accept* and says as much. Nothing is torn down, and the
+invitation stays valid for its full lifetime, so the conversation still opens on
+its own if they come back.
+
 ---
 
 ### 8c) One rendezvous relay
@@ -345,9 +360,10 @@ a first contact, where there is no retry loop and no existing session to fall
 back on, that is the difference between reachable and not.
 
 The cost is stated rather than hidden: while `nos.lol` is unreachable, the
-messenger is. The relay pool still does everything else it did — reconnect with
-backoff, verify every event locally, deduplicate, drop malformed frames — and
-the list is one array in `src/config/nostr.config.js`. Point it somewhere else,
+Direct Messenger is unreachable with it — no invitations arrive and none can be
+sent. The relay pool still does everything else it did — reconnect with backoff,
+verify every event locally, deduplicate, drop malformed frames — and the list is
+one array in `src/config/nostr.config.js`. Point it somewhere else,
 including at a relay of your own, and every client sharing that list still finds
 every other.
 

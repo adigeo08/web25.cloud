@@ -31,7 +31,8 @@ export class NostrDirectMessageSession {
      *   signer: any,
      *   onInvitation?: (bootstrap: any, context: { senderNostrPublicKey: string }) => void|Promise<void>,
      *   onChatEnvelope?: (wire: string, context: { senderNostrPublicKey: string }) => void|Promise<void>,
-     *   onChatRequest?: (senderNostrPublicKey: string) => void|Promise<void>,
+     *   onChatRequest?: (senderNostrPublicKey: string,
+     *                     context: { createdAtSeconds: number }) => void|Promise<void>,
      *   onError?: (error: Error) => void,
      *   config?: typeof NOSTR_CONFIG
      * }} options
@@ -242,9 +243,15 @@ export class NostrDirectMessageSession {
 
         if (rumor.kind === this.config.WEB25_CHAT_REQUEST_KIND) {
             // Intent only. Nothing is negotiated here — a handshake starts
-            // solely when the local user has also selected this peer.
+            // solely when the local user has also consented to this peer.
+            //
+            // The rumor's `created_at` travels with it: the inbox deliberately
+            // looks days back, and without the sender's own timestamp every
+            // request in that history would look like it had just arrived.
             try {
-                await this.onChatRequest?.(senderNostrPublicKey);
+                await this.onChatRequest?.(senderNostrPublicKey, {
+                    createdAtSeconds: Number(rumor.created_at) || 0
+                });
             } catch (error) {
                 this._fail(error);
             }

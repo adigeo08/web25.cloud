@@ -75,7 +75,8 @@ answered `OK`. One relay makes the rendezvous deterministic, which is what a
 first contact needs. `nos.lol` is a large, stable public relay that takes NIP-59
 gift wraps without an allowlist.
 
-The cost is stated plainly: while that relay is unreachable, the messenger is.
+The cost is stated plainly: while that relay is unreachable, the Direct
+Messenger is unreachable with it — no invitation arrives and none can be sent.
 Nothing else in the app depends on it, and the list is one array — point it at
 another relay, or at your own, and every client that shares that list can still
 find every other.
@@ -164,9 +165,17 @@ area, with Accept and Decline. Accepting is what sends consent back: B's own
 chat request goes to A, the pair becomes mutual, and the handshake starts. Until
 that button is pressed, B's browser has created nothing and sent nothing.
 
-Declining discards the request and suppresses that peer for the session, so a
+Declining discards the request and suppresses that peer for the session — every
+later request *and* every later offer from them is dropped in silence, so a
 refusal cannot be worn down by repetition. The sender is told nothing either
 way, because any reply would confirm the npub is live.
+
+A request ages on the sender's clock, read from the `created_at` inside the
+sealed rumor rather than from the moment this client happened to read it. The
+inbox looks `INBOX_LOOKBACK_SECONDS` back on every start, so without that every
+old request in that history would arrive looking new; a request already past
+`CHAT_REQUEST_TTL_MS` is dropped, and a timestamp in the future is clamped to
+now so nobody can mint intent that never goes stale.
 
 For a peer who is not an approved contact, `handleNostrInvitation()` does none
 of the following: it does not call `createAnswerPayloadFromRemoteOffer()`, so no

@@ -55,6 +55,26 @@ export function renderInvitations(invitations) {
 
     const entries = invitations || [];
     if (count) count.textContent = `${entries.length}`;
+
+    // Also on the tab itself. An invitation arrives while the user is reading
+    // the About page as often as not, and a toast that has already faded is no
+    // longer a way to find it.
+    const badge = document.getElementById('dm-tab-badge');
+    if (badge) {
+        badge.textContent = `${entries.length}`;
+        badge.classList.toggle('hidden', entries.length === 0);
+        const tab = document.querySelector('[data-tab="channels"]');
+        if (tab) {
+            if (entries.length > 0) {
+                tab.setAttribute(
+                    'aria-label',
+                    `Direct Messenger, ${entries.length} chat invitation${entries.length === 1 ? '' : 's'} waiting`
+                );
+            } else {
+                tab.removeAttribute('aria-label');
+            }
+        }
+    }
     // The area is hidden entirely when empty rather than showing an empty
     // state: an invitation is an interruption, and no invitations is the
     // normal case.
@@ -96,11 +116,13 @@ function renderInvitationRow(invitation) {
     const evm = document.createElement('p');
     evm.className = 'dm-invite-evm';
     // A request has no keys in it by design, so saying "no EVM identity" would
-    // read as something missing rather than as the shape of a request.
+    // read as something missing rather than as the shape of a request. It must
+    // not promise a check either: accepting sends consent, and the identity
+    // tuple is verified later, on the offer that consent invites.
     evm.textContent =
         invitation.evmAddress ||
         (invitation.kind === 'request'
-            ? 'Wants to start a chat · their keys are verified when you accept'
+            ? 'Wants to start a chat · nothing is sent until you accept'
             : 'no EVM identity in the invitation');
     body.appendChild(evm);
 

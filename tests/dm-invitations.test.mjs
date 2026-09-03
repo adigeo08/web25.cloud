@@ -47,7 +47,9 @@ const {
     invitationMatchesContact,
     answerDmInvitation,
     acceptDmInvitation,
-    declineDmInvitation
+    declineDmInvitation,
+    armHandshakeStallTimer,
+    clearHandshakeStallTimer
 } = await import('../src/core/bootstrap/Lifecycle.js');
 import { ContactsStore, TRUST } from '../src/channels/ContactsStore.js';
 import { PendingInvitations } from '../src/channels/PendingInvitations.js';
@@ -221,6 +223,7 @@ async function makeApp({ unlocked = true } = {}) {
         nostrPool: null,
         dmSelectedPeer: '',
         dmPendingContactName: '',
+        dmHandshakeStallTimer: null,
         log: (message) => logs.push(message),
         toast: {
             info: (m, t) => toasts.push({ level: 'info', m, t }),
@@ -244,6 +247,8 @@ async function makeApp({ unlocked = true } = {}) {
     app.answerDmInvitation = answerDmInvitation.bind(app);
     app.acceptDmInvitation = acceptDmInvitation.bind(app);
     app.declineDmInvitation = declineDmInvitation.bind(app);
+    app.armHandshakeStallTimer = armHandshakeStallTimer.bind(app);
+    app.clearHandshakeStallTimer = clearHandshakeStallTimer.bind(app);
 
     return app;
 }
@@ -321,6 +326,56 @@ test('an offer already waiting is not blanked by a later bare request', async ()
         const [pending] = app.dmInvitations.list();
         assert.equal(pending.kind, 'offer', 'the answerable entry survives');
         assert.equal(pending.evmAddress, MALLORY.evmAddress);
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a request older than its TTL is dropped rather than presented as new', async () => {
+    const app = await makeApp();
+    try {
+        // The inbox looks days back on every start. Without the sender's own
+        // timestamp, every request in that history would arrive looking fresh.
+        const twoDaysAgo = Math.floor((Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000);
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: twoDaysAgo });
+
+        assert.equal(app.dmInvitations.size, 0, 'a stale request is not a decision to make now');
+        assert.equal(app.presenceService.state(MALLORY.nostrPublicKey), 'none', 'nor stale intent');
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a recent request expires on the sender clock, not on arrival', async () => {
+    const app = await makeApp();
+    try {
+        const tenMinutesAgo = Math.floor((Date.now() - 10 * 60 * 1000) / 1000);
+        await app.handleChatRequest(ALICE.nostrPublicKey, { createdAtSeconds: tenMinutesAgo });
+
+        const [pending] = app.dmInvitations.list();
+        assert.ok(pending, 'still inside the TTL, so it is actionable');
+        const remaining = pending.expiresAt - Date.now();
+        assert.ok(
+            remaining < NOSTR_CONFIG.CHAT_REQUEST_TTL_MS - 9 * 60 * 1000,
+            'the ten minutes it already spent in the inbox are not given back'
+        );
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a timestamp in the future cannot mint an invitation that never ages', async () => {
+    const app = await makeApp();
+    try {
+        const nextYear = Math.floor((Date.now() + 365 * 24 * 60 * 60 * 1000) / 1000);
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: nextYear });
+
+        const [pending] = app.dmInvitations.list();
+        assert.ok(pending, 'the request is still shown');
+        assert.ok(
+            pending.expiresAt <= Date.now() + NOSTR_CONFIG.CHAT_REQUEST_TTL_MS,
+            'but it expires on our clock, within the normal TTL'
+        );
     } finally {
         app.fake.restore();
     }
@@ -539,14 +594,20 @@ test('declining drops their intent, so a later pair cannot form behind the decis
     }
 });
 
-test("a declined peer's offer is still parked rather than answered", async () => {
+test("a declined peer's offer is dropped, not answered and not re-queued", async () => {
     const app = await makeApp();
     try {
         await app.handleChatRequest(MALLORY.nostrPublicKey);
         await app.declineDmInvitation(MALLORY.nostrPublicKey);
 
+        // An offer is not a way around the refusal either: parking it would put
+        // the peer back in the panel and raise a notification, which is exactly
+        // the nagging the refusal exists to stop.
         await app.handleNostrInvitation(offerFrom(MALLORY), { senderNostrPublicKey: MALLORY.nostrPublicKey });
-        assert.equal(app.channelsService.calls.createAnswer, 0);
+
+        assert.equal(app.channelsService.calls.createAnswer, 0, 'still never answered');
+        assert.equal(app.dmInvitations.size, 0, 'and it does not come back as a fresh decision');
+        assertNothingRevealed(app, 'a declined peer offering');
     } finally {
         app.fake.restore();
     }
@@ -610,7 +671,96 @@ test('consent needs an unlocked wallet, and says so', async () => {
     }
 });
 
-// ─── 7. The gate is still where it was ───────────────────────────────────
+// ─── 7. Waiting is bounded and legible ───────────────────────────────────
+
+test('the waiting side does not spin forever when no offer arrives', async (t) => {
+    const app = await makeApp();
+    const states = [];
+    app.channelsService.connectionState = 'handshake';
+    app.channelsService.setPreConnectionState = (state) => {
+        app.channelsService.connectionState = state;
+        states.push(state);
+    };
+    app.dmSelectedPeer = ALICE.nostrPublicKey;
+    app.dmPeerLabel = () => 'alice';
+
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+        app.armHandshakeStallTimer(ALICE.nostrPublicKey);
+        t.mock.timers.tick(60_000);
+
+        // Back to waiting, not to an error: nothing failed, the peer simply is
+        // not there, and the invitation they hold is still valid.
+        assert.deepEqual(states, ['awaiting-peer']);
+        assert.equal(app.toasts.filter((entry) => entry.level === 'error').length, 0, 'a quiet peer is not a failure');
+        assert.match(app.toasts.at(-1).m, /invitation stays valid/i, 'and the user is told what happens next');
+    } finally {
+        t.mock.timers.reset();
+        app.fake.restore();
+    }
+});
+
+test('a watchdog that was cleared never fires', async (t) => {
+    const app = await makeApp();
+    const states = [];
+    app.channelsService.connectionState = 'handshake';
+    app.channelsService.setPreConnectionState = (state) => states.push(state);
+    app.dmSelectedPeer = ALICE.nostrPublicKey;
+    app.dmPeerLabel = () => 'alice';
+
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+        app.armHandshakeStallTimer(ALICE.nostrPublicKey);
+        app.clearHandshakeStallTimer();
+        t.mock.timers.tick(60_000);
+
+        assert.deepEqual(states, [], 'nothing is reported after the connection is under way');
+        assert.equal(app.dmHandshakeStallTimer, null);
+    } finally {
+        t.mock.timers.reset();
+        app.fake.restore();
+    }
+});
+
+test('a stall on a peer we have since moved on from is not reported', async (t) => {
+    const app = await makeApp();
+    const states = [];
+    app.channelsService.connectionState = 'handshake';
+    app.channelsService.setPreConnectionState = (state) => states.push(state);
+    app.dmPeerLabel = () => '';
+
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+        app.dmSelectedPeer = ALICE.nostrPublicKey;
+        app.armHandshakeStallTimer(ALICE.nostrPublicKey);
+
+        // The user gave up and started talking to somebody else instead.
+        app.dmSelectedPeer = MALLORY.nostrPublicKey;
+        t.mock.timers.tick(60_000);
+
+        assert.deepEqual(states, [], 'a stale watchdog does not disturb the current conversation');
+    } finally {
+        t.mock.timers.reset();
+        app.fake.restore();
+    }
+});
+
+test('an arriving invitation stops the watchdog', async () => {
+    const app = await makeApp();
+    try {
+        await app.consentToChatWith(ALICE.nostrPublicKey);
+        app.armHandshakeStallTimer(ALICE.nostrPublicKey);
+        assert.notEqual(app.dmHandshakeStallTimer, null);
+
+        await app.handleNostrInvitation(offerFrom(ALICE), { senderNostrPublicKey: ALICE.nostrPublicKey });
+        assert.equal(app.dmHandshakeStallTimer, null, 'something arrived, so there is nothing to watch');
+    } finally {
+        app.clearHandshakeStallTimer();
+        app.fake.restore();
+    }
+});
+
+// ─── 8. The gate is still where it was ───────────────────────────────────
 
 /** Lifecycle source with comments stripped, so prose cannot satisfy a rule. */
 async function lifecycleCode() {

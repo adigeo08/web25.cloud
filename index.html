@@ -85,6 +85,7 @@
                 </button>
                 <button class="tab-btn" data-tab="channels" role="tab" aria-selected="false" style="display: none">
                     💬 Direct Messenger
+                    <span id="dm-tab-badge" class="tab-badge hidden" aria-hidden="true">0</span>
                 </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
@@ -678,7 +679,8 @@
                                 relays looks sturdier and behaves worse: a message accepted by one relay and a
                                 subscription healthy on another never meet, and the invitation is lost while
                                 every relay involved reports success. One relay makes finding each other
-                                predictable, at the honest cost of depending on it.
+                                predictable, at an honest cost: while that relay is down, the messenger is
+                                down with it.
                             </p>
                             <div class="feature-grid">
                                 <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>

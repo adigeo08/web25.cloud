@@ -22,7 +22,8 @@ const DM_STEPS = ['dm-choose-role', 'dm-chat-active'];
 export const DM_CONNECTION_LABELS = {
     idle: { text: 'Not connected', className: 'status-chip status-pending' },
     'awaiting-peer': { text: 'Waiting for them to accept…', className: 'status-chip status-pending' },
-    handshake: { text: 'Nostr handshake completed', className: 'status-chip status-pending' },
+    // Set when the handshake *starts*, so it must not read as finished.
+    handshake: { text: 'Setting up the connection…', className: 'status-chip status-pending' },
     'connecting-webrtc': { text: 'Connecting via WebRTC…', className: 'status-chip status-pending' },
     'connected-webrtc': { text: 'Connected · WebRTC', className: 'status-chip status-success' },
     'connected-nostr': { text: 'Connected · Nostr', className: 'status-chip status-success' },
