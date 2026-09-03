@@ -272,19 +272,36 @@ is never auto-answered:
 - an invitation from anyone who is not an approved contact is **held**, and shown
   in a notifications area with their npub, profile name (best-effort), EVM
   address, trust state and timestamp
+- this is where **first contact** arrives. A stranger cannot send an offer —
+  that needs consent already given — so what they send is a chat request, and
+  the request is what appears there with Accept and Decline. One person asking
+  is enough; nobody has to guess that they should go and search for the other
 - while it is held, `createAnswerPayloadFromRemoteOffer()` is not called, **no
   ICE is gathered**, no answer is sent and nothing is written to the contacts
   store
-- **Accept** re-checks validity, expiry and the identity bindings, creates the
-  answer, sends it over Nostr, and only then persists the peer as a trusted
-  friend
+- **Accept** on an offer re-checks validity, expiry and the identity bindings,
+  creates the answer, sends it over Nostr, and only then persists the peer as a
+  trusted friend
+- **Accept** on a request sends consent back — our own chat request — which
+  makes the pair mutual and starts the handshake. There is no SDP in a request,
+  so there is nothing to answer yet and nothing to verify yet; the identity
+  tuple is checked when the offer arrives
 - **Decline** discards the invitation: no answer, no connection, no contact. The
-  peer is not notified, because that would confirm the npub is live
+  peer is not notified, because that would confirm the npub is live, and their
+  retries are dropped for the rest of the session so a refusal cannot be worn
+  down by repetition
 - the gate **fails closed** — when trust cannot be determined (a locked wallet,
   say), the peer is unknown
 
-Trusted friends reconnect directly without asking again, but every existing
-cryptographic check still runs, plus one more: the invitation's identity tuple
+Consent given in a session is remembered alongside the contacts, and it has to
+be: after both sides agree, exactly one of them offers, and the other would
+otherwise park that offer as a stranger's — both waiting, neither answering.
+Saying yes to somebody, or asking them yourself, is consent to the reply you
+just invited.
+
+Trusted friends reconnect directly without asking again — their chat request is
+consented to automatically, so a friend never lands in the invitation queue —
+but every existing cryptographic check still runs, plus one more: the invitation's identity tuple
 (Nostr pubkey ↔ ECIES key ↔ EVM address) must validate *and* match the stored
 record. A matching contact record alone is never authorization, so somebody who
 takes over an npub does not inherit the trust attached to it. Authorization sits
@@ -313,6 +330,26 @@ consent   ->  "I will answer you"     local, explicit, never inferred
 Selecting a contact or a search result sends a chat request only — no SDP, no
 ICE, no handshake. Exactly one side offers, chosen deterministically so the two
 never glare.
+
+---
+
+### 8c) One rendezvous relay
+
+The client publishes to and subscribes on a single relay, `wss://nos.lol`.
+
+Two browsers can only meet on a relay they both use. A pool spread over several
+relays looks more robust and behaves worse: a gift wrap accepted by one relay
+and a subscription that is healthy on another never meet, and the invitation is
+lost with nothing reporting a failure — every relay involved answered `OK`. For
+a first contact, where there is no retry loop and no existing session to fall
+back on, that is the difference between reachable and not.
+
+The cost is stated rather than hidden: while `nos.lol` is unreachable, the
+messenger is. The relay pool still does everything else it did — reconnect with
+backoff, verify every event locally, deduplicate, drop malformed frames — and
+the list is one array in `src/config/nostr.config.js`. Point it somewhere else,
+including at a relay of your own, and every client sharing that list still finds
+every other.
 
 ---
 
@@ -442,8 +479,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 
 - WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
 - STUN: `stun:stun.l.google.com:19302`
-- Nostr relays (configurable in `src/config/nostr.config.js`):
-  `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
+- Nostr rendezvous relay (configurable in `src/config/nostr.config.js`): `wss://nos.lol`
+  — one relay on purpose, so two Web25 browsers always share one; see §8c
 
 ---
 

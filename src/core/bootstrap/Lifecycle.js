@@ -20,7 +20,7 @@ import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSess
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
 import { verifyNostrEvent, normalizeNostrPublicKey, npubEncode, shortNpub } from '../../nostr/nostr.js';
 import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
-import { DEFAULT_NOSTR_DM_RELAYS } from '../../config/nostr.config.js';
+import { DEFAULT_NOSTR_DM_RELAYS, NOSTR_CONFIG } from '../../config/nostr.config.js';
 import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import {
     appendChannelsMessage,
@@ -131,10 +131,10 @@ export function setupChannels() {
         onMutualIntent: (peer) => void this.startMutualConversation(peer),
         onError: (error) => this.log(`Nostr presence: ${error.message}`)
     });
-    this.nostrDmSession.onChatRequest = (peer) => {
-        this.presenceService.receiveChatRequest(peer);
-        return undefined;
-    };
+    // A chat request is how a stranger reaches somebody for the first time, so
+    // it has to be actionable: it is recorded as intent *and* surfaced as an
+    // invitation the local user can accept or decline.
+    this.nostrDmSession.onChatRequest = (peer) => this.handleChatRequest(peer);
     // Contacts are authorization, not authentication. Every record is
     // encrypted to the wallet's own Nostr identity, so a locked wallet has
     // nothing to read and this list simply cannot be shown.
@@ -149,8 +149,27 @@ export function setupChannels() {
      */
     this.dmSearchedPeer = '';
 
-    // Offers from peers who are not approved contacts wait here. Nothing is
-    // answered from this queue without a person pressing Accept.
+    /**
+     * Peers the local user has said yes to in this session, either by accepting
+     * their invitation or by asking them first. Consent is what lets their
+     * offer be answered when they are not (yet) a stored contact; without it
+     * the two sides deadlock, each parking the other's offer.
+     *
+     * Session-scoped on purpose: a decision made in this tab does not silently
+     * become a standing permission. Contacts are the durable record.
+     * @type {Set<string>}
+     */
+    this.dmConsentedPeers = new Set();
+    /**
+     * Peers whose request was declined here. They are dropped in silence rather
+     * than re-opening the panel on every retry — and still told nothing, since
+     * an answer of any kind would confirm the npub is live.
+     * @type {Set<string>}
+     */
+    this.dmDeclinedPeers = new Set();
+
+    // Requests and offers from peers who are not approved contacts wait here.
+    // Nothing is answered from this queue without a person pressing Accept.
     this.dmInvitations = new PendingInvitations();
     this.dmInvitations.onChange = () => renderInvitations(this.dmInvitations.list());
 
@@ -321,15 +340,30 @@ export async function handleNostrInvitation(bootstrap, context) {
                 trusted = false;
             }
 
-            if (!trusted) {
+            // Consent given in this session counts as well as a stored contact.
+            // Without it a first conversation cannot complete: both sides have
+            // agreed, one of them offers, and the other parks the offer because
+            // no contact record exists yet — so nobody ever answers.
+            const consented = this.dmConsentedPeers?.has(sender) === true;
+
+            if (!trusted && !consented) {
                 await this.holdDmInvitation(bootstrap, sender);
                 return;
             }
 
-            // An approved contact still has to be who they claim: the identity
-            // tuple in the invitation is checked against the stored one, so a
-            // matching contact record alone never authorizes a connection.
-            if (!(await this.invitationMatchesContact(bootstrap, sender))) {
+            // Either way the sender still has to be who they claim. A stored
+            // contact is checked against its record, so a matching contact
+            // alone never authorizes a connection; a peer the user just
+            // accepted has no record to compare against, so the tuple is
+            // checked for internal consistency instead.
+            const identityHolds = trusted
+                ? await this.invitationMatchesContact(bootstrap, sender)
+                : verifyIdentityTuple({
+                      nostrPublicKey: sender,
+                      eciesPublicKey: bootstrap?.from?.eciesPublicKey,
+                      evmAddress: bootstrap?.from?.evmAddress
+                  }).ok;
+            if (!identityHolds) {
                 await this.holdDmInvitation(bootstrap, sender, 'identity mismatch');
                 return;
             }
@@ -343,7 +377,10 @@ export async function handleNostrInvitation(bootstrap, context) {
             }
 
             await this.answerDmInvitation(bootstrap, sender, identity);
-            this.toast.success('Trusted contact connected.', 'Direct Messenger');
+            this.toast.success(
+                trusted ? 'Trusted contact connected.' : 'Connecting to the peer you accepted…',
+                'Direct Messenger'
+            );
             return;
         }
 
@@ -360,6 +397,129 @@ export async function handleNostrInvitation(bootstrap, context) {
     } catch (error) {
         this.toast.error(error.message, 'Direct Messenger');
     }
+}
+
+/**
+ * An inbound chat request — "I would like to talk to you".
+ *
+ * This is first contact, and it used to be a dead end: the request was recorded
+ * as intent and announced in a toast telling the local user to go and select
+ * the sender themselves. Nothing was clickable, so a stranger could only be
+ * reached by both people independently searching for each other.
+ *
+ * A request now behaves like the invitation it is. The privacy guarantee is
+ * unchanged — no answer, no ICE, no key material leaves this browser until a
+ * person presses Accept — but the decision is presented instead of implied.
+ *
+ * @param {string} peerNostrPublicKey
+ */
+export async function handleChatRequest(peerNostrPublicKey) {
+    const sender = `${peerNostrPublicKey || ''}`.toLowerCase();
+    if (!sender) return;
+
+    // Intent is recorded either way: it is what makes the pair mutual once the
+    // local user consents, and it costs nothing to know somebody asked.
+    this.presenceService?.receiveChatRequest(sender);
+
+    // Somebody who was already declined here is dropped in silence. They are
+    // told nothing — an answer of any kind confirms the npub is live.
+    if (this.dmDeclinedPeers?.has(sender)) {
+        this.log(`Ignoring a repeat chat request from ${sender}: previously declined.`);
+        return;
+    }
+
+    // Already decided in the other direction: no second decision to make.
+    if (this.dmConsentedPeers?.has(sender)) return;
+
+    let trusted = false;
+    try {
+        trusted = await this.contactsStore.isTrusted(sender);
+    } catch (error) {
+        // A locked wallet cannot read contacts, so nobody is trusted.
+        this.log(`Trusted contacts unavailable, treating ${sender} as unknown: ${error.message}`);
+        trusted = false;
+    }
+
+    if (trusted) {
+        // A friend does not have to ask twice: consent was given when they were
+        // saved as a contact, so their request is answered with ours and the
+        // handshake starts on its own.
+        try {
+            await this.consentToChatWith(sender);
+            this.toast.info('A trusted contact wants to chat — connecting…', 'Direct Messenger');
+        } catch (error) {
+            this.log(`Could not answer a trusted contact's chat request: ${error.message}`);
+        }
+        return;
+    }
+
+    await this.holdChatRequest(sender);
+}
+
+/**
+ * Park a chat request from a peer who is not an approved contact.
+ *
+ * Nothing is negotiated and nothing is sent: the entry carries the sender's
+ * npub and a best-effort profile name, which is all a request contains. Their
+ * ECIES key and EVM address are not in a request at all, and are verified when
+ * their offer arrives after consent.
+ *
+ * @param {string} sender
+ */
+export async function holdChatRequest(sender) {
+    let profileName = '';
+    try {
+        const profile = await lookupNostrProfile({ pool: this.nostrPool, publicKey: sender });
+        profileName = profile?.displayName || profile?.name || '';
+    } catch (error) {
+        this.log(`Nostr profile lookup unavailable for a chat request: ${error.message}`);
+    }
+
+    this.dmInvitations.add({
+        kind: 'request',
+        senderNostrPublicKey: sender,
+        npub: npubEncode(sender),
+        profileName,
+        trustState: 'unknown',
+        // A request is intent, and intent goes stale: the queue drops it on the
+        // same clock that stops it counting towards a mutual pair.
+        expiresAt: Date.now() + NOSTR_CONFIG.CHAT_REQUEST_TTL_MS
+    });
+
+    this.log(`Holding a chat request from ${sender}. Nothing sent, no ICE gathered.`);
+    this.toast.info('Someone would like to chat. Accept or decline the invitation.', 'Chat invitation');
+}
+
+/**
+ * Say yes to a peer: remember the consent, then tell them.
+ *
+ * Sending our own chat request is what completes the pair, and the presence
+ * layer starts the handshake from there — exactly one side offers, and
+ * whichever side that is, the other now answers instead of parking it.
+ *
+ * @param {string} peerNostrPublicKey
+ */
+export async function consentToChatWith(peerNostrPublicKey) {
+    const peer = `${peerNostrPublicKey || ''}`.toLowerCase();
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) throw new Error('Unlock your wallet to start a conversation.');
+
+    await this.nostrDmSession.start({ localAddress: identity.address });
+
+    // Recorded before the send: an offer that crosses with our request must
+    // find consent already in place, or it would be parked for no reason.
+    this.dmConsentedPeers.add(peer);
+    this.dmDeclinedPeers.delete(peer);
+    this.dmSelectedPeer = peer;
+
+    // Any entry still waiting in the panel for this peer is answered by the
+    // consent itself, so it should not sit there asking a question the user
+    // has just answered somewhere else.
+    this.dmInvitations?.remove(peer);
+
+    return this.presenceService.sendChatRequest(peer, (target, kind, content) =>
+        this.nostrDmSession.sendGiftWrapped(target, kind, content)
+    );
 }
 
 /**
@@ -520,6 +680,25 @@ export async function acceptDmInvitation(peerNostrPublicKey) {
         return false;
     }
 
+    // A request carries no SDP and no keys, so there is nothing to answer yet.
+    // Accepting it means consenting: our own request goes back, the pair
+    // becomes mutual, and the handshake starts from the presence layer. Their
+    // identity tuple is verified when their offer arrives — there is nothing
+    // to verify in a request.
+    if (invitation.kind === 'request') {
+        try {
+            await this.consentToChatWith(sender);
+            // Kept for "Save as contact" once the conversation is up: the peer
+            // is not stored yet, because no verified keys exist for them.
+            this.dmPendingContactName = invitation.profileName || '';
+            this.toast.success('Invitation accepted; connecting…', 'Direct Messenger');
+            return true;
+        } catch (error) {
+            this.toast.error(error.message, 'Direct Messenger');
+            return false;
+        }
+    }
+
     // Re-check the bindings on the invitation itself. This is the same tuple
     // check a trusted contact goes through; there is no contact to compare
     // against yet, so only internal consistency can be required here.
@@ -534,6 +713,8 @@ export async function acceptDmInvitation(peerNostrPublicKey) {
     }
 
     try {
+        this.dmConsentedPeers.add(sender);
+        this.dmDeclinedPeers.delete(sender);
         const answerSignal = await this.answerDmInvitation(bootstrap, sender, identity);
 
         // Persisted as a friend only now, once the authenticated identity and
@@ -586,7 +767,17 @@ export async function acceptDmInvitation(peerNostrPublicKey) {
 export async function declineDmInvitation(peerNostrPublicKey) {
     const invitation = this.dmInvitations.take(peerNostrPublicKey);
     if (!invitation) return false;
-    this.log(`Declined a Direct Messenger invitation from ${invitation.peerNostrPublicKey}.`);
+
+    const sender = invitation.peerNostrPublicKey;
+    // A declined peer stays declined for this session: repeats are dropped
+    // without re-opening the panel, so somebody cannot nag their way in. Any
+    // intent they announced is dropped too, or a later request of our own to
+    // an unrelated peer could find a stale pair waiting to turn mutual.
+    this.dmDeclinedPeers.add(sender);
+    this.dmConsentedPeers.delete(sender);
+    this.presenceService?.clearIntent(sender);
+
+    this.log(`Declined a Direct Messenger invitation from ${sender}.`);
     this.toast.info('Invitation declined.', 'Chat invitation');
     return true;
 }
@@ -753,13 +944,12 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
     }
 
     try {
-        await this.nostrDmSession.start({ localAddress: identity.address });
-        this.dmSelectedPeer = `${nostrPublicKey}`.toLowerCase();
         this.dmPendingContactName = suggestedName;
 
-        const state = await this.presenceService.sendChatRequest(this.dmSelectedPeer, (peer, kind, content) =>
-            this.nostrDmSession.sendGiftWrapped(peer, kind, content)
-        );
+        // Asking somebody is consent to their reply. Without recording it here
+        // the peer's offer — which is what we just invited — would be parked as
+        // if it came from a stranger.
+        const state = await this.consentToChatWith(nostrPublicKey);
 
         renderSearchPresence(this.presenceService.isOnline(this.dmSelectedPeer));
         await this.refreshContactList();
@@ -772,7 +962,7 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
 
         this.channelsService.setPreConnectionState('awaiting-peer');
         renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel() });
-        this.toast.info('Request sent. The chat opens once they select you too.', 'Direct Messenger');
+        this.toast.info('Request sent. It waits as an invitation for them to accept.', 'Direct Messenger');
         return true;
     } catch (error) {
         this.toast.error(error.message, 'Direct Messenger');
@@ -785,12 +975,10 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
  * @param {string} peer
  * @param {string} state
  */
-export function handleIntentChange(peer, state) {
-    if (state === INTENT.RECEIVED && peer !== this.dmSelectedPeer) {
-        // Somebody asked for us. Surfacing it is as far as this goes — the
-        // local user still has to select them before anything is negotiated.
-        this.toast.info('Someone would like to chat. Search or select them to accept.', 'Chat request');
-    }
+export function handleIntentChange(_peer, _state) {
+    // An inbound request is surfaced as an invitation with Accept and Decline
+    // by `handleChatRequest`, so there is nothing to announce twice. Intent
+    // still moves the contact list, which shows who is waiting on whom.
     void this.refreshContactList();
 }
 
@@ -1215,6 +1403,10 @@ export function setupAuthAwareUi(state) {
         // again.
         this.dmContacts = [];
         this.dmInvitations?.clear();
+        // Consent is a decision about a conversation, and the conversation is
+        // over: a locked wallet starts from nobody approved and nobody refused.
+        this.dmConsentedPeers?.clear();
+        this.dmDeclinedPeers?.clear();
         renderInvitations([]);
         renderContactsLocked();
         return;

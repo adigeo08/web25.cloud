@@ -17,9 +17,21 @@
  *     hold expired entries;
  *   - contacts are the durable record. An invitation is not.
  *
- * The queue holds the sender's identity and the offer needed to answer *if*
- * accepted. It never triggers ICE gathering, never creates an RTCPeerConnection
- * and never sends anything.
+ * The queue holds the sender's identity and, for an offer, the SDP needed to
+ * answer *if* accepted. It never triggers ICE gathering, never creates an
+ * RTCPeerConnection and never sends anything.
+ *
+ * Two kinds of entry land here:
+ *
+ *   `request` — "I would like to talk to you", gift-wrapped and carrying no SDP
+ *               and no keys. This is how a stranger reaches somebody for the
+ *               first time; accepting it is what sends consent back.
+ *   `offer`   — a full WebRTC invitation, which only a peer who already has
+ *               consent has any reason to send.
+ *
+ * An offer supersedes a request from the same peer, never the other way round:
+ * the offer is the more actionable of the two, and a stranger must not be able
+ * to blank an actionable entry by re-requesting.
  */
 
 const MAX_PENDING = 32;
@@ -55,32 +67,50 @@ export class PendingInvitations {
     /**
      * Park an invitation from an unapproved peer.
      *
-     * One entry per sender: a peer who re-offers replaces their own pending
-     * request rather than filling the list, so an unknown peer cannot flood the
-     * notification area by repeating.
+     * One entry per sender: a peer who repeats themselves replaces their own
+     * pending entry rather than filling the list, so an unknown peer cannot
+     * flood the notification area.
      *
-     * @param {{ bootstrap: any, senderNostrPublicKey: string, npub?: string,
-     *           profileName?: string, trustState?: string }} input
+     * @param {{ bootstrap?: any, senderNostrPublicKey: string, npub?: string,
+     *           profileName?: string, trustState?: string,
+     *           kind?: 'offer'|'request', expiresAt?: number }} input
      */
-    add({ bootstrap, senderNostrPublicKey, npub = '', profileName = '', trustState = 'unknown' }) {
+    add({
+        bootstrap = null,
+        senderNostrPublicKey,
+        npub = '',
+        profileName = '',
+        trustState = 'unknown',
+        kind = 'offer',
+        expiresAt = 0
+    }) {
         const peer = `${senderNostrPublicKey || ''}`.trim().toLowerCase();
         if (!peer) throw new Error('A pending invitation needs a sender Nostr public key.');
 
         this.pruneExpired();
 
+        // A bare request must not displace an offer already waiting from the
+        // same peer: the offer can be answered, the request only asks.
+        const existing = this._byPeer.get(peer);
+        if (existing && existing.kind === 'offer' && kind === 'request') return existing;
+
         const record = {
-            id: `${peer}:${bootstrap?.session?.sessionId || ''}`,
+            id: `${peer}:${bootstrap?.session?.sessionId || kind}`,
+            kind,
             peerNostrPublicKey: peer,
             npub,
             profileName: safeName(profileName),
             eciesPublicKey: `${bootstrap?.from?.eciesPublicKey || ''}`.trim().toLowerCase(),
             evmAddress: `${bootstrap?.from?.evmAddress || ''}`.trim().toLowerCase(),
             sessionId: `${bootstrap?.session?.sessionId || ''}`,
-            expiresAt: Number(bootstrap?.session?.expiresAt || 0),
+            // An offer expires with its SDP session; a request carries no
+            // session, so the caller passes the intent TTL instead.
+            expiresAt: Number(bootstrap?.session?.expiresAt || expiresAt || 0),
             receivedAt: this.now(),
             trustState,
             // Held so Accept can answer without asking the peer to re-offer.
-            // Never rendered, never stored, never logged.
+            // Never rendered, never stored, never logged. Null for a request,
+            // which has no SDP to hold in the first place.
             bootstrap
         };
 

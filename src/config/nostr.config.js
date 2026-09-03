@@ -8,19 +8,27 @@
  */
 
 /**
- * General-purpose public relays. No single relay is required — a pool publishes
- * to and subscribes across all of them, tolerates the ones that are down, and
- * deduplicates whatever comes back.
+ * The rendezvous relay.
+ *
+ * Two Web25 browsers can only find each other on a relay they both use. A pool
+ * spread over several relays looks more robust and behaves worse: a gift wrap
+ * accepted by one relay and a subscription that is healthy on another simply do
+ * not meet, and an invitation is lost with nothing reporting a failure — every
+ * relay involved said OK.
+ *
+ * So the client uses one relay, and the pool still exists to reconnect, verify
+ * and deduplicate. `nos.lol` is the pick: a large, stable public relay that
+ * takes NIP-59 gift wraps without an allowlist. Replace this list to move the
+ * rendezvous somewhere else — including to a relay of your own — but keep every
+ * client that wants to talk to another on the same list.
  */
-export const DEFAULT_NOSTR_RELAYS = Object.freeze([
-    'wss://relay.damus.io',
-    'wss://nos.lol',
-    'wss://relay.nostr.band',
-    'wss://relay.snort.social'
-]);
+export const DEFAULT_NOSTR_RELAYS = Object.freeze(['wss://nos.lol']);
 
 /**
- * Relays used for private Direct Messenger traffic (NIP-17/44/59 gift wraps).
+ * Relays used for private Direct Messenger traffic (NIP-17/44/59 gift wraps),
+ * presence beacons and chat requests. The same rendezvous, for the same reason:
+ * a request delivered to a relay the other side does not read is a request that
+ * never arrives.
  */
 export const DEFAULT_NOSTR_DM_RELAYS = DEFAULT_NOSTR_RELAYS;
 

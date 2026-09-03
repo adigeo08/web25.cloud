@@ -7,6 +7,10 @@
  * gathered and the local ECIES key and EVM identity are not revealed until
  * somebody presses Accept.
  *
+ * Two kinds arrive. A `request` is somebody asking to talk, and carries only
+ * their npub — it is how first contact happens. An `offer` is a full WebRTC
+ * invitation and carries the sender's EVM identity, which the row shows.
+ *
  * Every field shown came off a public relay, so all of it is written with
  * `textContent` and nothing is interpreted as markup.
  */
@@ -91,7 +95,13 @@ function renderInvitationRow(invitation) {
 
     const evm = document.createElement('p');
     evm.className = 'dm-invite-evm';
-    evm.textContent = invitation.evmAddress || 'no EVM identity in the invitation';
+    // A request has no keys in it by design, so saying "no EVM identity" would
+    // read as something missing rather than as the shape of a request.
+    evm.textContent =
+        invitation.evmAddress ||
+        (invitation.kind === 'request'
+            ? 'Wants to start a chat · their keys are verified when you accept'
+            : 'no EVM identity in the invitation');
     body.appendChild(evm);
 
     const meta = document.createElement('p');

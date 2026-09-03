@@ -30,6 +30,9 @@ globalThis.document = globalThis.document || {
 
 const {
     handleNostrInvitation,
+    handleChatRequest,
+    holdChatRequest,
+    consentToChatWith,
     holdDmInvitation,
     invitationMatchesContact,
     answerDmInvitation,
@@ -147,6 +150,10 @@ class RecordingDmSession {
     async sendGiftWrapped(peer, kind, content) {
         this.giftWrapped.push({ peer, kind, content });
     }
+
+    async start() {
+        this.started = true;
+    }
 }
 
 /** The slice of the app the invitation path touches. */
@@ -162,6 +169,10 @@ async function makeApp({ unlocked = true } = {}) {
         authController: { getActiveIdentity: () => ({ address: '0xlocal', chainId: 1 }) },
         contactsStore: new ContactsStore({ signer: wallet.signer }),
         dmInvitations: new PendingInvitations(),
+        // The two consent sets the real app keeps: peers approved in this
+        // session, and peers refused in it.
+        dmConsentedPeers: new Set(),
+        dmDeclinedPeers: new Set(),
         channelsService: new LeakCountingChannels(),
         nostrDmSession: new RecordingDmSession(),
         presenceService: {
@@ -176,7 +187,15 @@ async function makeApp({ unlocked = true } = {}) {
                 this.chatRequests.push(peer);
                 return 'mutual';
             },
-            clearIntent: () => {},
+            received: [],
+            cleared: [],
+            receiveChatRequest(peer) {
+                this.received.push(peer);
+                return 'received';
+            },
+            clearIntent(peer) {
+                this.cleared.push(peer);
+            },
             watch: () => {},
             isOnline: () => false
         },
@@ -200,6 +219,9 @@ async function makeApp({ unlocked = true } = {}) {
 
     // Bind the real Lifecycle methods under test.
     app.handleNostrInvitation = handleNostrInvitation.bind(app);
+    app.handleChatRequest = handleChatRequest.bind(app);
+    app.holdChatRequest = holdChatRequest.bind(app);
+    app.consentToChatWith = consentToChatWith.bind(app);
     app.holdDmInvitation = holdDmInvitation.bind(app);
     app.invitationMatchesContact = invitationMatchesContact.bind(app);
     app.answerDmInvitation = answerDmInvitation.bind(app);
