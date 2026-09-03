@@ -201,11 +201,19 @@ export class NostrPresenceService {
     /**
      * Record an inbound chat request. Called by the DM session when a
      * gift wrap turns out to be a request rather than an invitation.
+     *
+     * `at` is the sender's own timestamp, so a request pulled out of the inbox
+     * history counts from when it was written rather than from when this client
+     * happened to read it — otherwise every reload would revive stale intent as
+     * fresh. A timestamp in the future is clamped to now: nobody gets to mint
+     * an intent that never goes stale.
+     *
      * @param {string} peerPublicKey
+     * @param {number} [at] milliseconds; defaults to now
      */
-    receiveChatRequest(peerPublicKey) {
+    receiveChatRequest(peerPublicKey, at = this.now()) {
         const peer = `${peerPublicKey}`.toLowerCase();
-        this.receivedIntent.set(peer, this.now());
+        this.receivedIntent.set(peer, Math.min(Number(at) || this.now(), this.now()));
         this._settleIntent(peer);
         return this.intentState(peer);
     }

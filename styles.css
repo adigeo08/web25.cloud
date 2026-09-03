@@ -1628,6 +1628,33 @@ a:hover {
     transform: translateY(-1px);
 }
 
+/* Waiting invitations, visible from whichever tab you are on: an invitation
+   that only exists inside the tab you are not looking at is a missed one. */
+.tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    margin-left: 0.45rem;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: var(--cyan, #55e6ff);
+    color: #041016;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tab-btn.active .tab-badge {
+    background: #041016;
+    color: var(--cyan, #55e6ff);
+}
+
+.tab-badge.hidden {
+    display: none;
+}
+
 .tab-btn.active {
     background: #6ce26c;
     color: #000;

@@ -61,22 +61,32 @@ immediately, so no worker capability is needed for it.
 ## 3. Relay pool
 
 `src/config/nostr.config.js` holds the single source of truth for the relay
-list:
+list, and it holds exactly one relay:
 
 ```text
-wss://relay.damus.io
 wss://nos.lol
-wss://relay.nostr.band
-wss://relay.snort.social
 ```
 
-`src/nostr/NostrRelayPool.js` opens plain browser WebSockets to all of them and:
+Two browsers can only meet on a relay they both use. Spreading over several
+relays looks more robust and behaves worse: a gift wrap accepted by one relay
+and a subscription that is healthy on another simply never meet, and the
+invitation is lost with nothing reporting a failure — every relay involved
+answered `OK`. One relay makes the rendezvous deterministic, which is what a
+first contact needs. `nos.lol` is a large, stable public relay that takes NIP-59
+gift wraps without an allowlist.
 
-- tolerates unreachable relays — connections are attempted in parallel, failures
-  are recorded, and one working relay is enough;
+The cost is stated plainly: while that relay is unreachable, the Direct
+Messenger is unreachable with it — no invitation arrives and none can be sent.
+Nothing else in the app depends on it, and the list is one array — point it at
+another relay, or at your own, and every client that shares that list can still
+find every other.
+
+`src/nostr/NostrRelayPool.js` opens plain browser WebSockets to the list and:
+
+- tolerates unreachable relays — connections are attempted in parallel and
+  failures are recorded rather than thrown;
 - publishes to and subscribes across every connected relay;
-- deduplicates by event id, so one gift wrap arriving from four relays is
-  delivered once;
+- deduplicates by event id, so one gift wrap arriving twice is delivered once;
 - re-verifies every inbound event locally (shape, `id` binding, BIP-340
   signature) and re-matches it against the filter that was actually requested;
 - drops oversized frames, malformed frames, events for unknown subscriptions and
@@ -104,16 +114,20 @@ B's client verifies the gift wrap, then asks one more question:
  ┌────────────────┴─────────────────┐
  A is a trusted friend        A is unknown
       ↓                             ↓
- answer immediately          pending invitation shown to B
+ B consents automatically    B sees a pending invitation
  (crypto checks still run)   nothing sent · no ICE gathered
                                     ↓
                              B presses Accept
-                                    ↓
-                             re-verify, answer, store A as a friend
       ↓                             ↓
  └────────────────┬─────────────────┘
       ↓
-NIP-59 gift wrap (kind 1059) carrying the Web25 invitation envelope
+B's own chat request goes back — intent is mutual, and only now
+does either side create an SDP
+      ↓
+exactly one side offers (lower pubkey), in a NIP-59 gift wrap (kind
+1059) carrying the Web25 invitation envelope
+      ↓
+the other answers it: identity tuple re-verified, contact stored
       ↓
 both sides attempt the direct WebRTC connection
       ↓
@@ -143,6 +157,25 @@ So an attacker who knew only a victim's npub could, in the old flow, send a
 valid offer and have the victim's browser gather ICE and answer automatically —
 learning their IP addresses without any interaction at all. That is the attack
 this layer closes.
+
+This applies to a chat request exactly as it applies to an offer. A request is
+the only thing a stranger can send — an offer requires consent to have been
+given already — so it is the request that appears in the pending-invitations
+area, with Accept and Decline. Accepting is what sends consent back: B's own
+chat request goes to A, the pair becomes mutual, and the handshake starts. Until
+that button is pressed, B's browser has created nothing and sent nothing.
+
+Declining discards the request and suppresses that peer for the session — every
+later request *and* every later offer from them is dropped in silence, so a
+refusal cannot be worn down by repetition. The sender is told nothing either
+way, because any reply would confirm the npub is live.
+
+A request ages on the sender's clock, read from the `created_at` inside the
+sealed rumor rather than from the moment this client happened to read it. The
+inbox looks `INBOX_LOOKBACK_SECONDS` back on every start, so without that every
+old request in that history would arrive looking new; a request already past
+`CHAT_REQUEST_TTL_MS` is dropped, and a timestamp in the future is clamped to
+now so nobody can mint intent that never goes stale.
 
 For a peer who is not an approved contact, `handleNostrInvitation()` does none
 of the following: it does not call `createAnswerPayloadFromRemoteOffer()`, so no

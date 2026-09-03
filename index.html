@@ -85,6 +85,7 @@
                 </button>
                 <button class="tab-btn" data-tab="channels" role="tab" aria-selected="false" style="display: none">
                     💬 Direct Messenger
+                    <span id="dm-tab-badge" class="tab-badge hidden" aria-hidden="true">0</span>
                 </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
@@ -639,10 +640,18 @@
                                 So an invitation from anyone who is not already a trusted contact simply
                                 <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
                                 sent back until you press Accept. Declining discards it silently — the sender is
-                                not told, because telling them would confirm the address is live.
+                                not told, because telling them would confirm the address is live — and their
+                                retries are dropped, so a refusal cannot be worn down by repetition.
+                            </p>
+                            <p>
+                                One person asking is enough. A stranger's chat request lands in that same list
+                                with Accept and Decline, so nobody has to guess that they should go and search
+                                for the other. Accepting is what sends consent back, and the connection starts
+                                from there. A trusted contact never queues at all.
                             </p>
                             <div class="feature-grid">
                                 <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+                                <div class="feature">📨 A stranger's chat request arrives there too — one ask is enough</div>
                                 <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
                                 <div class="feature">🚫 Decline sends nothing at all</div>
                                 <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
@@ -660,18 +669,23 @@
                         </article>
 
                         <article class="about-card">
-                            <h3>🛰️ Nostr relays: browser to relay, directly</h3>
+                            <h3>🛰️ Nostr relay: browser to relay, directly</h3>
                             <p>
-                                The app talks straight to a pool of public relays over WebSockets. There is no
-                                Web25 relay, no proxy and no signalling server — the relay list is configurable
-                                and no single relay is required.
+                                The app talks straight to one public relay over a WebSocket. There is no Web25
+                                relay, no proxy and no signalling server — just a rendezvous both sides agree on.
+                            </p>
+                            <p>
+                                Two browsers can only meet on a relay they both use. Spreading over several
+                                relays looks sturdier and behaves worse: a message accepted by one relay and a
+                                subscription healthy on another never meet, and the invitation is lost while
+                                every relay involved reports success. One relay makes finding each other
+                                predictable, at an honest cost: while that relay is down, the messenger is
+                                down with it.
                             </p>
                             <div class="feature-grid">
-                                <div class="feature">🌐 <code>wss://relay.damus.io</code></div>
-                                <div class="feature">🌐 <code>wss://nos.lol</code></div>
-                                <div class="feature">🌐 <code>wss://relay.nostr.band</code></div>
-                                <div class="feature">🌐 <code>wss://relay.snort.social</code></div>
-                                <div class="feature">🧯 Unreachable relays are tolerated automatically</div>
+                                <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>
+                                <div class="feature">⚙️ One array in the config — point it at your own relay</div>
+                                <div class="feature">🧯 Reconnects with backoff; a dropped socket is not a lost session</div>
                                 <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
                             </div>
                         </article>

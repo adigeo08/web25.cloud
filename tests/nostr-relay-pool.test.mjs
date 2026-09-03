@@ -108,11 +108,10 @@ async function connectedPool(options = {}) {
 
 // ─── configuration ───────────────────────────────────────────────────────
 
-test('the default relay pool is the documented set of public relays', () => {
-    assert.deepEqual(
-        [...DEFAULT_NOSTR_RELAYS],
-        ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band', 'wss://relay.snort.social']
-    );
+test('the client ships one rendezvous relay, so two peers always share one', () => {
+    // Spreading over several relays is what loses invitations: a gift wrap
+    // accepted by one relay and a subscription healthy on another never meet.
+    assert.deepEqual([...DEFAULT_NOSTR_RELAYS], ['wss://nos.lol']);
 });
 
 test('relay URLs are normalized, deduplicated and restricted to wss://', () => {
