@@ -26,7 +26,7 @@ The UI is organized into:
   - Sign payload with local EVM identity
   - Seed signed output
 - **Browse / Load**
-  - Torrent hash loading flow — a site is addressed by its infohash, and nothing else
+  - Existing torrent hash loading flow remains available
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -316,29 +316,6 @@ never glare.
 
 ---
 
-### 9) Nostr is used by the messenger only
-
-Static-site publishing and loading are pure WebTorrent, exactly as they were
-before Nostr entered the project. There is no directory service, no name system
-and no discovery relay: a site is addressed by its BitTorrent infohash, and
-`.torrentchain` remains the only authority on its contents and publisher.
-
-```text
-Direct Messenger  ->  private signalling + encrypted fallback (NIP-17/44/59)
-Static sites      ->  WebTorrent only — no Nostr anywhere in the deploy path
-```
-
-```text
-BitTorrent infohash -> identifies the distributed artifact
-.torrentchain       -> proves the contents and the publisher
-EVM signature       -> proves the WEB25 publisher identity
-```
-
-The load path is: download, read `.torrentchain`, verify the EVM signature and
-bundle hash, then render in the sandbox.
-
----
-
 ## Security profile (current)
 
 ### HTML sanitization (DOMPurify)
@@ -465,7 +442,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 
 - WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
 - STUN: `stun:stun.l.google.com:19302`
-- Nostr relays, used by the Direct Messenger only (configurable in `src/config/nostr.config.js`):
+- Nostr relays (configurable in `src/config/nostr.config.js`):
   `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
 
 ---

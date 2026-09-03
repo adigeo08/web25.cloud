@@ -553,11 +553,10 @@
                         <p>
                             WEB25.cloud is a
                             <a href="https://github.com/Omodaka9375/peerweb" target="_blank" rel="noopener noreferrer">PeerWeb fork</a>
-                            focused on local EVM identity, signed static-site deploys, and direct peer-to-peer
-                            messaging addressed by Nostr. Static sites are published and loaded over WebTorrent
-                            alone — Nostr is used by the messenger, never by the deploy pipeline. Core flows are
-                            browser-native: no backend, no signalling server and no mandatory MetaMask
-                            connection. The browser talks directly to STUN, WebTorrent and public Nostr relays.
+                            focused on local EVM identity, signed static-site deploys, and direct peer-to-peer messaging
+                            addressed by Nostr. Core flows are browser-native: no backend, no signalling server and no
+                            mandatory MetaMask connection. The browser talks directly to STUN, WebTorrent and public
+                            Nostr relays.
                         </p>
                     </section>
 
@@ -598,7 +597,6 @@
                                 <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
                                 <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
                                 <div class="feature">✅ Identity/integrity checks applied during load</div>
-                                <div class="feature">🔗 Distribution and discovery by torrent hash — no directory service</div>
                             </div>
                         </article>
 
@@ -664,9 +662,9 @@
                         <article class="about-card">
                             <h3>🛰️ Nostr relays: browser to relay, directly</h3>
                             <p>
-                                The app talks straight to a pool of public relays over WebSockets, for Direct
-                                Messenger traffic only. There is no Web25 relay, no proxy and no signalling
-                                server — the relay list is configurable and no single relay is required.
+                                The app talks straight to a pool of public relays over WebSockets. There is no
+                                Web25 relay, no proxy and no signalling server — the relay list is configurable
+                                and no single relay is required.
                             </p>
                             <div class="feature-grid">
                                 <div class="feature">🌐 <code>wss://relay.damus.io</code></div>

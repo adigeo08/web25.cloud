@@ -10,10 +10,6 @@ Cloudflare Worker, no signalling server, no Web25-operated relay, no relay proxy
 and no database. The browser speaks directly to STUN, to WebTorrent trackers and
 to public Nostr relays.
 
-> Nostr is used here and nowhere else in the project. Static-site publishing
-> and loading are pure WebTorrent: no directory service, no discovery relay and
-> no Nostr event of any kind in the deploy path.
-
 ---
 
 ## 1. One key, three identities
