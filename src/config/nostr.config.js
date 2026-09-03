@@ -24,13 +24,6 @@ export const DEFAULT_NOSTR_RELAYS = Object.freeze([
  */
 export const DEFAULT_NOSTR_DM_RELAYS = DEFAULT_NOSTR_RELAYS;
 
-/**
- * The NosNS directory relay list lives in `src/nosns/NosNSProtocol.js`, next to
- * the rest of the convention it belongs to. It is deliberately not re-exported
- * here: NosNS publishes to exactly one relay, and a second name for that list
- * is a second place for it to drift.
- */
-
 export const NOSTR_CONFIG = Object.freeze({
     /** Per-relay socket open timeout. */
     RELAY_CONNECT_TIMEOUT_MS: 8000,
@@ -89,49 +82,4 @@ export const NOSTR_CONFIG = Object.freeze({
      * from these routinely, so the fallback is not armed until it elapses.
      */
     WEBRTC_DISCONNECT_GRACE_MS: 12000
-});
-
-/**
- * Public WEB25 website registry (NIP-35).
- *
- * This is discovery only. A registry entry tells a browser that a site exists
- * and who claims to have published it; the BitTorrent infohash identifies the
- * artifact, and the `.torrentchain` inside it remains the authority on contents
- * and publisher. Nothing here is ever trusted over a downloaded manifest.
- */
-export const NOSNS_CONFIG = Object.freeze({
-    /** NIP-35 torrent event. */
-    TORRENT_EVENT_KIND: 2003,
-
-    /**
-     * NosNS identification is the torrent name suffix and nothing else — see
-     * `NOSNS_TORRENT_SUFFIX` in `src/nosns/NosNSProtocol.js`. There is no NosNS
-     * category, marker tag or hashtag: the category on an entry is a real DTAN
-     * category chosen by the publisher, so the entry stays a first-class DTAN
-     * torrent rather than a WEB25-only record parked in the DTAN index.
-     */
-
-    /** Namespaced tags mirroring the `.torrentchain` proof into the event. */
-    PROOF_TAGS: Object.freeze({
-        SCHEMA: 'web25-schema',
-        PUBLISHER: 'web25-publisher',
-        CHAIN_ID: 'web25-chain-id',
-        CREATED_AT: 'web25-created-at',
-        MERKLE_ROOT: 'web25-merkle-root',
-        BUNDLE_SHA256: 'web25-bundle-sha256',
-        BUNDLE_NAME: 'web25-bundle-name',
-        SIGNATURE: 'web25-signature',
-        MESSAGE: 'web25-message'
-    }),
-
-    /** How long a discovery query waits for relays before rendering results. */
-    QUERY_TIMEOUT_MS: 6000,
-    /** Cap on results held from one query. */
-    QUERY_LIMIT: 100,
-    /** How far back a NosNS query looks. */
-    QUERY_LOOKBACK_SECONDS: 365 * 24 * 60 * 60,
-    /** Hard cap on the mirrored signed message, so one event cannot be huge. */
-    MAX_PROOF_MESSAGE_BYTES: 8192,
-    /** Hard cap on `file` tags advertised for one torrent. */
-    MAX_FILE_TAGS: 64
 });

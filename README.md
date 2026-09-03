@@ -26,10 +26,7 @@ The UI is organized into:
   - Sign payload with local EVM identity
   - Seed signed output
 - **Browse / Load**
-  - Existing torrent hash loading flow remains available
-  - Separate **Search NosNS** mode querying DTAN by category for published sites
-  - Search by site name, infohash, EVM publisher address or `npub`
-  - Each result shows its publisher verification state; **Open** reuses the same hash loader
+  - Torrent hash loading flow — a site is addressed by its infohash, and nothing else
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -319,95 +316,26 @@ never glare.
 
 ---
 
-### 9) NosNS — the public website directory over DTAN (NIP-35 kind 2003)
+### 9) Nostr is used by the messenger only
 
-A second, separate Nostr use case. Every deployed website can also be published
-as a public NIP-35 torrent event, so WEB25 sites become discoverable:
+Static-site publishing and loading are pure WebTorrent, exactly as they were
+before Nostr entered the project. There is no directory service, no name system
+and no discovery relay: a site is addressed by its BitTorrent infohash, and
+`.torrentchain` remains the only authority on its contents and publisher.
 
 ```text
 Direct Messenger  ->  private signalling + encrypted fallback (NIP-17/44/59)
-NosNS             ->  public website discovery (NIP-35 kind 2003, via DTAN)
+Static sites      ->  WebTorrent only — no Nostr anywhere in the deploy path
 ```
 
-NosNS — the Nostr Name System — is a deliberately tiny convention:
-
 ```text
-  NIP-35 kind 2003
-+ one official DTAN category chosen by the publisher
-+ wss://relay.dtan.xyz as the only directory relay
-+ a torrent name ending exactly in ".nosns.torrent"
-```
-
-- **the suffix is the whole protocol.** No custom event kind, no custom
-  category, no `web25:website` marker, no `["t","nosns"]` hashtag. The check is
-  `title.endsWith('.nosns.torrent')`, and the suffix is the real BitTorrent
-  `info.name`, not a renamed download
-- the category is a **real DTAN category you choose** (`Applications`,
-  `Other / Archives`, `Video / Movies / 4k`, …), defaulting to
-  `tcat:application`, so entries are browsable in the actual DTAN index. The
-  taxonomy is mirrored as frontend config, so the picker works even when the
-  relay is down
-- the event carries the final BitTorrent infohash, the real torrent entries and
-  the real tracker list
-- the existing `.torrentchain` EVM proof is mirrored into the event, so a
-  browser can show `Verified publisher: 0x...` before downloading. Discovery
-  does not *depend* on it: a suffix-only entry lists as `unverified`
-- **no second EVM signature**: the site was already signed when
-  `.torrentchain` was created; only a Nostr signature is added, and choosing a
-  category changes nothing that was signed
-- entries go **only** to `wss://relay.dtan.xyz`; the general relays carry
-  private DM traffic and never receive a public website listing
-- publication never blocks or invalidates a deployment, and a retry resubmits
-  the identical signed event (same id, `created_at`, title, category, signature)
-
-**Publishing** (Deploy tab). Pick a DTAN category, then deploy. The NosNS step
-runs after the site is already live and seeding, and the two outcomes are
-reported separately — `Deployment: Live / Seeding` next to `NosNS: Published to
-1 / 1 relays`, or `NosNS: Not published · Retry`. A chip reports the directory
-relay itself (`NosNS Directory relay.dtan.xyz · Connected` / `· Unreachable`),
-kept distinct from category loading. The deploy wizard names which key signs
-what (`Sign .torrentchain · EVM`, then `Publish to NosNS · Nostr`), and
-*View technical details* breaks the artifact into six sections: WEB25 bundle,
-`.torrentchain` payload, EVM signature, torrent artifact, NIP-35 NosNS event,
-and the publication result.
-
-**Discovery** (Browse tab). *Search NosNS* asks the relay for `kind: 2003` in
-one DTAN category (`{"kinds":[2003],"#i":["tcat:application"]}`) — never the
-whole index — keeps only titles ending in `.nosns.torrent`, and filters the
-results locally. There is deliberately **no NIP-50 dependency**. You can search
-by site name, infohash, EVM publisher address, or `npub` / Nostr pubkey; results
-are cached per category. Each row shows the site name (suffix stripped for
-display), EVM publisher, Nostr identity, publish date, infohash and a
-verification state:
-
-| State | Meaning |
-| --- | --- |
-| `verified` | the mirrored EVM signature recovers to the claimed publisher |
-| `invalid` | the metadata is well-formed but the signature does not hold |
-| `malformed` | the WEB25 metadata is broken or self-inconsistent |
-| `unverified` | there is no WEB25 proof to check |
-
-A valid Nostr signature alone never means `verified` — that only says who wrote
-the directory entry. **Open** hands the infohash to the existing loader, so there
-is one website loading implementation and the `.torrentchain` render gate is
-unchanged. NosNS availability never affects loading by hash.
-
-Trust model:
-
-```text
-DTAN / Nostr        -> tells users that a website exists
 BitTorrent infohash -> identifies the distributed artifact
 .torrentchain       -> proves the contents and the publisher
 EVM signature       -> proves the WEB25 publisher identity
-Nostr signature     -> proves who published the directory entry
 ```
 
-Directory metadata is an early signal only. The final load path is unchanged:
-download, read `.torrentchain`, verify the EVM signature and bundle hash, then
-render in the sandbox. When a site is opened from a NosNS result, the claim is
-additionally compared against the manifest that actually arrived; any
-disagreement is surfaced and the directory claim is withdrawn, because the
-downloaded manifest always wins. See `docs/nosns-over-dtan.md`.
+The load path is: download, read `.torrentchain`, verify the EVM signature and
+bundle hash, then render in the sandbox.
 
 ---
 
@@ -451,10 +379,6 @@ src/
 │   ├── NostrDirectMessageBootstrap.js
 │   ├── NostrDirectMessageSession.js
 │   └── ecies.js
-├── nosns/
-│   ├── NosNSProtocol.js
-│   ├── NosNSEvent.js
-│   └── NosNSService.js
 ├── nostr/
 │   ├── NostrIdentityPreference.js
 │   ├── NostrProfileLookup.js
@@ -541,9 +465,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 
 - WebTorrent tracker: `wss://tracker.openwebtorrent.com/`
 - STUN: `stun:stun.l.google.com:19302`
-- Nostr relays (configurable in `src/config/nostr.config.js`):
-  - Direct Messenger: `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
-  - NosNS directory: `wss://relay.dtan.xyz` only — the two lists are disjoint
+- Nostr relays, used by the Direct Messenger only (configurable in `src/config/nostr.config.js`):
+  `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`, `wss://relay.snort.social`
 
 ---
 
