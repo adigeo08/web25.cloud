@@ -3,7 +3,6 @@
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
 import { verifyTorrentChainManifest } from '../../torrent/TorrentChainProtocol.js';
-import { matchesDownloadedManifest } from '../../nosns/NosNSEvent.js';
 import {
     decodeSiteBundleGzip,
     SITE_BUNDLE_FILE_NAME,
@@ -413,26 +412,6 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
                 torrent.destroy();
             } catch (_) {}
             return { ok: false, manifest: null, legacy: false, signatureState };
-        }
-
-        // If this site was opened from a NosNS result, the downloaded
-        // manifest is the authority: any disagreement makes the directory
-        // metadata untrusted. It never blocks the load — .torrentchain has
-        // already verified on its own — but the claim is withdrawn from the UI.
-        const registryClaim = this.pendingRegistryClaim;
-        if (registryClaim && `${registryClaim.infohash}`.toLowerCase() === `${hash}`.toLowerCase()) {
-            const comparison = matchesDownloadedManifest(registryClaim, manifest);
-            this.pendingRegistryClaim = null;
-            this.lastRegistryClaimComparison = comparison;
-            if (!comparison.matches) {
-                this.log(
-                    `Registry metadata for ${hash} disagrees with the downloaded .torrentchain (${comparison.mismatches.join(', ')}); treating the registry entry as untrusted.`
-                );
-                this.toast?.warning?.(
-                    `The registry entry for this site disagrees with its .torrentchain (${comparison.mismatches.join(', ')}). Showing the downloaded manifest instead.`,
-                    'Registry metadata untrusted'
-                );
-            }
         }
 
         const signatureState = this.buildSignatureState({

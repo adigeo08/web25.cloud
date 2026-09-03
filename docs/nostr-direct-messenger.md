@@ -10,13 +10,6 @@ Cloudflare Worker, no signalling server, no Web25-operated relay, no relay proxy
 and no database. The browser speaks directly to STUN, to WebTorrent trackers and
 to public Nostr relays.
 
-> This document covers the **private** Nostr use case. The public one — the
-> WEB25 website registry over NIP-35 — lives in
-> [`nosns-over-dtan.md`](./nosns-over-dtan.md). The two share the
-> relay client and the wallet-worker signing operation and nothing else: no
-> SDP, ICE candidate, ECIES key or message content ever appears in a public
-> registry event.
-
 ---
 
 ## 1. One key, three identities

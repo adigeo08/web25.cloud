@@ -310,28 +310,14 @@
                                 <div class="result-success">
                                     <h4>✅ Website Ready</h4>
                                     <div class="result-info">
-                                        <p>
-                                            <strong>Deployment:</strong>
-                                            <span id="result-deployment-status" class="status-chip status-success">Live / Seeding</span>
-                                        </p>
                                         <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
                                         <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
-                                        <p><strong>EVM publisher:</strong> <code id="result-signed-by">Not signed</code></p>
-                                        <p><strong>WEB25 signature:</strong> <code id="result-signature-preview">N/A</code></p>
+                                        <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
+                                        <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
                                         <p>
                                             <strong>Signature status:</strong>
                                             <code id="result-signature-status">UNVERIFIED</code>
                                         </p>
-                                        <div id="result-registry-row" class="deploy-registry-row hidden">
-                                            <p><strong>Nostr identity:</strong> <code id="result-npub">Unavailable</code></p>
-                                            <p><strong>DTAN category:</strong> <code id="result-registry-category">Not selected</code></p>
-                                            <p><strong>NosNS name:</strong> <code id="result-nosns-name">Pending</code></p>
-                                            <p>
-                                                <strong>NosNS:</strong>
-                                                <span id="result-registry-status" class="status-chip status-pending">Pending</span>
-                                                <button id="retry-registry-btn" class="btn btn-secondary btn-sm hidden">Retry NosNS Publish</button>
-                                            </p>
-                                        </div>
                                     </div>
                                     <div class="result-actions">
                                         <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
@@ -358,62 +344,25 @@
                                 <span class="step-chip is-current">1. Select files</span>
                                 <span class="step-chip">2. Build in-memory bundle</span>
                                 <span class="step-chip">3. Review payload</span>
-                                <span class="step-chip">4. Sign .torrentchain · EVM</span>
+                                <span class="step-chip">4. Sign payload</span>
                                 <span class="step-chip">5. Deploy signed memory torrent</span>
                                 <span class="step-chip">6. Live and seeding</span>
-                                <span class="step-chip">7. Publish to NosNS · Nostr</span>
                             </div>
                             <div class="deploy-stage-box">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
                                 <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
                             </div>
                             <p id="deploy-wizard-next" class="deploy-wizard-next">▶ Next: Upload your website folder to stage files.</p>
-                            <div class="nosns-deploy-box">
-                                <div class="nosns-category-row">
-                                    <label for="nosns-category-select">NosNS directory category</label>
-                                    <select id="nosns-category-select" class="nosns-category-select"></select>
-                                </div>
-                                <p class="tech-note">
-                                    An official DTAN category, so the entry is browsable in the real DTAN index. The torrent
-                                    is named <code>&lt;site&gt;.nosns.torrent</code>, which is what marks it as a NosNS
-                                    website. Directory metadata only — it is not part of <code>.torrentchain</code> and needs
-                                    no second EVM signature.
-                                </p>
-                                <p id="nosns-relay-status" class="status-chip status-pending">NosNS Directory relay.dtan.xyz · Checking…</p>
-                            </div>
                             <div class="button-group">
                                 <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Payload</button>
                                 <button id="publish-btn" class="btn btn-create" disabled>Deploy Signed Torrent</button>
                             </div>
                             <details id="deploy-tech-details">
                                 <summary>View technical details</summary>
-                                <h4>1 · WEB25 bundle</h4>
-                                <p class="tech-note">Deterministic in-memory bundle. In gzip mode the whole site becomes <code>site.bundle.json.gz</code>.</p>
-                                <pre id="deploy-bundle-preview" class="code-block"></pre>
-
-                                <h4>2 · <code>.torrentchain</code> payload</h4>
-                                <p class="tech-note">The signed WEB25 provenance manifest, inserted into the torrent before it is created.</p>
+                                <h4>Payload Preview</h4>
                                 <pre id="publish-payload-preview" class="code-block"></pre>
-
-                                <h4>3 · EVM signature</h4>
-                                <p class="tech-note">Proves the WEB25 <em>publisher</em>. Produced once per website, when <code>.torrentchain</code> is generated — never again for NosNS publication.</p>
-                                <pre id="deploy-evm-signature-preview" class="code-block"></pre>
-
-                                <h4>4 · Torrent artifact</h4>
-                                <p class="tech-note">The BitTorrent infohash identifies the distributed artifact. Website content travels over BitTorrent, not over Nostr.</p>
+                                <h4>Deploy Output</h4>
                                 <pre id="publish-output" class="code-block"></pre>
-
-                                <h4>5 · NIP-35 NosNS event</h4>
-                                <p class="tech-note">
-                                    Signed with the Nostr identity derived from the same wallet key. This signature proves
-                                    who published the <em>directory entry</em>; the EVM signature above proves who published
-                                    the <em>website</em>. Two separate signatures, two separate claims.
-                                </p>
-                                <pre id="registry-event-preview" class="code-block"></pre>
-
-                                <h4>6 · NosNS publication result</h4>
-                                <p class="tech-note"><code>relay.dtan.xyz</code>, the one NosNS directory relay. Discovery only — never a source of authenticity.</p>
-                                <pre id="registry-publish-output" class="code-block"></pre>
                             </details>
                         </section>
 
@@ -455,8 +404,8 @@
                                     <span id="dm-invitations-count" class="dm-contacts-count">0</span>
                                 </div>
                                 <p class="dm-invitations-hint">
-                                    Nobody is connected yet. Accepting reveals your encryption key and network
-                                    address to them; declining sends nothing at all.
+                                    Accepting reveals your encryption key and network address to them;
+                                    declining sends nothing at all.
                                 </p>
                                 <div id="dm-invitations-list" class="dm-invitations-list"></div>
                             </section>
@@ -484,23 +433,15 @@
                             <h3>💬 Direct Messenger</h3>
                             <div class="dm-lede">
                                 <p>
-                                    One key, one identity: your Nostr address, ECIES encryption key and EVM
-                                    address are cryptographically bound to each other, and an invitation that
-                                    does not prove all three is rejected.
+                                    Message anyone by their Nostr address. Unknown peers wait for you to
+                                    accept; trusted contacts reconnect on their own.
                                 </p>
-                                <p>
-                                    Nostr is untrusted infrastructure here — signalling and fallback transport
-                                    only. Relays carry sealed envelopes they cannot read, and they are never a
-                                    source of authenticity.
-                                </p>
-                                <p>
-                                    An unknown peer never connects on its own: their invitation waits for you to
-                                    accept it. Trusted contacts can reconnect directly, without asking again.
-                                </p>
-                                <p>
-                                    Browsers connect over WebRTC when they can and fall back to Nostr when they
-                                    cannot. Messages are signed and end-to-end encrypted either way.
-                                </p>
+                                <ul class="dm-stack">
+                                    <li><span>Transport</span> WebRTC · relay fallback</li>
+                                    <li><span>Signalling</span> Nostr NIP-59 gift wrap</li>
+                                    <li><span>Messages</span> ECIES + NIP-44, signed</li>
+                                    <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
+                                </ul>
                             </div>
 
                             <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
@@ -587,48 +528,13 @@
                 <!-- ── BROWSE TAB ── -->
                 <div id="tab-browse" class="tab-panel active" role="tabpanel">
                     <section class="example cloud-console card-base">
-                        <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Open a WEB25 Site</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
-
-                        <div class="browse-mode-switch" role="tablist" aria-label="How to find a site">
-                            <button class="browse-mode-btn is-active" data-browse-mode="hash" role="tab" aria-selected="true">🔗 Load by Hash</button>
-                            <button class="browse-mode-btn" data-browse-mode="registry" role="tab" aria-selected="false">🛰️ Search NosNS</button>
+                        <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
+                        <p>Resolve and open any peer-hosted website through your local browser node.</p>
+                        <div class="hash-input-group">
+                            <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
+                            <button id="load-site" class="btn btn-primary">Load Site</button>
                         </div>
-
-                        <div id="browse-hash-mode">
-                            <p>Resolve and open any peer-hosted website through your local browser node.</p>
-                            <div class="hash-input-group">
-                                <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
-                                <button id="load-site" class="btn btn-primary">Load Site</button>
-                            </div>
-                            <p>🎯 Just the hash — WEB25.cloud automatically adds the magnet link prefix and trackers.</p>
-                        </div>
-
-                        <div id="browse-registry-mode" class="hidden">
-                            <p>
-                                NosNS is the Nostr Name System: standard NIP-35 torrent events on
-                                <code>relay.dtan.xyz</code>, filed under a real DTAN category, whose torrent name ends in
-                                <code>.nosns.torrent</code>. That suffix is the whole convention. The directory only says a
-                                site exists — content is downloaded over BitTorrent and verified from its
-                                <code>.torrentchain</code> before it renders.
-                            </p>
-                            <div class="nosns-category-row">
-                                <label for="nosns-browse-category">DTAN category</label>
-                                <select id="nosns-browse-category" class="nosns-category-select"></select>
-                            </div>
-                            <div class="hash-input-group">
-                                <input
-                                    type="text"
-                                    id="registry-search-input"
-                                    class="hash-input"
-                                    placeholder="Site name, infohash, 0x publisher, or npub…"
-                                    autocomplete="off"
-                                    spellcheck="false"
-                                />
-                                <button id="registry-search-btn" class="btn btn-primary">🔍 Search</button>
-                            </div>
-                            <p id="registry-status" class="registry-status is-idle">Pick a DTAN category and search to list NosNS websites.</p>
-                            <div id="registry-results" class="registry-results"></div>
-                        </div>
+                        <p>🎯 Just the hash — WEB25.cloud automatically adds the magnet link prefix and trackers.</p>
                     </section>
 
                     <section class="debug console-widget card-base">
@@ -655,192 +561,135 @@
                     </section>
 
                     <section class="features about-bento">
-                        <h3>🪪 Identity: one local key, three addresses</h3>
-                        <p>
-                            The identity model is local-first and is inspired by
-                            <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
-                            key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
-                            A single secp256k1 key backs all three identities shown on the Identity page —
-                            there is no second seed and no second private key.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
-                            <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
-                            <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
-                            <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
-                            <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
-                            <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
-                        </div>
-                        <p>
-                            The Identity page shows all three side by side, each with its own copy button.
-                            The Nostr address can be added or removed there: removing it takes you off the
-                            relays and hides the address, and adding it back restores the same
-                            <code>npub</code> — because it was never a separate key to begin with.
-                        </p>
+                        <article class="about-card">
+                            <h3>🪪 Identity: one local key, three addresses</h3>
+                            <p>
+                                The identity model is local-first and is inspired by
+                                <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
+                                key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+                                A single secp256k1 key backs all three identities shown on the Identity page —
+                                there is no second seed and no second private key.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
+                                <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
+                                <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
+                                <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
+                                <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
+                                <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
+                            </div>
+                            <p>
+                                The Identity page shows all three side by side, each with its own copy button.
+                                The Nostr address can be added or removed there: removing it takes you off the
+                                relays and hides the address, and adding it back restores the same
+                                <code>npub</code> — because it was never a separate key to begin with.
+                            </p>
+                        </article>
 
-                        <br /><br />
-                        <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
-                        <p>
-                            Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
-                            manifest carrying publisher identity and integrity metadata.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🗜️ Default bundle mode: gzip</div>
-                            <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
-                            <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
-                            <div class="feature">✅ Identity/integrity checks applied during load</div>
-                        </div>
+                        <article class="about-card">
+                            <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+                            <p>
+                                Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
+                                manifest carrying publisher identity and integrity metadata.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🗜️ Default bundle mode: gzip</div>
+                                <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
+                                <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
+                                <div class="feature">✅ Identity/integrity checks applied during load</div>
+                            </div>
+                        </article>
 
-                        <br /><br />
-                        <h3>💬 Direct Messenger: search an address, start a chat</h3>
-                        <p>
-                            Messaging UX started from
-                            <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                            and replaced its manual offer/answer step entirely. You enter someone's Nostr
-                            address, and the encrypted WebRTC invitation is delivered for you through public
-                            Nostr relays — no magnet links or key pasting.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
-                            <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
-                            <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
-                            <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
-                            <div class="feature">🪪 Peer verification from public key to EVM address</div>
-                            <div class="feature">✍️ Per-message signatures verified on receive</div>
-                            <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
-                        </div>
+                        <article class="about-card">
+                            <h3>💬 Direct Messenger: search an address, start a chat</h3>
+                            <p>
+                                Messaging UX started from
+                                <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
+                                and replaced its manual offer/answer step entirely. You enter someone's Nostr
+                                address, and the encrypted WebRTC invitation is delivered for you through public
+                                Nostr relays — no magnet links or key pasting.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
+                                <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
+                                <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
+                                <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
+                                <div class="feature">🪪 Peer verification from public key to EVM address</div>
+                                <div class="feature">✍️ Per-message signatures verified on receive</div>
+                                <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                            </div>
+                            <p>
+                                WebRTC stays the preferred transport. If a direct connection cannot be
+                                established, messages fall back to the relays — still signed and ECIES-encrypted
+                                exactly as before, with NIP-44 on top. The chat header says which path is in use:
+                                <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
+                            </p>
+                        </article>
 
-                        <br />
-                        <h4>Cryptographic validity is not consent</h4>
-                        <p>
-                            Verifying an invitation proves the sender <em>is who they claim</em>. It does not
-                            mean you want to talk to them — and anyone who knows your <code>npub</code> can
-                            produce a perfectly valid offer. Answering one is not free: it reveals your full
-                            ECIES public key, your EVM address, and, through ICE gathering, your machine's
-                            network addresses.
-                        </p>
-                        <p>
-                            So an invitation from anyone who is not already a trusted contact simply
-                            <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
-                            sent back until you press Accept. Declining discards it silently — the sender is
-                            not told, because telling them would confirm the address is live.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
-                            <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
-                            <div class="feature">🚫 Decline sends nothing at all</div>
-                            <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
-                            <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
-                            <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
-                        </div>
-                        <p>
-                            Trust is authorization layered on top of authentication — it replaces none of the
-                            existing checks. A trusted friend's invitation is still verified end to end, and
-                            its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
-                            what was stored, so taking over an <code>npub</code> does not inherit the trust
-                            attached to it. Removing a contact is a local change only: they become unknown
-                            again, and no key is deleted or rotated on either side.
-                        </p>
-                        <p>
-                            WebRTC stays the preferred transport. If a direct connection cannot be
-                            established, messages fall back to the relays — still signed and ECIES-encrypted
-                            exactly as before, with NIP-44 on top. The chat header says which path is in use:
-                            <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
-                        </p>
+                        <article class="about-card">
+                            <h3>🤝 Cryptographic validity is not consent</h3>
+                            <p>
+                                Verifying an invitation proves the sender <em>is who they claim</em>. It does not
+                                mean you want to talk to them — and anyone who knows your <code>npub</code> can
+                                produce a perfectly valid offer. Answering one is not free: it reveals your full
+                                ECIES public key, your EVM address, and, through ICE gathering, your machine's
+                                network addresses.
+                            </p>
+                            <p>
+                                So an invitation from anyone who is not already a trusted contact simply
+                                <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
+                                sent back until you press Accept. Declining discards it silently — the sender is
+                                not told, because telling them would confirm the address is live.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+                                <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
+                                <div class="feature">🚫 Decline sends nothing at all</div>
+                                <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
+                                <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
+                                <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
+                            </div>
+                            <p>
+                                Trust is authorization layered on top of authentication — it replaces none of the
+                                existing checks. A trusted friend's invitation is still verified end to end, and
+                                its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
+                                what was stored, so taking over an <code>npub</code> does not inherit the trust
+                                attached to it. Removing a contact is a local change only: they become unknown
+                                again, and no key is deleted or rotated on either side.
+                            </p>
+                        </article>
 
-                        <br /><br />
-                        <h3>🛰️ Nostr relays: browser to relay, directly</h3>
-                        <p>
-                            The app talks straight to a pool of public relays over WebSockets. There is no
-                            Web25 relay, no proxy and no signalling server — the relay list is configurable
-                            and no single relay is required.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🌐 <code>wss://relay.damus.io</code></div>
-                            <div class="feature">🌐 <code>wss://nos.lol</code></div>
-                            <div class="feature">🌐 <code>wss://relay.nostr.band</code></div>
-                            <div class="feature">🌐 <code>wss://relay.snort.social</code></div>
-                            <div class="feature">🧯 Unreachable relays are tolerated automatically</div>
-                            <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
-                        </div>
+                        <article class="about-card">
+                            <h3>🛰️ Nostr relays: browser to relay, directly</h3>
+                            <p>
+                                The app talks straight to a pool of public relays over WebSockets. There is no
+                                Web25 relay, no proxy and no signalling server — the relay list is configurable
+                                and no single relay is required.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🌐 <code>wss://relay.damus.io</code></div>
+                                <div class="feature">🌐 <code>wss://nos.lol</code></div>
+                                <div class="feature">🌐 <code>wss://relay.nostr.band</code></div>
+                                <div class="feature">🌐 <code>wss://relay.snort.social</code></div>
+                                <div class="feature">🧯 Unreachable relays are tolerated automatically</div>
+                                <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
+                            </div>
+                        </article>
 
-                        <br /><br />
-                        <h3>🛰️ Publishing to NosNS (NIP-35 / DTAN)</h3>
-                        <p>
-                            Once a site bundle is signed, seeded and live, it can also be published to
-                            <strong>NosNS</strong> — the Nostr Name System — as a public NIP-35 torrent event. This
-                            is a second, separate Nostr use case from the private Direct Messenger: NosNS events
-                            carry public metadata only.
-                        </p>
-                        <p>
-                            NosNS is a deliberately tiny convention: NIP-35 <code>kind 2003</code>, one official
-                            DTAN category you choose, <code>wss://relay.dtan.xyz</code> as the only directory
-                            relay, and a torrent name ending in <code>.nosns.torrent</code>. That suffix is the
-                            entire discriminator — there is no custom event kind, no custom category and no
-                            custom tag, so a NosNS entry is a first-class DTAN torrent rather than a record
-                            parked in the DTAN index.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🏷️ Name ends in <code>.nosns.torrent</code> — the real BitTorrent <code>info.name</code></div>
-                            <div class="feature">🗂️ A real DTAN category you pick, defaulting to <code>tcat:application</code></div>
-                            <div class="feature">🔗 Carries the final BitTorrent infohash and the real torrent entries</div>
-                            <div class="feature">📦 In gzip mode that is <code>.torrentchain</code> + <code>site.bundle.json.gz</code></div>
-                            <div class="feature">🪪 Mirrors the <code>.torrentchain</code> EVM proof for pre-download checks</div>
-                            <div class="feature">✍️ No second EVM signature — only a Nostr signature is added</div>
-                            <div class="feature">🌐 Directory relay: <code>wss://relay.dtan.xyz</code>, and nowhere else</div>
-                        </div>
-                        <p>
-                            Deployment and NosNS publication are reported separately, because they are
-                            separate outcomes: a site stays <strong>Live / Seeding</strong> even if the directory
-                            relay is unreachable, and <em>Retry NosNS Publish</em> resends the identical signed
-                            event rather than creating a second entry. The deploy wizard names which key signs
-                            what — <em>Sign .torrentchain · EVM</em> for the website, then
-                            <em>Publish to NosNS · Nostr</em> for the directory entry.
-                        </p>
-
-                        <br /><br />
-                        <h3>🔎 Searching NosNS</h3>
-                        <p>
-                            The Browse tab has a second mode, <strong>Search NosNS</strong>, next to the
-                            existing load-by-hash flow. Pick a DTAN category and it queries
-                            <code>kind: 2003</code> in that category alone — never the whole index — then keeps
-                            only the entries whose name ends in <code>.nosns.torrent</code>. Text search runs
-                            locally on those results, so there is no dependency on NIP-50 full-text search.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🔍 Search by site name, infohash, EVM publisher, or <code>npub</code></div>
-                            <div class="feature">🪪 Each result shows its publisher verification state</div>
-                            <div class="feature">🚀 <strong>Open</strong> reuses the existing WEB25 hash loader</div>
-                            <div class="feature">🧯 NosNS availability never affects loading by hash</div>
-                        </div>
-                        <p>
-                            A valid Nostr signature only proves who wrote the directory entry. Showing
-                            <em>Publisher verified</em> requires the separate mirrored EVM proof to check out, so
-                            results appear as verified, invalid, malformed or unverified. Discovery does not
-                            depend on that proof: an entry with the NosNS name and no WEB25 proof is still
-                            listed, simply as unverified.
-                        </p>
-                        <p>
-                            Nostr provides directory, discovery and search. Website content is distributed over
-                            BitTorrent, and authenticity still comes from <code>.torrentchain</code> after
-                            download. When a site is opened from a NosNS result, the entry is compared against
-                            the manifest that actually arrives — any disagreement is surfaced and the directory
-                            claim is withdrawn, because the downloaded manifest always wins.
-                        </p>
-
-                        <br /><br />
-                        <h3>🛡️ Security profile</h3>
-                        <p>
-                            WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
-                            The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
-                            to support richer static websites.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🧾 Signed-manifest verification before render gates</div>
-                            <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
-                            <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
-                            <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
-                        </div>
+                        <article class="about-card">
+                            <h3>🛡️ Security profile</h3>
+                            <p>
+                                WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+                                The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
+                                to support richer static websites.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🧾 Signed-manifest verification before render gates</div>
+                                <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
+                                <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
+                                <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
+                            </div>
+                        </article>
                     </section>
 
                     <section class="requirements">
@@ -853,8 +702,6 @@
                             <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
                             <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
                             <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
-                            <div class="req">✅ NosNS: public website directory over NIP-35, inside the real DTAN index</div>
-                            <div class="req">✅ Pre-download publisher verification from mirrored <code>.torrentchain</code> proof</div>
                             <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
                         </div>
                     </section>

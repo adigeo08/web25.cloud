@@ -123,7 +123,9 @@ h3 {
 .feature-grid,
 .benefit-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    /* min() keeps a track from being wider than the container it sits in, so a
+       narrow parent gets one full-width column instead of overflowing. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
     gap: 1rem;
     margin-top: 1rem;
 }
@@ -786,147 +788,49 @@ footer {
     opacity: 0.9;
 }
 
-/* ── Browse: WEB25 registry ── */
-
-.browse-mode-switch {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin: 0 0 1rem;
-}
-
-.browse-mode-btn {
-    padding: 0.5rem 0.9rem;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-}
-
-.browse-mode-btn.is-active {
-    border-color: rgba(85, 230, 255, 0.55);
-    background: rgba(85, 230, 255, 0.08);
-}
-
-.registry-status {
-    margin: 0.6rem 0 0;
-    font-size: 0.8rem;
-    opacity: 0.75;
-}
-
-.registry-status.is-ok {
-    color: #6ce26c;
-    opacity: 1;
-}
-
-.registry-status.is-error {
-    color: #ff8f8f;
-    opacity: 1;
-}
-
-.registry-results {
-    display: grid;
-    gap: 0.6rem;
-    margin-top: 0.9rem;
-}
-
-.registry-empty {
-    margin: 0;
-    font-size: 0.85rem;
-    opacity: 0.7;
-}
-
-.registry-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    padding: 0.85rem 1rem;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: rgba(2, 7, 11, 0.5);
-}
-
-.registry-row-main {
-    min-width: 0;
-    flex: 1 1 18rem;
-}
-
-.registry-row-title {
-    margin: 0;
-    font-weight: 700;
-}
-
-.registry-row-meta,
-.registry-row-hash {
-    margin: 0.2rem 0 0;
-    font-size: 0.76rem;
-    opacity: 0.75;
-    overflow-wrap: anywhere;
-}
-
-.registry-row-hash {
-    font-family: monospace;
-}
-
-.registry-verify {
-    margin: 0.35rem 0 0;
-    font-size: 0.76rem;
-}
-
-.registry-verify.is-verified {
-    color: #6ce26c;
-}
-
-.registry-verify.is-invalid {
-    color: #ff8f8f;
-}
-
-.registry-verify.is-unverified {
-    opacity: 0.7;
-}
-
-.registry-row .btn {
-    flex: 0 0 auto;
-    margin: 0;
-}
-
-/* ── Deploy: registry result ── */
-
-.deploy-registry-row {
-    margin-top: 0.6rem;
-    padding-top: 0.6rem;
-    border-top: 1px solid var(--line);
-}
-
-.deploy-registry-row.hidden {
-    display: none;
-}
-
-.deploy-registry-row .btn {
-    margin-left: 0.5rem;
-}
-
-.tech-note {
-    margin: 0 0 0.4rem;
-    font-size: 0.78rem;
-    opacity: 0.7;
-}
-
 /* ── Direct Messenger: Nostr search ── */
 
 .dm-lede {
     max-width: 46rem;
     /* Left-aligned and visually secondary: this is orientation, not a hero. */
-    margin: 0 0 1.25rem;
+    margin: 0 0 1.1rem;
     text-align: left;
-    opacity: 0.72;
     font-size: 0.9rem;
     line-height: 1.55;
+}
+
+.dm-lede p {
+    margin: 0 0 0.7rem;
+    opacity: 0.72;
+}
+
+/* The stack, as a strip of labelled facts rather than four paragraphs of it. */
+.dm-stack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dm-stack li {
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--cyan);
+    border-radius: 7px;
+    background: rgba(85, 230, 255, 0.035);
+    font-size: 0.74rem;
+    line-height: 1.4;
+}
+
+.dm-stack span {
+    margin-right: 0.35rem;
+    color: var(--muted);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
 }
 
 .dm-lede p {
@@ -981,6 +885,10 @@ footer {
 }
 
 .dm-contacts-filter {
+    width: 100%;
+    /* .hash-input carries a 300px floor for the main search fields; in a 17rem
+       sidebar that floor pushed the input straight through the panel border. */
+    min-width: 0;
     margin: 0.6rem 0;
     font-size: 0.8rem;
 }
@@ -1153,7 +1061,7 @@ footer {
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 0.75rem;
+    gap: 0.75rem 1.25rem;
     margin-top: 0.9rem;
     padding: 0.9rem 1rem;
     border: 1px solid rgba(108, 226, 108, 0.4);
@@ -2388,6 +2296,12 @@ body {
 }
 
 .channels-messages {
+    /* A column of bubbles: incoming hug the left edge, own messages the right,
+       so a conversation reads as two sides instead of one stack of boxes. */
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
     margin-top: 0.75rem;
     border: 1px solid #6ce26c;
     border-radius: 8px;
@@ -2399,26 +2313,79 @@ body {
 }
 
 .channels-message {
-    margin-bottom: 0.65rem;
-    padding: 0.5rem 0.6rem;
+    max-width: min(72%, 34rem);
+    padding: 0.5rem 0.7rem;
     border: 1px solid rgba(0, 255, 0, 0.35);
-    border-radius: 8px;
+    border-radius: 10px 10px 10px 2px;
     background: rgba(0, 20, 0, 0.55);
 }
 
 .channels-message.is-own {
+    align-self: flex-end;
     border-color: #66d4ea;
+    border-radius: 10px 10px 2px 10px;
     background: rgba(20, 36, 62, 0.75);
+    text-align: left;
 }
 
 .channels-message-meta {
-    font-size: 0.75rem;
-    opacity: 0.8;
+    font-size: 0.72rem;
+    opacity: 0.7;
     margin-bottom: 0.25rem;
 }
 
+.channels-message.is-own .channels-message-meta {
+    text-align: right;
+}
+
 .channels-message-body {
+    overflow-wrap: anywhere;
     word-break: break-word;
+    line-height: 1.5;
+}
+
+/* The composer is one row: the message field may shrink, the buttons may not. */
+#dm-chat-active .hash-input-group {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+}
+
+#channels-message-input {
+    min-width: 0;
+}
+
+#dm-chat-active .hash-input-group .btn {
+    flex: 0 0 auto;
+}
+
+/* Icon-only, so it should not inherit the 120px floor meant for text buttons. */
+#channels-attach-btn {
+    min-width: 0;
+    padding: 0.75rem 0.9rem;
+}
+
+/* The mobile breakpoint stacks input groups into a column, which turns the
+   composer into three full-width rows. A message field, a paperclip and Send
+   fit on one line at any phone width, so this one stays a row. */
+@media (max-width: 768px) {
+    #dm-chat-active .hash-input-group {
+        flex-direction: row;
+        gap: 0.4rem;
+    }
+
+    #dm-chat-active .hash-input-group .btn {
+        /* The mobile touch-target rules stretch every button to 100%; in a
+           single-row composer that has to be auto again. */
+        width: auto;
+        min-width: 0;
+        padding: 0.7rem 0.85rem;
+        font-size: 0.85rem;
+    }
+
+    #channels-message-input {
+        width: auto;
+        flex: 1 1 auto;
+    }
 }
 
 /* ── DM Tab Step Flow ── */
@@ -2663,6 +2630,10 @@ p { color:#a7bdc7; }
 .btn-primary { color:#031015; background:linear-gradient(135deg,var(--cyan),#70f0cf); border-color:var(--cyan); box-shadow:0 0 22px rgba(85,230,255,.18); }
 .btn-primary:hover { color:#031015; background:linear-gradient(135deg,#86efff,var(--cyan)); box-shadow:0 0 30px rgba(85,230,255,.35); }
 .btn-secondary { color:var(--cyan); background:rgba(85,230,255,.06); border-color:var(--line); }
+/* `btn-sm` is used all over the identity, contacts and invitation UI but was
+   never defined, so every "small" button rendered at the full 120px-wide,
+   1rem-font size and blew those panels apart. */
+.btn-sm { width:auto; min-width:0; padding:.4rem .7rem; gap:.35rem; font-size:.78rem; letter-spacing:.04em; }
 .hash-input { border-radius:7px; color:var(--ink); border-color:var(--line); background:rgba(2,7,11,.9); caret-color:var(--cyan); }
 .hash-input:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba(85,230,255,.1), 0 0 24px rgba(85,230,255,.08); }
 .code-block { border-radius:7px; color:#8de7f7; border-color:var(--line); background:#03070b; }
@@ -2697,15 +2668,41 @@ p { color:#a7bdc7; }
 
 .about-hero-card { min-height:180px; display:flex; flex-direction:column; justify-content:center; background:linear-gradient(120deg,rgba(12,28,39,.92),rgba(18,12,37,.82)); }
 .about-hero-card p { max-width:760px; font-size:1.05rem; }
+/* One topic = one card = one grid item. Heading, prose and feature list used
+   to be separate items in this grid, so a topic's parts landed in different
+   columns and rows and the layout tore itself apart. */
 .about-bento { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
-.about-bento > h3, .about-bento > p, .about-bento > .feature-grid { grid-column:auto; }
-.about-bento > h3 { margin:0; padding:1.15rem 1.15rem 0; border:1px solid var(--line); border-bottom:0; border-radius:10px 10px 0 0; background:var(--panel); }
-.about-bento > h3 + p { margin:0; padding:0 1.15rem 1rem; border-left:1px solid var(--line); border-right:1px solid var(--line); background:var(--panel); }
-.about-bento > .feature-grid { margin:0 0 1rem; padding:0 1rem 1rem; border:1px solid var(--line); border-top:0; border-radius:0 0 10px 10px; background:var(--panel); grid-template-columns:1fr; }
+.about-card { display:flex; flex-direction:column; min-width:0; padding:1.15rem; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+.about-card > h3 { margin:0 0 .7rem; }
+.about-card > h4 { margin:.4rem 0 .5rem; }
+.about-card > p { margin:0 0 .8rem; }
+.about-card > .feature-grid { margin:.15rem 0 .9rem; gap:.6rem; grid-template-columns:1fr; align-content:start; }
+.about-card > .feature-grid .feature { padding:.7rem .8rem; font-size:.82rem; line-height:1.45; }
+/* Cards stretch to their row, so the slack sits inside a card instead of
+   opening a hole in the grid. The last block should not float in that slack. */
+.about-card > :last-child { margin-bottom:0; }
 .about-bento > br { display:none; }
-.feature, .benefit, .req { border-radius:7px; color:#b8ccd4; border:1px solid rgba(85,230,255,.13); border-left:2px solid var(--cyan); background:rgba(85,230,255,.035); }
+/* `anywhere` also feeds the track's min-content size, so a long unbreakable
+   token (a relay URL, a STUN address) cannot push a card past its column. */
+.feature, .benefit, .req { min-width:0; overflow-wrap:anywhere; border-radius:7px; color:#b8ccd4; border:1px solid rgba(85,230,255,.13); border-left:2px solid var(--cyan); background:rgba(85,230,255,.035); }
 .feature:hover, .benefit:hover { border-color:var(--cyan); box-shadow:0 12px 28px rgba(0,0,0,.3); }
 .requirements, .benefits { padding:1.4rem; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+/* Four goals, so the track count is pinned to a divisor of four: an auto-fit
+   grid lands on three at some widths and leaves the fourth alone in its row. */
+.benefit-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+@media (min-width:1200px) { .benefit-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+@media (max-width:560px) { .benefit-grid { grid-template-columns:minmax(0,1fr); } }
+
+@media (max-width: 899px) {
+    .about-bento { grid-template-columns:1fr; }
+}
+
+@media (min-width: 900px) {
+    .about-card > .feature-grid { grid-template-columns:1fr 1fr; }
+    /* An odd number of items would leave the last one alone with a hole beside
+       it, so it takes the whole row instead. */
+    .about-card > .feature-grid > .feature:last-child:nth-child(odd) { grid-column:1 / -1; }
+}
 
 @keyframes live-pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.55; transform:scale(.75); } }
 @keyframes cursor-blink { 50% { opacity:0; } }
@@ -2715,7 +2712,7 @@ p { color:#a7bdc7; }
 @media (max-width: 800px) {
     .network-telemetry { gap:.65rem; flex-wrap:wrap; }
     .network-telemetry span { padding:.3rem .5rem; }
-    .identity-widget-grid, .about-bento { grid-template-columns:1fr; }
+    .identity-widget-grid { grid-template-columns:1fr; }
     .deploy-stepper { grid-template-columns:repeat(3,1fr); row-gap:1.4rem; }
     .console-heading { flex-direction:column; }
 }
@@ -2894,8 +2891,7 @@ select {
     }
 
     .identity-pubkey-row,
-    .dm-own-pubkey-panel > div,
-    #dm-chat-active > div:has(#channels-message-input) {
+    .dm-own-pubkey-panel > div {
         display: flex !important;
         flex-wrap: wrap;
         gap: 0.5rem;
@@ -2905,16 +2901,6 @@ select {
     .dm-own-pubkey-panel .btn {
         width: 100%;
         margin-left: 0 !important;
-    }
-
-    #channels-message-input {
-        flex: 1 1 100% !important;
-    }
-
-    #channels-attach-btn,
-    #channels-send-btn {
-        width: auto;
-        flex: 1 1 0;
     }
 
     .channels-messages {
@@ -2972,52 +2958,6 @@ select {
     margin: 0.25rem 0;
     font-size: 0.875rem;
 }
-/* ── NosNS directory ─────────────────────────────────────────────────── */
-
-.nosns-deploy-box {
-    margin: 0.75rem 0;
-    padding: 0.75rem;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.02);
-}
-
-.nosns-category-row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.5rem;
-}
-
-.nosns-category-row label {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-dim, inherit);
-}
-
-.nosns-category-select {
-    flex: 1 1 14rem;
-    min-width: 12rem;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--panel, transparent);
-    color: inherit;
-    font: inherit;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.85rem;
-}
-
-.nosns-category-select:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-#nosns-relay-status {
-    margin-top: 0.4rem;
-}
-
 /* ── Direct Messenger: pending chat invitations ─────────────────────── */
 
 .dm-invitations {

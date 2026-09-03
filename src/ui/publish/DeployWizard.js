@@ -7,9 +7,7 @@
  */
 
 /**
- * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean,
- *             registryState?: 'idle'|'signing'|'publishing'|'published'|'failed'|'skipped',
- *             isError?: boolean }} DeployWizardState
+ * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean, isError?: boolean }} DeployWizardState
  */
 
 /** @type {NodeListOf<HTMLElement> | null} */
@@ -39,19 +37,12 @@ export function initDeployWizard() {
 export function updateDeployWizard(state) {
     if (!stepChips || stepChips.length === 0) return;
 
-    const { hasFiles, hasSignature, hasDeployResult, registryState = 'idle', isError = false } = state;
+    const { hasFiles, hasSignature, hasDeployResult, isError = false } = state;
 
-    // Determine active step (1-based, matching the 7 step chips)
-    // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign (EVM/.torrentchain)
-    // 5 – Deploy  6 – Live and seeding  7 – Publish to NosNS
-    // `skipped` means no NosNS event was ever created (a locked wallet, say):
-    // nothing is in progress and there is nothing to retry, so the wizard should
-    // not advance onto — or highlight — the NosNS step.
-    const registryStarted = registryState !== 'idle' && registryState !== 'skipped';
+    // Determine active step (1-based, matching the 6 step chips)
+    // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign  5 – Deploy  6 – Live
     let activeStep;
-    if (hasDeployResult && registryStarted) {
-        activeStep = 7;
-    } else if (hasDeployResult) {
+    if (hasDeployResult) {
         activeStep = 6;
     } else if (hasFiles && hasSignature) {
         activeStep = 5;
@@ -77,32 +68,10 @@ export function updateDeployWizard(state) {
         }
     });
 
-    // The NosNS step is the only one that can complete *and* fail without
-    // invalidating the deployment, so it gets its own visual state.
-    if (stepChips.length >= 7) {
-        const registryChip = stepChips[6];
-        if (registryState === 'published') {
-            registryChip.classList.remove('step-active', 'step-locked');
-            registryChip.classList.add('step-done');
-        } else if (registryState === 'failed') {
-            registryChip.classList.remove('step-done', 'step-locked');
-            registryChip.classList.add('step-active');
-        } else if (registryState === 'skipped') {
-            registryChip.classList.remove('step-active', 'step-done');
-            registryChip.classList.add('step-locked');
-        }
-    }
-
     // Update "Next suggested action" microcopy
     if (wizardNextEl) {
         let nextText;
-        if (hasDeployResult && registryState === 'published') {
-            nextText = '🎉 Live and seeding, and listed in the NosNS directory — share the link below!';
-        } else if (hasDeployResult && registryState === 'failed') {
-            nextText = '🎉 Live and seeding. The NosNS entry did not publish — you can retry it below.';
-        } else if (hasDeployResult && registryState === 'skipped') {
-            nextText = '🎉 Your site is live and seeding. No NosNS entry was created for it.';
-        } else if (hasDeployResult) {
+        if (hasDeployResult) {
             nextText = '🎉 Your site is live and seeding — share the link below!';
         } else if (hasFiles && hasSignature) {
             nextText = '▶ Next: Deploy your signed torrent to go live.';
