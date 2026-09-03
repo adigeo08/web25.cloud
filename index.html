@@ -404,8 +404,8 @@
                                     <span id="dm-invitations-count" class="dm-contacts-count">0</span>
                                 </div>
                                 <p class="dm-invitations-hint">
-                                    Nobody is connected yet. Accepting reveals your encryption key and network
-                                    address to them; declining sends nothing at all.
+                                    Accepting reveals your encryption key and network address to them;
+                                    declining sends nothing at all.
                                 </p>
                                 <div id="dm-invitations-list" class="dm-invitations-list"></div>
                             </section>
@@ -433,23 +433,15 @@
                             <h3>💬 Direct Messenger</h3>
                             <div class="dm-lede">
                                 <p>
-                                    One key, one identity: your Nostr address, ECIES encryption key and EVM
-                                    address are cryptographically bound to each other, and an invitation that
-                                    does not prove all three is rejected.
+                                    Message anyone by their Nostr address. Unknown peers wait for you to
+                                    accept; trusted contacts reconnect on their own.
                                 </p>
-                                <p>
-                                    Nostr is untrusted infrastructure here — signalling and fallback transport
-                                    only. Relays carry sealed envelopes they cannot read, and they are never a
-                                    source of authenticity.
-                                </p>
-                                <p>
-                                    An unknown peer never connects on its own: their invitation waits for you to
-                                    accept it. Trusted contacts can reconnect directly, without asking again.
-                                </p>
-                                <p>
-                                    Browsers connect over WebRTC when they can and fall back to Nostr when they
-                                    cannot. Messages are signed and end-to-end encrypted either way.
-                                </p>
+                                <ul class="dm-stack">
+                                    <li><span>Transport</span> WebRTC · relay fallback</li>
+                                    <li><span>Signalling</span> Nostr NIP-59 gift wrap</li>
+                                    <li><span>Messages</span> ECIES + NIP-44, signed</li>
+                                    <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
+                                </ul>
                             </div>
 
                             <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
@@ -570,129 +562,136 @@
                     </section>
 
                     <section class="features about-bento">
-                        <h3>🪪 Identity: one local key, three addresses</h3>
-                        <p>
-                            The identity model is local-first and is inspired by
-                            <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
-                            key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
-                            A single secp256k1 key backs all three identities shown on the Identity page —
-                            there is no second seed and no second private key.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
-                            <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
-                            <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
-                            <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
-                            <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
-                            <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
-                        </div>
-                        <p>
-                            The Identity page shows all three side by side, each with its own copy button.
-                            The Nostr address can be added or removed there: removing it takes you off the
-                            relays and hides the address, and adding it back restores the same
-                            <code>npub</code> — because it was never a separate key to begin with.
-                        </p>
+                        <article class="about-card">
+                            <h3>🪪 Identity: one local key, three addresses</h3>
+                            <p>
+                                The identity model is local-first and is inspired by
+                                <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
+                                key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+                                A single secp256k1 key backs all three identities shown on the Identity page —
+                                there is no second seed and no second private key.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
+                                <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
+                                <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
+                                <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
+                                <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
+                                <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
+                            </div>
+                            <p>
+                                The Identity page shows all three side by side, each with its own copy button.
+                                The Nostr address can be added or removed there: removing it takes you off the
+                                relays and hides the address, and adding it back restores the same
+                                <code>npub</code> — because it was never a separate key to begin with.
+                            </p>
+                        </article>
 
-                        <br /><br />
-                        <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
-                        <p>
-                            Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
-                            manifest carrying publisher identity and integrity metadata.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🗜️ Default bundle mode: gzip</div>
-                            <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
-                            <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
-                            <div class="feature">✅ Identity/integrity checks applied during load</div>
-                            <div class="feature">🔗 Distribution and discovery by torrent hash — no directory service</div>
-                        </div>
+                        <article class="about-card">
+                            <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+                            <p>
+                                Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
+                                manifest carrying publisher identity and integrity metadata.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🗜️ Default bundle mode: gzip</div>
+                                <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
+                                <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
+                                <div class="feature">✅ Identity/integrity checks applied during load</div>
+                                <div class="feature">🔗 Distribution and discovery by torrent hash — no directory service</div>
+                            </div>
+                        </article>
 
-                        <br /><br />
-                        <h3>💬 Direct Messenger: search an address, start a chat</h3>
-                        <p>
-                            Messaging UX started from
-                            <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                            and replaced its manual offer/answer step entirely. You enter someone's Nostr
-                            address, and the encrypted WebRTC invitation is delivered for you through public
-                            Nostr relays — no magnet links or key pasting.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
-                            <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
-                            <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
-                            <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
-                            <div class="feature">🪪 Peer verification from public key to EVM address</div>
-                            <div class="feature">✍️ Per-message signatures verified on receive</div>
-                            <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
-                        </div>
+                        <article class="about-card">
+                            <h3>💬 Direct Messenger: search an address, start a chat</h3>
+                            <p>
+                                Messaging UX started from
+                                <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
+                                and replaced its manual offer/answer step entirely. You enter someone's Nostr
+                                address, and the encrypted WebRTC invitation is delivered for you through public
+                                Nostr relays — no magnet links or key pasting.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
+                                <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
+                                <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
+                                <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
+                                <div class="feature">🪪 Peer verification from public key to EVM address</div>
+                                <div class="feature">✍️ Per-message signatures verified on receive</div>
+                                <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                            </div>
+                            <p>
+                                WebRTC stays the preferred transport. If a direct connection cannot be
+                                established, messages fall back to the relays — still signed and ECIES-encrypted
+                                exactly as before, with NIP-44 on top. The chat header says which path is in use:
+                                <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
+                            </p>
+                        </article>
 
-                        <br />
-                        <h4>Cryptographic validity is not consent</h4>
-                        <p>
-                            Verifying an invitation proves the sender <em>is who they claim</em>. It does not
-                            mean you want to talk to them — and anyone who knows your <code>npub</code> can
-                            produce a perfectly valid offer. Answering one is not free: it reveals your full
-                            ECIES public key, your EVM address, and, through ICE gathering, your machine's
-                            network addresses.
-                        </p>
-                        <p>
-                            So an invitation from anyone who is not already a trusted contact simply
-                            <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
-                            sent back until you press Accept. Declining discards it silently — the sender is
-                            not told, because telling them would confirm the address is live.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
-                            <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
-                            <div class="feature">🚫 Decline sends nothing at all</div>
-                            <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
-                            <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
-                            <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
-                        </div>
-                        <p>
-                            Trust is authorization layered on top of authentication — it replaces none of the
-                            existing checks. A trusted friend's invitation is still verified end to end, and
-                            its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
-                            what was stored, so taking over an <code>npub</code> does not inherit the trust
-                            attached to it. Removing a contact is a local change only: they become unknown
-                            again, and no key is deleted or rotated on either side.
-                        </p>
-                        <p>
-                            WebRTC stays the preferred transport. If a direct connection cannot be
-                            established, messages fall back to the relays — still signed and ECIES-encrypted
-                            exactly as before, with NIP-44 on top. The chat header says which path is in use:
-                            <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
-                        </p>
+                        <article class="about-card">
+                            <h3>🤝 Cryptographic validity is not consent</h3>
+                            <p>
+                                Verifying an invitation proves the sender <em>is who they claim</em>. It does not
+                                mean you want to talk to them — and anyone who knows your <code>npub</code> can
+                                produce a perfectly valid offer. Answering one is not free: it reveals your full
+                                ECIES public key, your EVM address, and, through ICE gathering, your machine's
+                                network addresses.
+                            </p>
+                            <p>
+                                So an invitation from anyone who is not already a trusted contact simply
+                                <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
+                                sent back until you press Accept. Declining discards it silently — the sender is
+                                not told, because telling them would confirm the address is live.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+                                <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
+                                <div class="feature">🚫 Decline sends nothing at all</div>
+                                <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
+                                <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
+                                <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
+                            </div>
+                            <p>
+                                Trust is authorization layered on top of authentication — it replaces none of the
+                                existing checks. A trusted friend's invitation is still verified end to end, and
+                                its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
+                                what was stored, so taking over an <code>npub</code> does not inherit the trust
+                                attached to it. Removing a contact is a local change only: they become unknown
+                                again, and no key is deleted or rotated on either side.
+                            </p>
+                        </article>
 
-                        <br /><br />
-                        <h3>🛰️ Nostr relays: browser to relay, directly</h3>
-                        <p>
-                            The app talks straight to a pool of public relays over WebSockets, for Direct
-                            Messenger traffic only. There is no Web25 relay, no proxy and no signalling
-                            server — the relay list is configurable and no single relay is required.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🌐 <code>wss://relay.damus.io</code></div>
-                            <div class="feature">🌐 <code>wss://nos.lol</code></div>
-                            <div class="feature">🌐 <code>wss://relay.nostr.band</code></div>
-                            <div class="feature">🌐 <code>wss://relay.snort.social</code></div>
-                            <div class="feature">🧯 Unreachable relays are tolerated automatically</div>
-                            <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
-                        </div>
+                        <article class="about-card">
+                            <h3>🛰️ Nostr relays: browser to relay, directly</h3>
+                            <p>
+                                The app talks straight to a pool of public relays over WebSockets, for Direct
+                                Messenger traffic only. There is no Web25 relay, no proxy and no signalling
+                                server — the relay list is configurable and no single relay is required.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🌐 <code>wss://relay.damus.io</code></div>
+                                <div class="feature">🌐 <code>wss://nos.lol</code></div>
+                                <div class="feature">🌐 <code>wss://relay.nostr.band</code></div>
+                                <div class="feature">🌐 <code>wss://relay.snort.social</code></div>
+                                <div class="feature">🧯 Unreachable relays are tolerated automatically</div>
+                                <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
+                            </div>
+                        </article>
 
-                        <br /><br />
-                        <h3>🛡️ Security profile</h3>
-                        <p>
-                            WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
-                            The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
-                            to support richer static websites.
-                        </p>
-                        <div class="feature-grid">
-                            <div class="feature">🧾 Signed-manifest verification before render gates</div>
-                            <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
-                            <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
-                            <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
-                        </div>
+                        <article class="about-card">
+                            <h3>🛡️ Security profile</h3>
+                            <p>
+                                WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+                                The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
+                                to support richer static websites.
+                            </p>
+                            <div class="feature-grid">
+                                <div class="feature">🧾 Signed-manifest verification before render gates</div>
+                                <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
+                                <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
+                                <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
+                            </div>
+                        </article>
                     </section>
 
                     <section class="requirements">
