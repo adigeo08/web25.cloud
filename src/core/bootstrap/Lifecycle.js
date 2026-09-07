@@ -62,6 +62,14 @@ const HANDSHAKE_STALL_MS = 20000;
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
 
+function sameBytes(left, right) {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index]) return false;
+    }
+    return true;
+}
+
 function createDirectMessageSessionId() {
     const bytes = new Uint8Array(12);
     crypto.getRandomValues(bytes);
@@ -1456,6 +1464,11 @@ export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorSt
  */
 export async function createGoFileMirror(hash) {
     const filename = gofileMirrorFilename(hash);
+    if (!this.lastPublishCandidate?.payloadFiles) {
+        throw new Error(
+            'GoFile mirroring is unavailable after restoring this deployment; WebTorrent remains available.'
+        );
+    }
     const mirrorBytes = await encodeGoFileMirror({
         torrentFile: this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
         files: this.lastPublishCandidate.payloadFiles
@@ -1471,12 +1484,28 @@ export async function createGoFileMirror(hash) {
         await this.gofileCredentialStore.clearInvalidToken();
         upload = await this.gofileService.upload(payload(), { filename });
     }
-    if (upload.guestToken) await this.gofileCredentialStore.write({ token: upload.guestToken });
+    if (upload.guestToken) {
+        try {
+            await this.gofileCredentialStore.write({ token: upload.guestToken });
+        } catch (error) {
+            this.log(`GoFile guest credential could not be persisted: ${error.message}`);
+        }
+    }
     if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
+    const readBack = await this.gofileService.downloadPublicMirror(upload.mirrorLocator, {
+        expectedFilename: filename
+    });
+    if (!sameBytes(readBack, mirrorBytes)) {
+        throw new Error('GoFile mirror public read-back did not match the uploaded bytes.');
+    }
     return { locator: upload.mirrorLocator, filename };
 }
 
 export async function deploySignedArtifact() {
+    // A second click while a deployment is in flight joins the one already
+    // running instead of starting a competing deploy.
+    if (this._deployInFlight) return this._deployInFlight;
+
     if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
         throw new Error('A valid signature is required before deployment.');
     }
@@ -1487,9 +1516,21 @@ export async function deploySignedArtifact() {
         throw new Error('The staged artifact changed after signing. Re-sign the payload before deployment.');
     }
 
+    setPublishButtonsState({ canSign: false, canDeploy: false });
+    const deployment = runSignedDeployment.call(this);
+    this._deployInFlight = deployment;
+    try {
+        return await deployment;
+    } finally {
+        if (this._deployInFlight === deployment) this._deployInFlight = null;
+        this.refreshDeployUiState?.();
+    }
+}
+
+async function runSignedDeployment() {
     const hash = this.lastPublishCandidate.hash;
     const identity = this.authController.getActiveIdentity();
-    const mirrorRequested = this.isGoFileMirrorRequested();
+    const mirrorRequested = this.isGoFileMirrorRequested() && Boolean(this.lastPublishCandidate.payloadFiles);
     this._lastMirrorError = null;
 
     renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
@@ -1963,14 +2004,18 @@ export function persistDeploySession() {
 
     try {
         const signedBy = this.lastSignature?.payload?.publisherAddress || this.lastDeployResult?.signedBy || null;
+        const persistedDeployResult =
+            this.lastDeployResult?.mirrorState === 'pending'
+                ? { ...this.lastDeployResult, mirror: null, mirrorState: 'unavailable' }
+                : this.lastDeployResult || null;
         const payload = {
             hash: this.lastPublishCandidate.hash,
             siteName: this.lastPublishCandidate.siteName || 'website',
             createdAt: this.lastPublishCandidate.createdAt || null,
             signature: this.lastSignature,
             signedTorrentBase64: this.bytesToBase64(this.lastPublishCandidate.signedTorrentFile),
-            deployed: Boolean(this.lastDeployResult),
-            deployResult: this.lastDeployResult || null,
+            deployed: Boolean(persistedDeployResult),
+            deployResult: persistedDeployResult,
             signedBy,
             savedAt: Date.now()
         };
@@ -2027,6 +2072,12 @@ export async function restoreDeploySession() {
             createdAt: savedSession.createdAt || new Date().toISOString(),
             signedTorrentFile: signedTorrentBuffer
         };
+        const mirrorToggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+        if (mirrorToggle) {
+            mirrorToggle.checked = false;
+            mirrorToggle.disabled = true;
+            mirrorToggle.title = 'GoFile mirroring is unavailable after restoring this deployment.';
+        }
         this.lastDeployResult = savedSession.deployResult || null;
         renderSignatureStatus(this.lastSignature);
         renderPublishReview(this.lastSignature.payload || null);

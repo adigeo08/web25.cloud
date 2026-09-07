@@ -87,3 +87,30 @@ test('invalid-token reset deletes only the dedicated GoFile credential', async (
         fake.restore();
     }
 });
+
+test('wallet credentials are isolated by owner and clearing A keeps B', async () => {
+    const fake = installFakeIndexedDb();
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const signer = (owner) => ({
+        getNostrIdentity: async () => ({ nostrPublicKey: owner }),
+        nostrEncrypt: async (plaintext) => `${owner}:${plaintext}`,
+        nostrDecrypt: async (ciphertext) => {
+            if (!ciphertext.startsWith(`${owner}:`)) throw new Error('wrong owner');
+            return ciphertext.slice(owner.length + 1);
+        }
+    });
+    const storeA = new GoFileCredentialStore({ signer: signer(ownerA) });
+    const storeB = new GoFileCredentialStore({ signer: signer(ownerB) });
+    try {
+        await storeA.write('token-a');
+        await storeB.write('token-b');
+        assert.deepEqual(await storeA.read(), { token: 'token-a' });
+        assert.deepEqual(await storeB.read(), { token: 'token-b' });
+        await storeA.clearInvalidToken();
+        assert.equal(await storeA.read(), null);
+        assert.deepEqual(await storeB.read(), { token: 'token-b' });
+    } finally {
+        fake.restore();
+    }
+});

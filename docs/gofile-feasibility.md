@@ -29,6 +29,17 @@ fields.
 Every request is bounded: 30s for upload, 20s for content resolution, 30s for
 the mirror byte download, all via `AbortSignal.timeout`. A caller's own
 cancellation stays distinguishable from a deadline (`aborted` vs `timeout`).
+Mirror bytes are read as a bounded stream and refused past 64 MiB, whether the
+size is declared in `Content-Length` or only discovered while reading.
+
+A mirror is only published as a locator once it has been **read back
+publicly**: after uploading, the client resolves its own locator by the same
+route a receiver would and byte-compares the result. Uploading proves nothing
+about resolvability, and a locator nobody else can fetch is worse than no
+locator at all, so a failed or mismatched read-back reports the mirror as
+unavailable and the deployment falls back to `?orc=<hash>`. Until the live
+questions below are answered, expect this check — not the upload — to be what
+decides whether a mirror exists.
 
 ## Required cross-guest experiment
 

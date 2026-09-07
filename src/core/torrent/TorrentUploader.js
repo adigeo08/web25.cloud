@@ -679,6 +679,13 @@ export function showUploadResult(hash, torrentFile, torrent, gofileLocator = nul
         hash: sanitizedHash,
         siteName: torrent?.name || 'website'
     };
+    const mirrorToggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+    if (mirrorToggle) {
+        const mirrorUnavailable = !this.lastPublishCandidate.payloadFiles;
+        mirrorToggle.checked = mirrorUnavailable ? false : mirrorToggle.checked;
+        mirrorToggle.disabled = mirrorUnavailable;
+        mirrorToggle.title = mirrorUnavailable ? 'GoFile mirroring requires the staged payload files.' : '';
+    }
 
     const hashEl = document.getElementById('result-hash');
     const urlEl = document.getElementById('result-url');

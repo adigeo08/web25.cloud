@@ -34,6 +34,22 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
     const wizard = await import('../src/ui/publish/DeployWizard.js');
     wizard.initDeployWizard();
 
+    // Mirroring now verifies its own upload by reading it back publicly, so a
+    // stub that only uploads is not a working GoFile. Echo the uploaded bytes
+    // unless a test deliberately supplies its own read.
+    const service = gofileService
+        ? {
+              ...gofileService,
+              upload: async (blob, options) => {
+                  service.uploaded = blob;
+                  return gofileService.upload(blob, options);
+              },
+              downloadPublicMirror:
+                  gofileService.downloadPublicMirror ||
+                  (async () => new Uint8Array(await service.uploaded.arrayBuffer()))
+          }
+        : null;
+
     const toasts = [];
     const context = {
         deploySignedArtifact: lifecycle.deploySignedArtifact,
@@ -65,7 +81,7 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
             signedTorrentFile: new Uint8Array([1, 2, 3]),
             payloadFiles: [payloadFile('.torrentchain', '{"signed":true}')]
         },
-        gofileService,
+        gofileService: service,
         gofileCredentialStore: { read: async () => null, write: async () => {}, clearInvalidToken: async () => {} }
     };
     context.setupQuickUpload();

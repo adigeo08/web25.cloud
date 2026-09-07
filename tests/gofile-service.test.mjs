@@ -7,7 +7,8 @@ import {
     GOFILE_UPLOAD_ENDPOINT,
     GOFILE_UPLOAD_TIMEOUT_MS,
     GOFILE_METADATA_TIMEOUT_MS,
-    GOFILE_DOWNLOAD_TIMEOUT_MS
+    GOFILE_DOWNLOAD_TIMEOUT_MS,
+    GOFILE_MIRROR_MAX_BYTES
 } from '../src/gofile/GoFileService.js';
 import { gofileMirrorFilename } from '../src/gofile/GoFileMirrorCodec.js';
 
@@ -24,6 +25,19 @@ const reply = (data, options = {}) =>
     });
 
 const fileNode = (name, link) => ({ type: 'file', name, link });
+const streamResponse = (chunks, headers = {}) =>
+    new Response(
+        new ReadableStream({
+            start(controller) {
+                for (const chunk of chunks) controller.enqueue(chunk);
+                controller.close();
+            }
+        }),
+        { headers }
+    );
+
+const mirrorMetadata = () =>
+    reply({ type: 'folder', children: { a: fileNode(NAME_ONE, 'https://store1.gofile.io/download/one') } });
 
 /**
  * A request that never answers until its deadline aborts it. The keep-alive
@@ -209,6 +223,65 @@ test('the resolver asks for the exact locator it was given, then the byte URL', 
         new Uint8Array([7, 8, 9])
     );
     assert.deepEqual(calls, ['https://api.gofile.io/contents/file_1', 'https://store1.gofile.io/download/one']);
+});
+
+test('the resolver rejects an oversized Content-Length before reading bytes', async () => {
+    const service = new GoFileService({
+        fetchImpl: async (url) =>
+            url.startsWith('https://api.gofile.io/')
+                ? mirrorMetadata()
+                : streamResponse([new Uint8Array([1])], { 'content-length': `${GOFILE_MIRROR_MAX_BYTES + 1}` })
+    });
+    await assert.rejects(
+        () => service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
+        (error) => error instanceof GoFileError && error.code === 'too_large'
+    );
+});
+
+test('the resolver rejects a missing-length stream once it exceeds the cap', async () => {
+    let cancelled = false;
+    const service = new GoFileService({
+        fetchImpl: async (url) => {
+            if (url.startsWith('https://api.gofile.io/')) return mirrorMetadata();
+            return {
+                ok: true,
+                headers: new Headers(),
+                body: {
+                    getReader() {
+                        let index = 0;
+                        const chunk = new Uint8Array(1024 * 1024);
+                        const count = Math.ceil((GOFILE_MIRROR_MAX_BYTES + 1) / chunk.length);
+                        return {
+                            async read() {
+                                return index === count ? { done: true } : { done: false, value: (index++, chunk) };
+                            },
+                            async cancel() {
+                                cancelled = true;
+                            }
+                        };
+                    }
+                }
+            };
+        }
+    });
+    await assert.rejects(
+        () => service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
+        (error) => error instanceof GoFileError && error.code === 'too_large'
+    );
+    assert.equal(cancelled, true);
+});
+
+test('the resolver accepts a valid under-limit stream', async () => {
+    const service = new GoFileService({
+        fetchImpl: async (url) =>
+            url.startsWith('https://api.gofile.io/')
+                ? mirrorMetadata()
+                : streamResponse([new Uint8Array([7]), new Uint8Array([8, 9])])
+    });
+    assert.deepEqual(
+        await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
+        new Uint8Array([7, 8, 9])
+    );
 });
 
 test('a later deployment cannot shadow or break an earlier one', async () => {

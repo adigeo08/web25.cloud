@@ -3,7 +3,7 @@
 export const GOFILE_CREDENTIAL_DB_NAME = 'web25-gofile-credentials';
 export const GOFILE_CREDENTIAL_STORE_NAME = 'encrypted_credentials';
 const OWNER_RE = /^[0-9a-f]{64}$/;
-const RECORD_ID = 'guest-token';
+const recordId = (owner) => `gofile-credential:${owner}`;
 
 function openDb() {
     return new Promise((resolve, reject) => {
@@ -61,7 +61,7 @@ export class GoFileCredentialStore {
                 db
                     .transaction(GOFILE_CREDENTIAL_STORE_NAME, 'readwrite')
                     .objectStore(GOFILE_CREDENTIAL_STORE_NAME)
-                    .put({ id: RECORD_ID, ciphertext, updatedAt: this.now() })
+                    .put({ id: recordId(owner), ciphertext, updatedAt: this.now() })
             );
         } finally {
             db.close();
@@ -76,7 +76,7 @@ export class GoFileCredentialStore {
                 db
                     .transaction(GOFILE_CREDENTIAL_STORE_NAME, 'readonly')
                     .objectStore(GOFILE_CREDENTIAL_STORE_NAME)
-                    .get(RECORD_ID)
+                    .get(recordId(owner))
             );
             if (!row?.ciphertext) return null;
             const value = JSON.parse(await this.signer.nostrDecrypt(row.ciphertext, owner));
@@ -89,14 +89,14 @@ export class GoFileCredentialStore {
 
     /** Clear only GoFile state after an explicit invalid-token response. */
     async clearInvalidToken() {
-        await this._owner();
+        const owner = await this._owner();
         const db = await openDb();
         try {
             await requestResult(
                 db
                     .transaction(GOFILE_CREDENTIAL_STORE_NAME, 'readwrite')
                     .objectStore(GOFILE_CREDENTIAL_STORE_NAME)
-                    .delete(RECORD_ID)
+                    .delete(recordId(owner))
             );
         } finally {
             db.close();

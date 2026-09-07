@@ -12,6 +12,7 @@ export const GOFILE_CONTENT_ENDPOINT = 'https://api.gofile.io/contents';
 export const GOFILE_UPLOAD_TIMEOUT_MS = 30000;
 export const GOFILE_METADATA_TIMEOUT_MS = 20000;
 export const GOFILE_DOWNLOAD_TIMEOUT_MS = 30000;
+export const GOFILE_MIRROR_MAX_BYTES = 64 * 1024 * 1024;
 
 /** A transport/protocol error which is safe to show to a user. */
 export class GoFileError extends Error {
@@ -211,12 +212,53 @@ export class GoFileService {
                 status: bytesResponse.status
             });
         }
-        try {
-            return new Uint8Array(await bytesResponse.arrayBuffer());
-        } catch (cause) {
-            throw transportError(cause, signal, downloadTimeoutMs, 'GoFile mirror bytes');
-        }
+        return readBoundedBytes(bytesResponse, signal, downloadTimeoutMs);
     }
+}
+
+async function readBoundedBytes(response, signal, timeoutMs) {
+    const declaredLength = Number(response.headers?.get?.('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > GOFILE_MIRROR_MAX_BYTES) {
+        try {
+            await response.body?.cancel?.();
+        } catch (_) {}
+        throw new GoFileError('too_large', 'GoFile mirror exceeds the maximum permitted size.');
+    }
+
+    if (!response.body?.getReader) {
+        throw new GoFileError('invalid_response', 'GoFile mirror has no readable byte stream.');
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+        let done = false;
+        while (!done) {
+            const result = await reader.read();
+            done = result.done;
+            if (done) continue;
+            const value = result.value;
+            const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+            total += chunk.byteLength;
+            if (total > GOFILE_MIRROR_MAX_BYTES) {
+                await reader.cancel('GoFile mirror exceeds the maximum permitted size.');
+                throw new GoFileError('too_large', 'GoFile mirror exceeds the maximum permitted size.');
+            }
+            chunks.push(chunk);
+        }
+    } catch (cause) {
+        if (cause instanceof GoFileError) throw cause;
+        throw transportError(cause, signal, timeoutMs, 'GoFile mirror bytes');
+    }
+
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return bytes;
 }
 
 /** Pick the one mirror this deployment asked for, or refuse to guess. */

@@ -70,6 +70,18 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
     const uploader = await import('../src/core/torrent/TorrentUploader.js');
 
     const warnings = [];
+    const wrappedGoFileService = gofileService
+        ? {
+              ...gofileService,
+              upload: async (blob, options) => {
+                  wrappedGoFileService.lastUpload = blob;
+                  return gofileService.upload(blob, options);
+              },
+              downloadPublicMirror:
+                  gofileService.downloadPublicMirror ||
+                  (async () => new Uint8Array(await wrappedGoFileService.lastUpload.arrayBuffer()))
+          }
+        : null;
     const context = {
         deploySignedArtifact: lifecycle.deploySignedArtifact,
         renderDeployedArtifact: lifecycle.renderDeployedArtifact,
@@ -94,14 +106,14 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
             signedTorrentFile: new Uint8Array([1, 2, 3]),
             payloadFiles: [payloadFile('.torrentchain', '{"signed":true}')]
         },
-        gofileService,
+        gofileService: wrappedGoFileService,
         gofileCredentialStore: {
             read: async () => null,
             write: async () => {},
             clearInvalidToken: async () => {}
         }
     };
-    return { context, elements, warnings, url: () => elements.get('result-url').textContent };
+    return { context, elements, warnings, url: () => elements.get('result-url')?.textContent };
 }
 
 test('the deploy wizard ships the mirror checkbox unchecked', () => {
@@ -149,6 +161,29 @@ test('an opted-in deployment publishes ?orc=<hash>&<locator> after a successful 
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}&file_abc`);
     assert.equal(context.lastDeployResult.mirror.locator, 'file_abc');
     assert.match(document.getElementById('publish-output').textContent, /"status": "available"/);
+});
+
+test('immediate duplicate deploy calls share one mirror operation', async () => {
+    let uploads = 0;
+    let release;
+    const { context } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async () => {
+                uploads += 1;
+                await new Promise((resolve) => {
+                    release = resolve;
+                });
+                return { mirrorLocator: 'file_once' };
+            }
+        }
+    });
+    const first = context.deploySignedArtifact();
+    const second = context.deploySignedArtifact();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await Promise.all([first, second]);
+    assert.equal(uploads, 1);
 });
 
 test('a stalled GoFile upload cannot hang or fail the deployment', async () => {
@@ -200,6 +235,43 @@ test('a rejected GoFile upload leaves the deployment successful', async () => {
     assert.equal(context.lastDeployResult.hash, HASH_ONE);
     assert.equal(context.lastDeployResult.mirror, null);
     assert.equal(warnings.length, 1);
+});
+
+test('a mirror that cannot be read back publicly is not published as a locator', async () => {
+    // Uploading is not the same as being resolvable. A locator nobody else can
+    // fetch is worse than no locator, so the read-back decides.
+    const { context, url, warnings } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async () => ({ mirrorLocator: 'file_unreadable' }),
+            downloadPublicMirror: async () => new TextEncoder().encode('a different deployment entirely')
+        }
+    });
+
+    await context.deploySignedArtifact();
+
+    assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`, 'the unverified locator is never shared');
+    assert.equal(context.lastDeployResult.mirror, null);
+    assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
+    assert.match(warnings[0], /read-back/i);
+});
+
+test('a mirror whose read-back fails outright leaves the deployment successful', async () => {
+    const { context, url } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async () => ({ mirrorLocator: 'file_gone' }),
+            downloadPublicMirror: async () => {
+                throw new Error('GoFile mirror metadata failed (HTTP 401).');
+            }
+        }
+    });
+
+    await context.deploySignedArtifact();
+
+    assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`);
+    assert.equal(context.lastDeployResult.hash, HASH_ONE);
+    assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
 });
 
 test('a second mirrored deployment cannot change the first one', async () => {
