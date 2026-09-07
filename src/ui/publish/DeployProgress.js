@@ -16,7 +16,13 @@ export function updateDeployProgress(options) {
     if (!container || !bar || !text) return;
 
     const state = options.state || 'running';
-    container.classList.remove('hidden', 'progress-success', 'progress-error', 'progress-indeterminate');
+    container.classList.remove(
+        'hidden',
+        'progress-running',
+        'progress-success',
+        'progress-error',
+        'progress-indeterminate'
+    );
     container.classList.add(`progress-${state}`);
 
     if (options.indeterminate) {

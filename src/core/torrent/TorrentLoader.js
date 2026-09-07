@@ -10,6 +10,14 @@ import {
 } from '../../torrent/SiteBundleCodec.js';
 import { SIGNATURE_STATE_VERIFICATION_VERSION } from '../cache/SignatureStateVersion.js';
 import { evaluateRenderGate } from '../../torrent/RenderGate.js';
+import { parseWeb25Address } from '../../gofile/Web25Url.js';
+import { GoFileService } from '../../gofile/GoFileService.js';
+import {
+    createMirrorTorrentAdapter,
+    decodeGoFileMirror,
+    gofileMirrorFilename,
+    verifyGoFileMirror
+} from '../../gofile/GoFileMirrorCodec.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -25,20 +33,36 @@ function calcRetryDelay(attempt, baseMs) {
     return Math.min(30000, baseMs * Math.pow(2, attempt) + Math.random() * 1000);
 }
 
-export async function loadSite(hash, _retryAttempt = 0) {
-    // Sanitize hash first to prevent XSS
-    const sanitizedHash = this.sanitizeHash(hash);
+export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = null) {
+    let address;
+    try {
+        address =
+            typeof addressInput === 'object'
+                ? addressInput
+                : parseWeb25Address(`${addressInput}${retryLocator ? `&${retryLocator}` : ''}`);
+    } catch (error) {
+        alert(`❌ Invalid WEB25 Address\n\n${error.message}`);
+        return;
+    }
+    const sanitizedHash = this.sanitizeHash(address.torrentHash);
+    const gofileLocator = address.gofileLocator || retryLocator || null;
+    this._loadGeneration = (this._loadGeneration || 0) + 1;
+    const loadGeneration = this._loadGeneration;
+    this._gofileFallbackController?.abort();
+    this._gofileFallbackController = null;
+    const isActiveLoad = () => this._loadGeneration === loadGeneration && this.currentHash === sanitizedHash;
+    if (_retryAttempt === 0) this._gofileFallbackStarted = null;
     this.log(`Loading site with hash: ${sanitizedHash}`);
 
     if (!this.serviceWorkerReady) {
         this.log('Service worker not ready, waiting...');
-        setTimeout(() => this.loadSite(sanitizedHash), PEERWEB_CONFIG.READY_CHECK_INTERVAL);
+        setTimeout(() => this.loadSite(address), PEERWEB_CONFIG.READY_CHECK_INTERVAL);
         return;
     }
 
     if (!this.clientReady || !this.client) {
         this.log('WebTorrent client not ready, waiting...');
-        setTimeout(() => this.loadSite(sanitizedHash), PEERWEB_CONFIG.READY_CHECK_INTERVAL);
+        setTimeout(() => this.loadSite(address), PEERWEB_CONFIG.READY_CHECK_INTERVAL);
         return;
     }
 
@@ -71,6 +95,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
 
     // Check cache first
     const cachedEntry = await this.cache.getEntry(sanitizedHash);
+    if (this._loadGeneration !== loadGeneration) return;
     if (cachedEntry?.data) {
         this.log('Loading from cache...');
         this.applyCachedSignatureState(cachedEntry.signatureState, sanitizedHash);
@@ -129,6 +154,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
             }
 
             const chainGate = await this.verifyTorrentChainBeforeDownload(torrent, sanitizedHash);
+            if (!isActiveLoad()) return;
             if (!chainGate.ok) {
                 this.sendToServiceWorker('SITE_LOADING', {
                     hash: sanitizedHash,
@@ -157,6 +183,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     clearTimeout(this.processingTimeout);
                     this.processingTimeout = null;
                 }
+                if (!isActiveLoad()) return;
                 await this.processTorrent(torrent, sanitizedHash);
             };
 
@@ -212,15 +239,10 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     }
                     setTimeout(() => {
                         if (this.currentHash !== sanitizedHash) return;
-                        this.loadSite(sanitizedHash, _retryAttempt + 1);
+                        this.loadSite(sanitizedHash, _retryAttempt + 1, gofileLocator);
                     }, delay);
                 } else if (!this.processingInProgress) {
-                    this.hideLoadingOverlay();
-                    alert(
-                        '❌ Torrent Load Error\n\n' +
-                            error.message +
-                            '\n\n🔧 Troubleshooting:\n• Check your internet connection\n• Verify the hash is correct\n• Ensure the torrent has active seeders\n• Try again in a few moments'
-                    );
+                    void this.handleTerminalP2PFailure(sanitizedHash, gofileLocator, error, torrent, loadGeneration);
                 }
             });
 
@@ -229,6 +251,13 @@ export async function loadSite(hash, _retryAttempt = 0) {
                 if (this.currentHash !== sanitizedHash) return;
                 if (_retryAttempt >= LOAD_RETRY_MAX) {
                     this.log(`No peers found after ${LOAD_RETRY_MAX} retries, giving up`);
+                    void this.handleTerminalP2PFailure(
+                        sanitizedHash,
+                        gofileLocator,
+                        new Error(`No torrent peers found after ${LOAD_RETRY_MAX} retries.`),
+                        torrent,
+                        loadGeneration
+                    );
                     return;
                 }
                 const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
@@ -243,7 +272,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
                     if (this.currentHash !== sanitizedHash) return;
                     torrent.destroy(() => {
                         if (this.currentHash !== sanitizedHash) return;
-                        this.loadSite(sanitizedHash, _retryAttempt + 1);
+                        this.loadSite(sanitizedHash, _retryAttempt + 1, gofileLocator);
                     });
                 }, delay);
             });
@@ -263,6 +292,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
             if (PEERWEB_CONFIG.SITE_BUNDLE_MODE !== 'gzip') {
                 // Find entry file (wait briefly for metadata/file list stabilization)
                 const indexFile = await this.waitForEntryFile(torrent);
+                if (!isActiveLoad()) return;
                 if (!indexFile) {
                     this.log('No index.html found!');
                     this.hideLoadingOverlay();
@@ -275,6 +305,7 @@ export async function loadSite(hash, _retryAttempt = 0) {
 
                 if (chainGate.manifest) {
                     const entryVerified = await this.verifyEntryFileIntegrity(indexFile, chainGate.manifest);
+                    if (!isActiveLoad()) return;
                     if (!entryVerified.ok) {
                         this.currentSiteSignatureStatus = this.buildSignatureState({
                             label: '❌ Integrity failed: entry file not in .torrentchain or hash mismatch',
@@ -334,12 +365,61 @@ export async function loadSite(hash, _retryAttempt = 0) {
         });
     } catch (error) {
         this.log(`Error adding torrent: ${error.message}`);
+        await this.handleTerminalP2PFailure(sanitizedHash, gofileLocator, error, null, loadGeneration);
+    }
+}
+
+export async function handleTerminalP2PFailure(hash, gofileLocator, torrentError, torrent = null, loadGeneration = null) {
+    if (this._gofileFallbackStarted === hash) return;
+    if (!gofileLocator) {
         this.hideLoadingOverlay();
+        alert(`❌ Torrent Load Error\n\n${torrentError.message}`);
+        return;
+    }
+    this._gofileFallbackStarted = hash;
+    const isActiveLoad = () =>
+        loadGeneration === null || (this._loadGeneration === loadGeneration && this.currentHash === hash);
+    if (!isActiveLoad()) return;
+    const controller = new AbortController();
+    this._gofileFallbackController = controller;
+    try {
+        try {
+            torrent?.destroy?.();
+        } catch (_) {}
+        this.log('No torrent peers available. Trying GoFile mirror…');
+        this.toast?.info?.('No torrent peers available. Trying the temporary GoFile mirror…', 'Fallback transport');
+        const service = this.gofileService || new GoFileService();
+        // Ask for this deployment's mirror by name. Hash verification below is
+        // what makes the bytes trustworthy; it is not how the right mirror is
+        // picked out of a locator that may hold more than one.
+        const wireBytes = await service.downloadPublicMirror(gofileLocator, {
+            expectedFilename: gofileMirrorFilename(hash),
+            signal: controller.signal
+        });
+        if (!isActiveLoad()) return;
+        const decoded = decodeGoFileMirror(wireBytes);
+        if (!isActiveLoad()) return;
+        const verified = await verifyGoFileMirror(decoded, hash);
+        if (!isActiveLoad()) return;
+        const adapter = createMirrorTorrentAdapter(verified);
+        const chainGate = await this.verifyTorrentChainBeforeDownload(adapter, hash);
+        if (!isActiveLoad()) return;
+        if (!chainGate.ok) throw new Error('GoFile mirror failed TorrentChain verification.');
+        this.processingInProgress = true;
+        const processed = await this.processTorrent(adapter, hash);
+        if (!isActiveLoad()) return;
+        if (processed === false) throw new Error('GoFile mirror failed the WEB25 render verification gate.');
+        this.log(`Site loaded through GoFile mirror transport for ${hash}.`);
+    } catch (mirrorError) {
+        if (!isActiveLoad()) return;
+        this.processingInProgress = false;
+        this.hideLoadingOverlay();
+        this.log(`GoFile mirror fallback failed: ${mirrorError.message}`);
         alert(
-            '❌ Failed to Add Torrent\n\n' +
-                error.message +
-                "\n\n🔧 Troubleshooting:\n• Verify the hash format is correct (40 hex characters)\n• Check that seeders are available\n• Ensure your firewall isn't blocking WebRTC connections\n• Try loading the torrent again"
+            `❌ Site Load Failed\n\nWebTorrent: ${torrentError.message}\nGoFile mirror: ${mirrorError.message}\n\nNo unverified content was rendered.`
         );
+    } finally {
+        if (this._gofileFallbackController === controller) this._gofileFallbackController = null;
     }
 }
 
@@ -774,6 +854,7 @@ export async function processTorrent(torrent, hash) {
 
     // Reset processing flag
     this.processingInProgress = false;
+    return true;
 }
 
 export async function processTorrentGzipBundle(torrent, hash) {
@@ -814,7 +895,7 @@ export async function processTorrentGzipBundle(torrent, hash) {
             this.hideLoadingOverlay();
             this.reportVerificationIssue(`Render blocked (${gate.reason}).`);
             this.processingInProgress = false;
-            return;
+            return false;
         }
 
         const siteData = {};
@@ -850,10 +931,12 @@ export async function processTorrentGzipBundle(torrent, hash) {
         await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
         this.displaySite(siteData, hash);
         this.hideLoadingOverlay();
+        return true;
     } catch (error) {
         this.log(`Failed to process gzip bundle: ${error.message}`);
         this.hideLoadingOverlay();
         this.reportVerificationIssue(`Failed to decode site bundle: ${error.message}`);
+        return false;
     } finally {
         this.processingInProgress = false;
     }
