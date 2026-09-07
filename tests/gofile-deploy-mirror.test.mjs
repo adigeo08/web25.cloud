@@ -186,6 +186,23 @@ test('immediate duplicate deploy calls share one mirror operation', async () => 
     assert.equal(uploads, 1);
 });
 
+test('a restored candidate without payload files stays WebTorrent-only', async () => {
+    let uploads = 0;
+    const { context, url } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async () => {
+                uploads += 1;
+                return { mirrorLocator: 'should-not-be-used' };
+            }
+        }
+    });
+    context.lastPublishCandidate.payloadFiles = undefined;
+    await context.deploySignedArtifact();
+    assert.equal(uploads, 0);
+    assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`);
+});
+
 test('a stalled GoFile upload cannot hang or fail the deployment', async () => {
     let liveUrlWhileStalled = null;
     const { context, warnings, url } = await deployContext({ mirrorEnabled: true });

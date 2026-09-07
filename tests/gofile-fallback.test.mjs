@@ -220,3 +220,45 @@ test('a mirror bound to a different torrent is refused before any render', async
     assert.equal(chainChecks, 0, 'the hash mismatch is caught before TorrentChain verification');
     assert.match(alerted, /info hash mismatch/i);
 });
+
+test('a stale mirror completion cannot affect a newer navigation', async () => {
+    const { handleTerminalP2PFailure } = await loader();
+    let release;
+    let rendered = 0;
+    let hidden = 0;
+    let alerted = '';
+    const context = {
+        _loadGeneration: 1,
+        currentHash: HASH,
+        gofileService: {
+            downloadPublicMirror: async () =>
+                new Promise((resolve) => {
+                    release = resolve;
+                })
+        },
+        processTorrent: async () => {
+            rendered += 1;
+        },
+        hideLoadingOverlay: () => {
+            hidden += 1;
+        },
+        log() {}
+    };
+    const previousAlert = globalThis.alert;
+    globalThis.alert = (message) => {
+        alerted = message;
+    };
+    try {
+        const stale = handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('site A failed'), null, 1);
+        context.currentHash = 'fedcba9876543210fedcba9876543210fedcba98';
+        context._loadGeneration = 2;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        release(new Uint8Array([1]));
+        await stale;
+    } finally {
+        globalThis.alert = previousAlert;
+    }
+    assert.equal(rendered, 0);
+    assert.equal(hidden, 0);
+    assert.equal(alerted, '');
+});

@@ -35,6 +35,18 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
     wizard.initDeployWizard();
 
     const toasts = [];
+    const wrappedGoFileService = gofileService
+        ? {
+              ...gofileService,
+              upload: async (blob, options) => {
+                  wrappedGoFileService.lastUpload = blob;
+                  return gofileService.upload(blob, options);
+              },
+              downloadPublicMirror:
+                  gofileService.downloadPublicMirror ||
+                  (async () => new Uint8Array(await wrappedGoFileService.lastUpload.arrayBuffer()))
+          }
+        : null;
     const context = {
         deploySignedArtifact: lifecycle.deploySignedArtifact,
         renderDeployedArtifact: lifecycle.renderDeployedArtifact,
@@ -65,7 +77,7 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
             signedTorrentFile: new Uint8Array([1, 2, 3]),
             payloadFiles: [payloadFile('.torrentchain', '{"signed":true}')]
         },
-        gofileService,
+        gofileService: wrappedGoFileService,
         gofileCredentialStore: { read: async () => null, write: async () => {}, clearInvalidToken: async () => {} }
     };
     context.setupQuickUpload();
@@ -276,7 +288,7 @@ test('Copy Link and Open Site use exactly the URL the panel shows', async () => 
     const shown = dom.text('result-url');
     dom.get('open-site').dispatch('click');
     dom.get('copy-link').dispatch('click');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(shown, `https://web25.cloud/?orc=${HASH}&${LOCATOR}`);
     assert.deepEqual(dom.opened, [shown]);
@@ -296,7 +308,7 @@ test('a slow mirror never implies the deployment itself is still pending', async
     });
 
     const deploying = context.deploySignedArtifact();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     // While the mirror is in flight the site is already live and shareable.
     assert.equal(dom.get('upload-result').classList.contains('hidden'), false);
@@ -372,7 +384,7 @@ test('Copy Link and Open Site fall back to the torrent-only URL after a mirror f
 
     dom.get('open-site').dispatch('click');
     dom.get('copy-link').dispatch('click');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.deepEqual(dom.opened, [`https://web25.cloud/?orc=${HASH}`]);
     assert.deepEqual(dom.copied, [`https://web25.cloud/?orc=${HASH}`]);
