@@ -26,6 +26,23 @@ test('WEB25 address parser handles legacy, mirrored, debug, and full URL forms',
     assert.deepEqual(parseWeb25Address(`?orc=${HASH}&debug=true`), { torrentHash: HASH, gofileLocator: null });
 });
 
+test('WEB25 address parser reads orc= by name, not by position', () => {
+    // A ?debug=true&orc=<hash> bookmark is a supported form: checkURL reads both
+    // parameters, so the address must resolve whatever order they arrive in.
+    assert.deepEqual(parseWeb25Address(`https://web25.cloud/?debug=true&orc=${HASH}`), {
+        torrentHash: HASH,
+        gofileLocator: null
+    });
+    assert.deepEqual(parseWeb25Address(`?debug=true&orc=${HASH}&AbCd1234`), {
+        torrentHash: HASH,
+        gofileLocator: 'AbCd1234'
+    });
+    assert.deepEqual(parseWeb25Address(`?utm_source=x&AbCd1234&orc=${HASH}`), {
+        torrentHash: HASH,
+        gofileLocator: 'AbCd1234'
+    });
+});
+
 test('WEB25 address parser rejects malformed hashes and locators', () => {
     assert.throws(() => parseWeb25Address('deadbeef'), /40 hexadecimal/i);
     assert.throws(() => parseWeb25Address(`${HASH}&bad%2Flocator`), /locator/i);

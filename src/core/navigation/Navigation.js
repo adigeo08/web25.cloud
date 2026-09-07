@@ -24,12 +24,15 @@ export function checkURL() {
     }
 
     if (orcHash) {
+        // A malformed mirror locator must never cost the user the site itself:
+        // fall back to the plain hash and let the P2P path do its normal work.
         let address;
         try {
             address = parseWeb25Address(window.location.href);
         } catch (error) {
-            this.log(`Invalid WEB25 URL: ${error.message}`);
-            return;
+            this.log(`Ignoring unusable WEB25 mirror locator: ${error.message}`);
+            this.toast?.warning?.(error.message, 'Loading without the mirror');
+            address = { torrentHash: orcHash, gofileLocator: null };
         }
         // Wait for all components to be ready before loading
         const checkReady = () => {

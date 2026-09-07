@@ -1349,6 +1349,12 @@ export async function deploySignedArtifact() {
     if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
         throw new Error('A valid signature is required before deployment.');
     }
+    // The staged artifact can be replaced after signing (an imported .torrent
+    // renders its own result), so never deploy a hash the held signature does
+    // not actually cover.
+    if (this.lastSignedPublish.torrentHash !== this.lastPublishCandidate.hash) {
+        throw new Error('The staged artifact changed after signing. Re-sign the payload before deployment.');
+    }
 
     const hash = this.lastPublishCandidate.hash;
     const identity = this.authController.getActiveIdentity();

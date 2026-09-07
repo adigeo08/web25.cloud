@@ -669,8 +669,13 @@ export function showUploadResult(hash, torrentFile, torrent, gofileLocator = nul
         origin: window.location.origin,
         pathname: window.location.pathname
     });
+    // Carry the signed artifact forward only while it still describes this exact
+    // hash. Rendering the result for a different torrent (an imported .torrent,
+    // say) must not leave the previous deployment's signed bytes and payload
+    // files attached to the new candidate.
+    const sameArtifact = this.lastPublishCandidate?.hash === sanitizedHash ? this.lastPublishCandidate : null;
     this.lastPublishCandidate = {
-        ...(this.lastPublishCandidate || {}),
+        ...(sameArtifact || {}),
         hash: sanitizedHash,
         siteName: torrent?.name || 'website'
     };
