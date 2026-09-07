@@ -28,6 +28,19 @@ export class GoFileError extends Error {
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const MIRROR_FILENAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
+/**
+ * The global fetch, bound to the global.
+ *
+ * A browser refuses a fetch invoked as a method of anything else — "Failed to
+ * execute 'fetch' on 'Window': Illegal invocation" — and refuses it *before*
+ * issuing the request, so the symptom is a dead network tab rather than a
+ * failed call. Node's fetch ignores its receiver, so only a browser sees it.
+ */
+function globalFetch() {
+    const impl = globalThis.fetch;
+    return typeof impl === 'function' ? impl.bind(globalThis) : impl;
+}
+
 /** Bound one request by wall clock, keeping any caller cancellation intact. */
 function boundedSignal(timeoutMs, signal) {
     const timeout = AbortSignal.timeout(timeoutMs);
@@ -55,7 +68,7 @@ export class GoFileService {
      *           metadataTimeoutMs?: number, downloadTimeoutMs?: number }} [options]
      */
     constructor({
-        fetchImpl = globalThis.fetch,
+        fetchImpl = globalFetch(),
         endpoint = GOFILE_UPLOAD_ENDPOINT,
         uploadTimeoutMs = GOFILE_UPLOAD_TIMEOUT_MS,
         metadataTimeoutMs = GOFILE_METADATA_TIMEOUT_MS,
