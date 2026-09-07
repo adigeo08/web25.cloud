@@ -1492,7 +1492,10 @@ export async function createGoFileMirror(hash) {
         }
     }
     if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
+    // Resolving content is an authenticated call. A freshly issued guest token
+    // supersedes the stored one, which the upload may just have replaced.
     const readBack = await this.gofileService.downloadPublicMirror(upload.mirrorLocator, {
+        token: upload.guestToken || credential?.token || null,
         expectedFilename: filename
     });
     if (!sameBytes(readBack, mirrorBytes)) {

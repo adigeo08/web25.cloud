@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
     GoFileError,
     GoFileService,
+    GOFILE_CONTENT_ENDPOINT,
     GOFILE_UPLOAD_ENDPOINT,
     GOFILE_UPLOAD_TIMEOUT_MS,
     GOFILE_METADATA_TIMEOUT_MS,
@@ -305,6 +306,59 @@ test('the resolver accepts a valid under-limit stream', async () => {
     assert.deepEqual(
         await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
         new Uint8Array([7, 8, 9])
+    );
+});
+
+test('resolving content authenticates, and the credential never reaches the storage host', async () => {
+    // GoFile treats a guest token from an upload exactly like a dashboard
+    // token, so the read call carries it the same way the upload does.
+    const seen = [];
+    const service = new GoFileService({
+        fetchImpl: async (url, init) => {
+            seen.push({ url, authorization: init?.headers?.Authorization ?? null });
+            if (url.startsWith(GOFILE_CONTENT_ENDPOINT)) {
+                return reply({
+                    type: 'folder',
+                    children: { a: fileNode(NAME_ONE, 'https://cold1.gofile.io/download/one') }
+                });
+            }
+            return new Response(new Uint8Array([1, 2, 3]));
+        }
+    });
+
+    await service.downloadPublicMirror('file_1', { token: 'guest-token', expectedFilename: NAME_ONE });
+
+    assert.equal(seen[0].url, `${GOFILE_CONTENT_ENDPOINT}/file_1`);
+    assert.equal(seen[0].authorization, 'Bearer guest-token');
+    assert.equal(seen[1].url, 'https://cold1.gofile.io/download/one');
+    assert.equal(seen[1].authorization, null, 'the bearer is never handed to the host the API named');
+});
+
+test('resolving content without a credential sends no Authorization at all', async () => {
+    let authorization = 'unset';
+    const service = new GoFileService({
+        fetchImpl: async (url, init) => {
+            authorization = init?.headers?.Authorization ?? null;
+            if (url.startsWith(GOFILE_CONTENT_ENDPOINT)) return reply(fileNode(NAME_ONE, 'https://s/one'));
+            return new Response(new Uint8Array([1]));
+        }
+    });
+
+    await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE });
+    assert.equal(authorization, null);
+});
+
+test('an unauthorized read is reported as a credential problem, not a transport one', async () => {
+    const refused = new GoFileService({ fetchImpl: async () => new Response('nope', { status: 401 }) });
+    await assert.rejects(
+        () => refused.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
+        (error) => error.code === 'invalid_token' && /requires a credential/i.test(error.message)
+    );
+
+    const rejected = new GoFileService({ fetchImpl: async () => new Response('nope', { status: 401 }) });
+    await assert.rejects(
+        () => rejected.downloadPublicMirror('file_1', { token: 'stale', expectedFilename: NAME_ONE }),
+        (error) => error.code === 'invalid_token' && /refused the mirror credential/i.test(error.message)
     );
 });
 

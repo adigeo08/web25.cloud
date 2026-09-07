@@ -172,6 +172,7 @@ export class GoFileService {
     async downloadPublicMirror(
         locator,
         {
+            token = null,
             expectedFilename = null,
             signal,
             metadataTimeoutMs = this.metadataTimeoutMs,
@@ -182,15 +183,34 @@ export class GoFileService {
         if (expectedFilename !== null && !MIRROR_FILENAME.test(`${expectedFilename}`)) {
             throw new GoFileError('invalid_request', 'GoFile mirror filename is invalid.');
         }
+
+        // GoFile draws no distinction between a token issued from the dashboard
+        // and the guest token an upload hands back: both authenticate the same
+        // way. The bearer goes only to the content API, whose host is a
+        // constant here — never to the storage URL that same API names, which
+        // would hand a credential to whatever host the response points at.
+        const headers = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+
         let metadataResponse;
         try {
             metadataResponse = await this.fetchImpl(`${GOFILE_CONTENT_ENDPOINT}/${encodeURIComponent(safeLocator)}`, {
+                headers,
                 signal: boundedSignal(metadataTimeoutMs, signal)
             });
         } catch (cause) {
             throw transportError(cause, signal, metadataTimeoutMs, 'GoFile mirror metadata');
         }
         if (!metadataResponse.ok) {
+            if (metadataResponse.status === 401 || metadataResponse.status === 403) {
+                throw new GoFileError(
+                    'invalid_token',
+                    token
+                        ? `GoFile refused the mirror credential (HTTP ${metadataResponse.status}).`
+                        : `GoFile requires a credential to resolve this mirror (HTTP ${metadataResponse.status}).`,
+                    { status: metadataResponse.status }
+                );
+            }
             throw new GoFileError('http', `GoFile mirror metadata failed (HTTP ${metadataResponse.status}).`, {
                 status: metadataResponse.status
             });

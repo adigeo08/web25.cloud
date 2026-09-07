@@ -274,6 +274,65 @@ test('a mirror whose read-back fails outright leaves the deployment successful',
     assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
 });
 
+test('the read-back authenticates with the freshly issued guest token', async () => {
+    // The upload may have just replaced the stored credential, so the token
+    // that comes back with it is the one the read has to use.
+    const reads = [];
+    const { context } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async (_blob, options) => {
+                const result = { mirrorLocator: 'file_fresh', filename: options.filename };
+                Object.defineProperty(result, 'guestToken', { value: 'brand-new-token', enumerable: false });
+                return result;
+            }
+        }
+    });
+    const uploadedBlob = [];
+    const inner = context.gofileService;
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploadedBlob.push(blob);
+            return inner.upload(blob, options);
+        },
+        downloadPublicMirror: async (locator, options) => {
+            reads.push({ locator, token: options?.token ?? null });
+            return new Uint8Array(await uploadedBlob[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(reads, [{ locator: 'file_fresh', token: 'brand-new-token' }]);
+    assert.equal(context.lastDeployResult.mirror.locator, 'file_fresh');
+});
+
+test('the read-back falls back to the stored credential when no new one is issued', async () => {
+    const reads = [];
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => ({ token: 'stored-token' }),
+        write: async () => {},
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            return { mirrorLocator: 'file_stored', filename: options.filename };
+        },
+        downloadPublicMirror: async (locator, options) => {
+            reads.push(options?.token ?? null);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(reads, ['stored-token']);
+    assert.equal(context.lastDeployResult.mirrorState, 'available');
+});
+
 test('a second mirrored deployment cannot change the first one', async () => {
     let counter = 0;
     const service = {

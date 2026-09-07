@@ -220,3 +220,64 @@ test('a mirror bound to a different torrent is refused before any render', async
     assert.equal(chainChecks, 0, 'the hash mismatch is caught before TorrentChain verification');
     assert.match(alerted, /info hash mismatch/i);
 });
+
+test('a visitor with a stored credential resolves the mirror with it', async () => {
+    const { handleTerminalP2PFailure } = await loader();
+    const asked = [];
+    const context = {
+        gofileCredentialStore: { read: async () => ({ token: 'visitor-token' }) },
+        gofileService: {
+            downloadPublicMirror: async (locator, options) => {
+                asked.push({ locator, token: options?.token ?? null });
+                throw new Error('mirror offline');
+            }
+        },
+        hideLoadingOverlay() {},
+        log() {},
+        toast: { info() {} }
+    };
+    const previousAlert = globalThis.alert;
+    globalThis.alert = () => {};
+    try {
+        await handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('retry exhausted'));
+    } finally {
+        globalThis.alert = previousAlert;
+    }
+    assert.deepEqual(asked, [{ locator: 'Mirror123', token: 'visitor-token' }]);
+});
+
+test('a locked wallet or missing credential still attempts the mirror', async () => {
+    const { handleTerminalP2PFailure } = await loader();
+    // The common case: someone opening a WEB25 link who has never deployed.
+    for (const store of [
+        undefined,
+        { read: async () => null },
+        {
+            read: async () => {
+                throw new Error('Unlock your wallet to use the GoFile guest credential.');
+            }
+        }
+    ]) {
+        const asked = [];
+        const context = {
+            gofileCredentialStore: store,
+            gofileService: {
+                downloadPublicMirror: async (locator, options) => {
+                    asked.push(options?.token ?? null);
+                    throw new Error('mirror offline');
+                }
+            },
+            hideLoadingOverlay() {},
+            log() {},
+            toast: { info() {} }
+        };
+        const previousAlert = globalThis.alert;
+        globalThis.alert = () => {};
+        try {
+            await handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('retry exhausted'));
+        } finally {
+            globalThis.alert = previousAlert;
+        }
+        assert.deepEqual(asked, [null], 'the mirror is attempted, unauthenticated, without a wallet error');
+    }
+});

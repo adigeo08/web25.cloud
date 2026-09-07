@@ -32,6 +32,25 @@ cancellation stays distinguishable from a deadline (`aborted` vs `timeout`).
 Mirror bytes are read as a bounded stream and refused past 64 MiB, whether the
 size is declared in `Content-Length` or only discovered while reading.
 
+Resolving content is an **authenticated** call. `GET /contents/<id>` answers
+401 without a credential — observed live on 2026-09-07 against a real upload —
+and GoFile draws no distinction between a token created from the dashboard and
+the `guestToken` an upload hands back: both go in as `Authorization: Bearer`,
+the same scheme the upload itself already uses. The publisher's read-back sends
+the token the upload just issued, falling back to the stored one. A visitor
+sends the stored credential when this browser has one and attempts the read
+unauthenticated otherwise, since someone opening a WEB25 link is usually not the
+publisher and has no wallet unlocked.
+
+The bearer reaches only `api.gofile.io`, whose host is a constant in the client.
+It is never attached to the storage URL that the API names in its response:
+that host is chosen by the response, and handing it a credential would leak one
+wherever GoFile points.
+
+Whether one guest's token can resolve another guest's public content — the
+cross-guest question below — is what decides if the fallback works for anyone
+but the publisher. It remains unanswered.
+
 A mirror is only published as a locator once it has been **read back
 publicly**: after uploading, the client resolves its own locator by the same
 route a receiver would and byte-compares the result. Uploading proves nothing
