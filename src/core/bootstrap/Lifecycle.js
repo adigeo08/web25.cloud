@@ -45,6 +45,10 @@ import { bindInvitationsPanel, renderInvitations } from '../../ui/channels/Invit
 import { NostrPresenceService, INTENT } from '../../channels/NostrPresenceService.js';
 import { ContactsStore, TRUST, filterContacts, verifyIdentityTuple } from '../../channels/ContactsStore.js';
 import { PendingInvitations } from '../../channels/PendingInvitations.js';
+import { GoFileService } from '../../gofile/GoFileService.js';
+import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
+import { encodeGoFileMirror, gofileMirrorFilename } from '../../gofile/GoFileMirrorCodec.js';
+import { formatWeb25Url, parseWeb25Address } from '../../gofile/Web25Url.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /** How long a searched address shows "checking" before it is called offline. */
@@ -57,6 +61,14 @@ const DM_SEARCH_PRESENCE_GRACE_MS = 3000;
 const HANDSHAKE_STALL_MS = 20000;
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
+
+function sameBytes(left, right) {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index]) return false;
+    }
+    return true;
+}
 
 function createDirectMessageSessionId() {
     const bytes = new Uint8Array(12);
@@ -145,6 +157,8 @@ export function setupChannels() {
     // encrypted to the wallet's own Nostr identity, so a locked wallet has
     // nothing to read and this list simply cannot be shown.
     this.contactsStore = new ContactsStore({ signer });
+    this.gofileService = new GoFileService();
+    this.gofileCredentialStore = new GoFileCredentialStore({ signer });
     this.dmContacts = [];
     this.dmContactFilter = '';
     this.dmSelectedPeer = '';
@@ -1145,7 +1159,12 @@ export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
     const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
     setPublishButtonsState({ canSign: hasFiles, canDeploy: hasFiles && hasSignature });
-    updateDeployWizard({ hasFiles, hasSignature, hasDeployResult: Boolean(this.lastDeployResult) });
+    updateDeployWizard({
+        hasFiles,
+        hasSignature,
+        hasDeployResult: Boolean(this.lastDeployResult),
+        mirrorState: this.lastDeployResult?.mirrorState || 'idle'
+    });
 }
 
 export function invalidateSignedState(message = 'Signature invalidated') {
@@ -1274,7 +1293,8 @@ export async function signStagedPayload() {
         siteName: prepared.name,
         torrentFile: prepared.torrentFile,
         torrent: prepared,
-        createdAt
+        createdAt,
+        payloadFiles: [torrentChainFile, ...deployPayloadFiles]
     };
 
     const payloadInput = this.getSignedPayloadInput(prepared.infoHash, createdAt);
@@ -1317,39 +1337,85 @@ export async function signStagedPayload() {
     this.refreshDeployUiState();
 }
 
-export function renderDeploymentSummary({ hash, url, signedBy, signature, signatureStatus }) {
+/** What the mirror row says, per state. An absent mirror is never rendered as an empty value. */
+const MIRROR_ROW_TEXT = {
+    pending: 'Creating…',
+    unavailable: 'Not created — WebTorrent only'
+};
+
+const TRANSPORT_TEXT = {
+    disabled: 'Live and seeding over WebTorrent',
+    pending: 'Live and seeding over WebTorrent · creating optional mirror',
+    available: 'Live and seeding over WebTorrent · GoFile fallback mirror available',
+    unavailable: 'Live and seeding over WebTorrent · no fallback mirror'
+};
+
+export function renderDeploymentSummary({
+    hash,
+    url,
+    signedBy,
+    signature,
+    signatureStatus,
+    mirror = null,
+    mirrorState = 'disabled'
+}) {
     const resultEl = document.getElementById('upload-result');
     const hashEl = document.getElementById('result-hash');
     const urlEl = document.getElementById('result-url');
     const signedByEl = document.getElementById('result-signed-by');
     const signatureEl = document.getElementById('result-signature-preview');
     const signatureStatusEl = document.getElementById('result-signature-status');
+    const transportEl = document.getElementById('result-transport');
+    const mirrorEl = document.getElementById('result-gofile-mirror');
+    const mirrorRow = document.getElementById('result-gofile-row');
 
     if (hashEl) hashEl.textContent = hash;
     if (urlEl) urlEl.textContent = url;
     if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
     if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
     if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
+    if (transportEl) transportEl.textContent = TRANSPORT_TEXT[mirrorState] || TRANSPORT_TEXT.disabled;
+
+    // The locator addresses this deployment's mirror only; the folder page it
+    // lives in is never surfaced or shared. A mirror nobody asked for gets no
+    // row at all, rather than an empty or null-looking value.
+    if (mirrorEl) mirrorEl.textContent = mirror?.locator || MIRROR_ROW_TEXT[mirrorState] || 'Not created';
+    if (mirrorRow) mirrorRow.classList.toggle('hidden', mirrorState === 'disabled' || mirrorState === 'idle');
 
     if (resultEl) resultEl.classList.remove('hidden');
 }
 
-export async function deploySignedArtifact() {
-    if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
-        throw new Error('A valid signature is required before deployment.');
-    }
+/** The mirror is opt-in per deployment and nothing remembers the choice. */
+export function isGoFileMirrorRequested() {
+    const toggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+    return Boolean(toggle?.checked);
+}
 
-    const hash = this.lastPublishCandidate.hash;
-    const identity = this.authController.getActiveIdentity();
-
-    renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
-    updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
-
+/**
+ * Render the deployment as it currently stands. Called once the torrent is
+ * live, and again if an optional mirror later succeeds or fails, so the result
+ * on screen is never waiting on GoFile to become true.
+ * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
+ *           mirrorRequested?: boolean, mirrorError?: Error|null }} state
+ */
+export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorState = 'disabled' }) {
     this.showUploadResult(
         hash,
         this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
-        this.lastPublishCandidate.torrent
+        this.lastPublishCandidate.torrent,
+        mirror?.locator || null
     );
+
+    const url = formatWeb25Url({
+        torrentHash: hash,
+        gofileLocator: mirror?.locator || null,
+        origin: window.location.origin,
+        pathname: window.location.pathname
+    });
+
+    const temporaryMirror = mirror
+        ? { status: 'available', locator: mirror.locator, filename: mirror.filename }
+        : { status: mirrorState, ...(mirrorState === 'unavailable' ? { error: this._lastMirrorError || null } : {}) };
 
     const output = document.getElementById('publish-output');
     if (output) {
@@ -1357,6 +1423,8 @@ export async function deploySignedArtifact() {
             {
                 deploymentStatus: 'completed',
                 torrentHash: hash,
+                primaryTransport: 'webtorrent',
+                temporaryMirror,
                 artifactMode: 'in-memory-bundle',
                 signedBy: identity.address,
                 signature: this.lastSignature.signature,
@@ -1373,19 +1441,147 @@ export async function deploySignedArtifact() {
         );
     }
 
-    const url = `${window.location.origin}${window.location.pathname}?orc=${hash}`;
     this.renderDeploymentSummary({
         hash,
         url,
         signedBy: identity.address,
         signature: this.lastSignature.signature,
-        signatureStatus: 'VERIFIED'
+        signatureStatus: 'VERIFIED',
+        mirror,
+        mirrorState
     });
 
-    this.lastDeployResult = { hash, url, signedBy: identity.address };
+    this.lastDeployResult = { hash, url, signedBy: identity.address, mirror, mirrorState };
     this.persistDeploySession();
-    updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
-    renderDeployStage('Deployment complete', 'Live and seeding from memory');
+    this.refreshDeployUiState();
+    return url;
+}
+
+/**
+ * Upload one mirror for this deployment. Every upload stands alone: a fresh
+ * upload under a deployment-specific filename, addressed afterwards by the
+ * content id GoFile returns for it.
+ */
+export async function createGoFileMirror(hash) {
+    const filename = gofileMirrorFilename(hash);
+    if (!this.lastPublishCandidate?.payloadFiles) {
+        throw new Error(
+            'GoFile mirroring is unavailable after restoring this deployment; WebTorrent remains available.'
+        );
+    }
+    const mirrorBytes = await encodeGoFileMirror({
+        torrentFile: this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
+        files: this.lastPublishCandidate.payloadFiles
+    });
+    const payload = () => new Blob([mirrorBytes], { type: 'application/json' });
+
+    const credential = await this.gofileCredentialStore.read();
+    let upload;
+    try {
+        upload = await this.gofileService.upload(payload(), { filename, token: credential?.token || null });
+    } catch (error) {
+        if (error?.code !== 'invalid_token' || !credential) throw error;
+        await this.gofileCredentialStore.clearInvalidToken();
+        upload = await this.gofileService.upload(payload(), { filename });
+    }
+    if (upload.guestToken) {
+        try {
+            await this.gofileCredentialStore.write({ token: upload.guestToken });
+        } catch (error) {
+            this.log(`GoFile guest credential could not be persisted: ${error.message}`);
+        }
+    }
+    if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
+    const readBack = await this.gofileService.downloadPublicMirror(upload.mirrorLocator, {
+        expectedFilename: filename
+    });
+    if (!sameBytes(readBack, mirrorBytes)) {
+        throw new Error('GoFile mirror public read-back did not match the uploaded bytes.');
+    }
+    return { locator: upload.mirrorLocator, filename };
+}
+
+export async function deploySignedArtifact() {
+    // A second click while a deployment is in flight joins the one already
+    // running instead of starting a competing deploy.
+    if (this._deployInFlight) return this._deployInFlight;
+
+    if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
+        throw new Error('A valid signature is required before deployment.');
+    }
+    // The staged artifact can be replaced after signing (an imported .torrent
+    // renders its own result), so never deploy a hash the held signature does
+    // not actually cover.
+    if (this.lastSignedPublish.torrentHash !== this.lastPublishCandidate.hash) {
+        throw new Error('The staged artifact changed after signing. Re-sign the payload before deployment.');
+    }
+
+    setPublishButtonsState({ canSign: false, canDeploy: false });
+    const deployment = runSignedDeployment.call(this);
+    this._deployInFlight = deployment;
+    try {
+        return await deployment;
+    } finally {
+        if (this._deployInFlight === deployment) this._deployInFlight = null;
+        this.refreshDeployUiState?.();
+    }
+}
+
+async function runSignedDeployment() {
+    const hash = this.lastPublishCandidate.hash;
+    const identity = this.authController.getActiveIdentity();
+    const mirrorRequested = this.isGoFileMirrorRequested() && Boolean(this.lastPublishCandidate.payloadFiles);
+    this._lastMirrorError = null;
+
+    renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
+    updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
+
+    // WebTorrent is the deployment. It is seeding by the time we get here, so
+    // the successful result is published now — before the optional mirror gets
+    // a chance to be slow, fail, or time out.
+    if (!mirrorRequested) {
+        this.renderDeployedArtifact({ hash, identity, mirrorState: 'disabled' });
+        updateDeployProgress({ label: 'Live and seeding', percent: 100, state: 'success' });
+        renderDeployStage('Deployment complete', 'Live and seeding from memory');
+        return;
+    }
+
+    // The site is already live here, so the stage never claims to be finished
+    // while an optional step is still running, and never implies the site
+    // itself is still pending.
+    this.renderDeployedArtifact({ hash, identity, mirrorState: 'pending' });
+    updateDeployProgress({
+        label: 'Site live. Creating optional GoFile fallback mirror…',
+        percent: 90,
+        state: 'running'
+    });
+    renderDeployStage('Site live', 'Deployed over WebTorrent. Creating the optional GoFile fallback mirror…');
+
+    let mirror = null;
+    try {
+        this.log('Creating the optional temporary GoFile mirror…');
+        mirror = await this.createGoFileMirror(hash);
+    } catch (error) {
+        // A missing mirror is a missing fallback, not a failed deployment.
+        this.log(`Temporary GoFile mirror unavailable: ${error.message}`);
+        this._lastMirrorError = error.message;
+        this.renderDeployedArtifact({ hash, identity, mirrorState: 'unavailable' });
+        updateDeployProgress({ label: 'Live and seeding (no fallback mirror)', percent: 100, state: 'success' });
+        renderDeployStage(
+            'Deployment complete',
+            'Live and seeding. The optional GoFile fallback mirror could not be created.'
+        );
+        this.toast?.warning?.(
+            `Site deployed successfully. The optional GoFile fallback mirror could not be created: ${error.message}`,
+            'Fallback mirror unavailable'
+        );
+        return;
+    }
+
+    this.renderDeployedArtifact({ hash, identity, mirror, mirrorState: 'available' });
+    updateDeployProgress({ label: 'Live + temporary mirror', percent: 100, state: 'success' });
+    renderDeployStage('Deployment complete', 'Live, seeding, and temporarily mirrored');
+    this.toast?.success?.('Temporary GoFile fallback mirror created.', 'Mirror ready');
 }
 
 export function setupAuthAwareUi(state) {
@@ -1689,9 +1885,9 @@ export function setupEventListeners() {
     if (loadSite) {
         loadSite.addEventListener('click', () => {
             const hashInput = /** @type {HTMLInputElement} */ (document.getElementById('hash-input'));
-            const hash = hashInput.value.trim();
-            if (hash) {
-                this.loadSite(hash);
+            const address = hashInput.value.trim();
+            if (address) {
+                this.loadSite(address);
             }
         });
     }
@@ -1702,9 +1898,9 @@ export function setupEventListeners() {
         hashInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 const target = /** @type {HTMLInputElement} */ (e.target);
-                const hash = target.value.trim();
-                if (hash) {
-                    this.loadSite(hash);
+                const address = target.value.trim();
+                if (address) {
+                    this.loadSite(address);
                 }
             }
         });
@@ -1808,14 +2004,18 @@ export function persistDeploySession() {
 
     try {
         const signedBy = this.lastSignature?.payload?.publisherAddress || this.lastDeployResult?.signedBy || null;
+        const persistedDeployResult =
+            this.lastDeployResult?.mirrorState === 'pending'
+                ? { ...this.lastDeployResult, mirror: null, mirrorState: 'unavailable' }
+                : this.lastDeployResult || null;
         const payload = {
             hash: this.lastPublishCandidate.hash,
             siteName: this.lastPublishCandidate.siteName || 'website',
             createdAt: this.lastPublishCandidate.createdAt || null,
             signature: this.lastSignature,
             signedTorrentBase64: this.bytesToBase64(this.lastPublishCandidate.signedTorrentFile),
-            deployed: Boolean(this.lastDeployResult),
-            deployResult: this.lastDeployResult || null,
+            deployed: Boolean(persistedDeployResult),
+            deployResult: persistedDeployResult,
             signedBy,
             savedAt: Date.now()
         };
@@ -1872,6 +2072,12 @@ export async function restoreDeploySession() {
             createdAt: savedSession.createdAt || new Date().toISOString(),
             signedTorrentFile: signedTorrentBuffer
         };
+        const mirrorToggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+        if (mirrorToggle) {
+            mirrorToggle.checked = false;
+            mirrorToggle.disabled = true;
+            mirrorToggle.title = 'GoFile mirroring is unavailable after restoring this deployment.';
+        }
         this.lastDeployResult = savedSession.deployResult || null;
         renderSignatureStatus(this.lastSignature);
         renderPublishReview(this.lastSignature.payload || null);
@@ -1888,19 +2094,35 @@ export async function restoreDeploySession() {
                 this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
 
                 if (savedSession.deployed) {
-                    const url = `${window.location.origin}${window.location.pathname}?orc=${savedSession.hash}`;
+                    const savedAddress = savedSession.deployResult?.url
+                        ? parseWeb25Address(savedSession.deployResult.url)
+                        : { torrentHash: savedSession.hash, gofileLocator: null };
+                    const url = formatWeb25Url({
+                        ...savedAddress,
+                        origin: window.location.origin,
+                        pathname: window.location.pathname
+                    });
                     this.lastDeployResult = savedSession.deployResult || {
                         hash: savedSession.hash,
                         url,
                         signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
                     };
-                    this.showUploadResult(savedSession.hash, signedTorrentBuffer, torrent);
+                    this.showUploadResult(
+                        savedSession.hash,
+                        signedTorrentBuffer,
+                        torrent,
+                        this.lastDeployResult.mirror?.locator || null
+                    );
                     this.renderDeploymentSummary({
                         hash: savedSession.hash,
                         url: this.lastDeployResult.url,
                         signedBy: this.lastDeployResult.signedBy,
                         signature: this.lastSignature.signature,
-                        signatureStatus: 'VERIFIED'
+                        signatureStatus: 'VERIFIED',
+                        mirror: this.lastDeployResult.mirror || null,
+                        mirrorState:
+                            this.lastDeployResult.mirrorState ||
+                            (this.lastDeployResult.mirror ? 'available' : 'disabled')
                     });
                 }
                 resolve();

@@ -1,6 +1,7 @@
 // @ts-check
 
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { formatWeb25Url } from '../../gofile/Web25Url.js';
 
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
@@ -78,8 +79,7 @@ export function setupQuickUpload() {
     const openSite = document.getElementById('open-site');
     if (openSite) {
         openSite.addEventListener('click', () => {
-            const hash = document.getElementById('result-hash').textContent;
-            const url = `${window.location.origin}${window.location.pathname}?orc=${hash}`;
+            const url = document.getElementById('result-url').textContent;
             window.open(url, '_blank');
         });
     }
@@ -660,14 +660,32 @@ export function hideUploadProgress() {
     }
 }
 
-export function showUploadResult(hash, torrentFile, torrent) {
+export function showUploadResult(hash, torrentFile, torrent, gofileLocator = null) {
     // Sanitize hash before displaying
     const sanitizedHash = this.sanitizeHash(hash);
-    const url = `${window.location.origin}${window.location.pathname}?orc=${sanitizedHash}`;
+    const url = formatWeb25Url({
+        torrentHash: sanitizedHash,
+        gofileLocator,
+        origin: window.location.origin,
+        pathname: window.location.pathname
+    });
+    // Carry the signed artifact forward only while it still describes this exact
+    // hash. Rendering the result for a different torrent (an imported .torrent,
+    // say) must not leave the previous deployment's signed bytes and payload
+    // files attached to the new candidate.
+    const sameArtifact = this.lastPublishCandidate?.hash === sanitizedHash ? this.lastPublishCandidate : null;
     this.lastPublishCandidate = {
+        ...(sameArtifact || {}),
         hash: sanitizedHash,
         siteName: torrent?.name || 'website'
     };
+    const mirrorToggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+    if (mirrorToggle) {
+        const mirrorUnavailable = !this.lastPublishCandidate.payloadFiles;
+        mirrorToggle.checked = mirrorUnavailable ? false : mirrorToggle.checked;
+        mirrorToggle.disabled = mirrorUnavailable;
+        mirrorToggle.title = mirrorUnavailable ? 'GoFile mirroring requires the staged payload files.' : '';
+    }
 
     const hashEl = document.getElementById('result-hash');
     const urlEl = document.getElementById('result-url');

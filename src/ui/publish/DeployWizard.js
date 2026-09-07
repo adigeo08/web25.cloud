@@ -7,7 +7,9 @@
  */
 
 /**
- * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean, isError?: boolean }} DeployWizardState
+ * @typedef {'idle'|'disabled'|'pending'|'available'|'unavailable'} MirrorState
+ * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean,
+ *             isError?: boolean, mirrorState?: MirrorState }} DeployWizardState
  */
 
 /** @type {NodeListOf<HTMLElement> | null} */
@@ -19,6 +21,18 @@ let wizardNextEl = null;
 /** @type {HTMLDetailsElement | null} */
 let techDetails = null;
 
+const MIRROR_STEP = 6;
+const LIVE_STEP = 7;
+
+/** The mirror step is optional, so it says what became of it in words. */
+const MIRROR_NOTES = {
+    idle: 'Optional',
+    disabled: 'Skipped',
+    pending: 'In progress',
+    available: 'Created',
+    unavailable: 'Not created'
+};
+
 /**
  * Initialise wizard: cache DOM references.
  * Call once after DOM is ready.
@@ -29,21 +43,30 @@ export function initDeployWizard() {
     techDetails = /** @type {HTMLDetailsElement | null} */ (document.getElementById('deploy-tech-details'));
 }
 
+function setChipText(chip, selector, text) {
+    const target = chip?.querySelector(selector);
+    if (target) target.textContent = text;
+}
+
 /**
  * Update the wizard UI based on current deploy state.
- * Maps state to one of six step chips and updates visual affordances.
+ * Maps state to one of seven step chips and updates visual affordances.
  * @param {DeployWizardState} state
  */
 export function updateDeployWizard(state) {
     if (!stepChips || stepChips.length === 0) return;
 
-    const { hasFiles, hasSignature, hasDeployResult, isError = false } = state;
+    const { hasFiles, hasSignature, hasDeployResult, isError = false, mirrorState = 'idle' } = state;
+    const mirrored = mirrorState === 'available';
 
-    // Determine active step (1-based, matching the 6 step chips)
-    // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign  5 – Deploy  6 – Live
+    // Determine active step (1-based, matching the 7 step chips)
+    // 1 – Select  2 – Build  3 – Review  4 – Sign  5 – Deploy  6 – Mirror  7 – Live
+    // Step 6 is optional: the torrent deployment is already live and seeding by
+    // the time it runs, and it is skipped outright when the publisher did not
+    // ask for a mirror.
     let activeStep;
     if (hasDeployResult) {
-        activeStep = 6;
+        activeStep = mirrorState === 'pending' ? MIRROR_STEP : LIVE_STEP;
     } else if (hasFiles && hasSignature) {
         activeStep = 5;
     } else if (hasFiles) {
@@ -55,11 +78,18 @@ export function updateDeployWizard(state) {
     // Apply visual state to each chip
     stepChips.forEach((chip, index) => {
         const chipStep = index + 1;
-        chip.classList.remove('step-active', 'step-done', 'step-locked');
+        chip.classList.remove('is-current', 'step-active', 'step-done', 'step-locked', 'step-skipped', 'step-failed');
         chip.removeAttribute('aria-current');
 
-        if (chipStep === activeStep) {
-            chip.classList.add('step-active');
+        if (chipStep === MIRROR_STEP && chipStep !== activeStep) {
+            // Never show an optional step the publisher declined as completed,
+            // and never show a failed mirror as a blocked deployment.
+            if (mirrorState === 'disabled') chip.classList.add('step-skipped');
+            else if (mirrorState === 'unavailable') chip.classList.add('step-failed');
+            else if (chipStep < activeStep) chip.classList.add('step-done');
+            else chip.classList.add('step-locked');
+        } else if (chipStep === activeStep) {
+            chip.classList.add('step-active', 'is-current');
             chip.setAttribute('aria-current', 'step');
         } else if (chipStep < activeStep) {
             chip.classList.add('step-done');
@@ -68,10 +98,23 @@ export function updateDeployWizard(state) {
         }
     });
 
+    const mirrorChip = stepChips[MIRROR_STEP - 1];
+    setChipText(mirrorChip, '.step-chip-note', MIRROR_NOTES[mirrorState] || MIRROR_NOTES.idle);
+
+    // The last chip only claims a mirror when there actually is one.
+    const liveChip = stepChips[LIVE_STEP - 1];
+    setChipText(liveChip, '.step-chip-text', mirrored ? '7. Live + mirrored' : '7. Live and seeding');
+
     // Update "Next suggested action" microcopy
     if (wizardNextEl) {
         let nextText;
-        if (hasDeployResult) {
+        if (hasDeployResult && mirrorState === 'pending') {
+            nextText = '⏳ Your site is live and seeding. Finishing the optional fallback mirror…';
+        } else if (hasDeployResult && mirrored) {
+            nextText = '🎉 Live, seeding, and mirrored — share the link below!';
+        } else if (hasDeployResult && mirrorState === 'unavailable') {
+            nextText = '🎉 Your site is live and seeding. The optional mirror was not created — share the link below!';
+        } else if (hasDeployResult) {
             nextText = '🎉 Your site is live and seeding — share the link below!';
         } else if (hasFiles && hasSignature) {
             nextText = '▶ Next: Deploy your signed torrent to go live.';

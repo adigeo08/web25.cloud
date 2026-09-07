@@ -2,6 +2,7 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import SiteSandbox from '../renderer/SiteSandbox.js';
+import { parseWeb25Address } from '../../gofile/Web25Url.js';
 
 export function updateSiteSignatureBadge(status) {
     const badge = document.getElementById('site-signature-status');
@@ -10,7 +11,6 @@ export function updateSiteSignatureBadge(status) {
     badge.textContent = status.label;
     badge.className = status.verified ? 'status-chip status-success' : 'status-chip status-pending';
 }
-
 
 export function checkURL() {
     const urlParams = new URLSearchParams(window.location.search);
@@ -24,10 +24,20 @@ export function checkURL() {
     }
 
     if (orcHash) {
+        // A malformed mirror locator must never cost the user the site itself:
+        // fall back to the plain hash and let the P2P path do its normal work.
+        let address;
+        try {
+            address = parseWeb25Address(window.location.href);
+        } catch (error) {
+            this.log(`Ignoring unusable WEB25 mirror locator: ${error.message}`);
+            this.toast?.warning?.(error.message, 'Loading without the mirror');
+            address = { torrentHash: orcHash, gofileLocator: null };
+        }
         // Wait for all components to be ready before loading
         const checkReady = () => {
             if (this.serviceWorkerReady && this.clientReady && this.librariesLoaded) {
-                this.loadSite(orcHash);
+                this.loadSite(address);
             } else {
                 setTimeout(checkReady, PEERWEB_CONFIG.READY_CHECK_INTERVAL);
             }
@@ -148,7 +158,9 @@ export function showSiteViewer(site, hash, fromCache) {
         cacheStatus.textContent = fromCache ? '💾 From Cache' : '🌐 Fresh Download';
     }
 
-    this.updateSiteSignatureBadge(this.currentSiteSignatureStatus || { label: "Publisher: unverified", verified: false });
+    this.updateSiteSignatureBadge(
+        this.currentSiteSignatureStatus || { label: 'Publisher: unverified', verified: false }
+    );
 
     if (iframe) {
         iframe.onerror = (e) => {

@@ -2517,6 +2517,41 @@ body {
     pointer-events: none;
 }
 
+/* The optional mirror step: skipped and failed are distinct from both
+   "completed" and "blocked", and each is readable without relying on colour. */
+#tab-publish .step-chip.step-skipped {
+    opacity: 0.45;
+    font-style: italic;
+}
+
+#tab-publish .step-chip.step-failed {
+    opacity: 0.75;
+    color: #e2b96c;
+}
+
+#tab-publish .step-chip .step-chip-text {
+    display: block;
+}
+
+/* inline-block so the "done" strike-through on the chip does not propagate
+   into the state note, which must stay readable. */
+#tab-publish .step-chip .step-chip-note {
+    display: inline-block;
+    margin-top: 0.2rem;
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.85;
+    text-decoration: none;
+}
+
+/* Identifiers break anywhere; this row is a sentence, so it breaks at spaces. */
+#tab-publish #result-transport {
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+}
+
 #tab-publish .deploy-wizard-next {
     margin: 0.5rem 0 0.25rem;
     font-size: 0.82rem;
@@ -2524,6 +2559,33 @@ body {
     opacity: 0.9;
     font-style: italic;
     letter-spacing: 0.01em;
+}
+
+#tab-publish .deploy-option {
+    margin: 0.65rem 0 0.35rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid #333;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+#tab-publish .deploy-option-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+#tab-publish .deploy-option-label input {
+    accent-color: #6ce26c;
+    cursor: pointer;
+}
+
+#tab-publish .deploy-option-hint {
+    margin: 0.35rem 0 0;
+    font-size: 0.76rem;
+    color: #9a9a9a;
+    line-height: 1.45;
 }
 
 #tab-publish .deploy-help-details,
@@ -2668,10 +2730,11 @@ p { color:#a7bdc7; }
 .drop-zone { position:relative; border:1px dashed rgba(85,230,255,.55); border-radius:10px; background:linear-gradient(145deg,rgba(85,230,255,.04),rgba(155,124,255,.03)); }
 .drop-zone:hover { border-color:var(--cyan); background:rgba(85,230,255,.075); box-shadow:inset 0 0 40px rgba(85,230,255,.035); }
 .drop-icon { filter:drop-shadow(0 0 14px rgba(85,230,255,.65)); }
-.deploy-stepper { display:grid; grid-template-columns:repeat(6,1fr); gap:0; margin:1.35rem 0; }
-.step-chip { position:relative; padding:2.2rem .45rem .6rem; border:0; border-top:1px solid var(--line); color:var(--muted); background:transparent; text-align:center; }
+.deploy-stepper { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:0; margin:1.35rem 0; }
+.step-chip { position:relative; min-width:0; padding:2.2rem .45rem .6rem; border:0; border-top:1px solid var(--line); color:var(--muted); background:transparent; text-align:center; overflow-wrap:anywhere; }
 .step-chip::before { content:''; position:absolute; width:9px; height:9px; left:calc(50% - 5px); top:-5px; border-radius:50%; border:1px solid var(--cyan); background:var(--void); }
 .step-chip.is-current { color:var(--cyan); }
+.step-chip.step-done::before { background:var(--muted); border-color:var(--muted); }
 .step-chip.is-current::before { background:var(--cyan); box-shadow:0 0 14px var(--cyan); animation:live-pulse 1.8s infinite; }
 .deploy-stage-box { border-radius:8px; border-color:var(--line); background:rgba(85,230,255,.04); }
 .stage-label { color:var(--cyan); }
@@ -2740,7 +2803,7 @@ p { color:#a7bdc7; }
     .network-telemetry { gap:.65rem; flex-wrap:wrap; }
     .network-telemetry span { padding:.3rem .5rem; }
     .identity-widget-grid { grid-template-columns:1fr; }
-    .deploy-stepper { grid-template-columns:repeat(3,1fr); row-gap:1.4rem; }
+    .deploy-stepper { grid-template-columns:repeat(3,minmax(0,1fr)); row-gap:1.4rem; }
     .console-heading { flex-direction:column; }
 }
 
@@ -2750,7 +2813,7 @@ p { color:#a7bdc7; }
     .hero { padding-top:1.8rem; }
     .container { margin:1rem .65rem 2rem; border-radius:10px; }
     .quick-upload { padding:1rem; }
-    .deploy-stepper { grid-template-columns:repeat(2,1fr); }
+    .deploy-stepper { grid-template-columns:repeat(2,minmax(0,1fr)); row-gap:1.4rem; }
     .step-chip { font-size:.65rem; padding:1.8rem .25rem .4rem; line-height:1.35; overflow-wrap:anywhere; }
 }
 
