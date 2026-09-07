@@ -2526,6 +2526,33 @@ body {
     letter-spacing: 0.01em;
 }
 
+#tab-publish .deploy-option {
+    margin: 0.65rem 0 0.35rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid #333;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+#tab-publish .deploy-option-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+#tab-publish .deploy-option-label input {
+    accent-color: #6ce26c;
+    cursor: pointer;
+}
+
+#tab-publish .deploy-option-hint {
+    margin: 0.35rem 0 0;
+    font-size: 0.76rem;
+    color: #9a9a9a;
+    line-height: 1.45;
+}
+
 #tab-publish .deploy-help-details,
 #tab-publish .deploy-advanced-details {
     border: 1px solid #333;

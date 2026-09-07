@@ -3,7 +3,18 @@
 import { bdecode, bencode, decodeUtf8 } from '../torrent/BencodeCodec.js';
 
 export const GOFILE_MIRROR_SCHEMA = 'web25-gofile-mirror-v1';
-export const GOFILE_MIRROR_FILENAME = 'web25-gofile-mirror-v1.json';
+const INFO_HASH_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * One deterministic filename per deployment. Deployments can share a locator's
+ * neighbourhood on GoFile, so the name is what tells them apart; a shared name
+ * would make every later deployment shadow the ones before it.
+ */
+export function gofileMirrorFilename(infoHash) {
+    const hash = `${infoHash}`.trim().toLowerCase();
+    if (!INFO_HASH_RE.test(hash)) throw new TypeError('A 40 hex character torrent info hash is required.');
+    return `web25-gofile-mirror-${hash}.json`;
+}
 
 const toBase64 = (bytes) => {
     let binary = '';

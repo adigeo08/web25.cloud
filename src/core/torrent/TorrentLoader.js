@@ -12,7 +12,12 @@ import { SIGNATURE_STATE_VERIFICATION_VERSION } from '../cache/SignatureStateVer
 import { evaluateRenderGate } from '../../torrent/RenderGate.js';
 import { parseWeb25Address } from '../../gofile/Web25Url.js';
 import { GoFileService } from '../../gofile/GoFileService.js';
-import { createMirrorTorrentAdapter, decodeGoFileMirror, verifyGoFileMirror } from '../../gofile/GoFileMirrorCodec.js';
+import {
+    createMirrorTorrentAdapter,
+    decodeGoFileMirror,
+    gofileMirrorFilename,
+    verifyGoFileMirror
+} from '../../gofile/GoFileMirrorCodec.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -368,7 +373,12 @@ export async function handleTerminalP2PFailure(hash, gofileLocator, torrentError
         this.log('No torrent peers available. Trying GoFile mirror…');
         this.toast?.info?.('No torrent peers available. Trying the temporary GoFile mirror…', 'Fallback transport');
         const service = this.gofileService || new GoFileService();
-        const wireBytes = await service.downloadPublicMirror(gofileLocator);
+        // Ask for this deployment's mirror by name. Hash verification below is
+        // what makes the bytes trustworthy; it is not how the right mirror is
+        // picked out of a locator that may hold more than one.
+        const wireBytes = await service.downloadPublicMirror(gofileLocator, {
+            expectedFilename: gofileMirrorFilename(hash)
+        });
         const decoded = decodeGoFileMirror(wireBytes);
         const verified = await verifyGoFileMirror(decoded, hash);
         const adapter = createMirrorTorrentAdapter(verified);

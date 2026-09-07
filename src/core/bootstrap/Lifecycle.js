@@ -47,7 +47,7 @@ import { ContactsStore, TRUST, filterContacts, verifyIdentityTuple } from '../..
 import { PendingInvitations } from '../../channels/PendingInvitations.js';
 import { GoFileService } from '../../gofile/GoFileService.js';
 import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
-import { encodeGoFileMirror, GOFILE_MIRROR_FILENAME } from '../../gofile/GoFileMirrorCodec.js';
+import { encodeGoFileMirror, gofileMirrorFilename } from '../../gofile/GoFileMirrorCodec.js';
 import { formatWeb25Url, parseWeb25Address } from '../../gofile/Web25Url.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
@@ -1339,62 +1339,28 @@ export function renderDeploymentSummary({ hash, url, signedBy, signature, signat
     if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
     if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
     if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
-    if (mirrorEl) mirrorEl.textContent = mirror?.downloadPage || mirror?.locator || 'Unavailable';
+    // The locator addresses this deployment's mirror only; the folder page it
+    // lives in is never surfaced or shared.
+    if (mirrorEl) mirrorEl.textContent = mirror?.locator || 'Unavailable';
     if (mirrorRow) mirrorRow.classList.toggle('hidden', !mirror);
 
     if (resultEl) resultEl.classList.remove('hidden');
 }
 
-export async function deploySignedArtifact() {
-    if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
-        throw new Error('A valid signature is required before deployment.');
-    }
-    // The staged artifact can be replaced after signing (an imported .torrent
-    // renders its own result), so never deploy a hash the held signature does
-    // not actually cover.
-    if (this.lastSignedPublish.torrentHash !== this.lastPublishCandidate.hash) {
-        throw new Error('The staged artifact changed after signing. Re-sign the payload before deployment.');
-    }
+/** The mirror is opt-in per deployment and nothing remembers the choice. */
+export function isGoFileMirrorRequested() {
+    const toggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+    return Boolean(toggle?.checked);
+}
 
-    const hash = this.lastPublishCandidate.hash;
-    const identity = this.authController.getActiveIdentity();
-
-    renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
-    updateDeployProgress({ label: 'Creating temporary GoFile mirror', percent: 82, state: 'running' });
-
-    let mirror = null;
-    let mirrorError = null;
-    try {
-        const mirrorBytes = await encodeGoFileMirror({
-            torrentFile: this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
-            files: this.lastPublishCandidate.payloadFiles
-        });
-        let credential = await this.gofileCredentialStore.read();
-        let upload;
-        try {
-            upload = await this.gofileService.upload(new Blob([mirrorBytes], { type: 'application/json' }), {
-                filename: GOFILE_MIRROR_FILENAME,
-                token: credential?.token || null,
-                folderId: credential?.folderId || null
-            });
-        } catch (error) {
-            if (error?.code !== 'invalid_token' || !credential) throw error;
-            await this.gofileCredentialStore.clearInvalidToken();
-            credential = null;
-            upload = await this.gofileService.upload(new Blob([mirrorBytes], { type: 'application/json' }), {
-                filename: GOFILE_MIRROR_FILENAME
-            });
-        }
-        if (upload.guestToken) {
-            await this.gofileCredentialStore.write({ token: upload.guestToken, folderId: upload.parentFolder });
-        }
-        if (!upload.mirrorLocator) throw new Error('GoFile upload returned no public mirror locator.');
-        mirror = { locator: upload.mirrorLocator, downloadPage: upload.downloadPage };
-    } catch (error) {
-        mirrorError = error;
-        this.log(`Temporary GoFile mirror unavailable: ${error.message}`);
-    }
-
+/**
+ * Render the deployment as it currently stands. Called once the torrent is
+ * live, and again if an optional mirror later succeeds or fails, so the result
+ * on screen is never waiting on GoFile to become true.
+ * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
+ *           mirrorRequested?: boolean, mirrorError?: Error|null }} state
+ */
+export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorRequested = false, mirrorError = null }) {
     this.showUploadResult(
         hash,
         this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
@@ -1402,15 +1368,27 @@ export async function deploySignedArtifact() {
         mirror?.locator || null
     );
 
+    const url = formatWeb25Url({
+        torrentHash: hash,
+        gofileLocator: mirror?.locator || null,
+        origin: window.location.origin,
+        pathname: window.location.pathname
+    });
+
+    let temporaryMirror;
+    if (mirror) temporaryMirror = { status: 'available', locator: mirror.locator, filename: mirror.filename };
+    else if (mirrorError) temporaryMirror = { status: 'unavailable', error: mirrorError.message };
+    else if (mirrorRequested) temporaryMirror = { status: 'pending' };
+    else temporaryMirror = { status: 'disabled' };
+
     const output = document.getElementById('publish-output');
     if (output) {
         output.textContent = JSON.stringify(
             {
                 deploymentStatus: 'completed',
                 torrentHash: hash,
-                temporaryMirror: mirror
-                    ? { status: 'available', locator: mirror.locator, downloadPage: mirror.downloadPage }
-                    : { status: 'unavailable', error: mirrorError?.message || 'Upload failed' },
+                primaryTransport: 'webtorrent',
+                temporaryMirror,
                 artifactMode: 'in-memory-bundle',
                 signedBy: identity.address,
                 signature: this.lastSignature.signature,
@@ -1427,12 +1405,6 @@ export async function deploySignedArtifact() {
         );
     }
 
-    const url = formatWeb25Url({
-        torrentHash: hash,
-        gofileLocator: mirror?.locator || null,
-        origin: window.location.origin,
-        pathname: window.location.pathname
-    });
     this.renderDeploymentSummary({
         hash,
         url,
@@ -1444,15 +1416,83 @@ export async function deploySignedArtifact() {
 
     this.lastDeployResult = { hash, url, signedBy: identity.address, mirror };
     this.persistDeploySession();
-    updateDeployProgress({
-        label: mirror ? 'Live + temporary mirror' : 'Live (temporary mirror unavailable)',
-        percent: 100,
-        state: 'success'
+    this.refreshDeployUiState();
+    return url;
+}
+
+/**
+ * Upload one mirror for this deployment. Every upload stands alone: a fresh
+ * upload under a deployment-specific filename, addressed afterwards by the
+ * content id GoFile returns for it.
+ */
+export async function createGoFileMirror(hash) {
+    const filename = gofileMirrorFilename(hash);
+    const mirrorBytes = await encodeGoFileMirror({
+        torrentFile: this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
+        files: this.lastPublishCandidate.payloadFiles
     });
-    renderDeployStage(
-        'Deployment complete',
-        mirror ? 'Live, seeding, and temporarily mirrored' : 'Live and seeding; temporary mirror unavailable'
-    );
+    const payload = () => new Blob([mirrorBytes], { type: 'application/json' });
+
+    const credential = await this.gofileCredentialStore.read();
+    let upload;
+    try {
+        upload = await this.gofileService.upload(payload(), { filename, token: credential?.token || null });
+    } catch (error) {
+        if (error?.code !== 'invalid_token' || !credential) throw error;
+        await this.gofileCredentialStore.clearInvalidToken();
+        upload = await this.gofileService.upload(payload(), { filename });
+    }
+    if (upload.guestToken) await this.gofileCredentialStore.write({ token: upload.guestToken });
+    if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
+    return { locator: upload.mirrorLocator, filename };
+}
+
+export async function deploySignedArtifact() {
+    if (!this.lastPublishCandidate || !this.lastSignature || !this.lastSignedPublish) {
+        throw new Error('A valid signature is required before deployment.');
+    }
+    // The staged artifact can be replaced after signing (an imported .torrent
+    // renders its own result), so never deploy a hash the held signature does
+    // not actually cover.
+    if (this.lastSignedPublish.torrentHash !== this.lastPublishCandidate.hash) {
+        throw new Error('The staged artifact changed after signing. Re-sign the payload before deployment.');
+    }
+
+    const hash = this.lastPublishCandidate.hash;
+    const identity = this.authController.getActiveIdentity();
+    const mirrorRequested = this.isGoFileMirrorRequested();
+
+    renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
+    updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
+
+    // WebTorrent is the deployment. It is seeding by the time we get here, so
+    // the successful result is published now — before the optional mirror gets
+    // a chance to be slow, fail, or time out.
+    this.renderDeployedArtifact({ hash, identity, mirrorRequested });
+    updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
+    renderDeployStage('Deployment complete', 'Live and seeding from memory');
+
+    if (!mirrorRequested) return;
+
+    let mirror = null;
+    try {
+        this.log('Creating the optional temporary GoFile mirror…');
+        mirror = await this.createGoFileMirror(hash);
+    } catch (error) {
+        // A missing mirror is a missing fallback, not a failed deployment.
+        this.log(`Temporary GoFile mirror unavailable: ${error.message}`);
+        this.renderDeployedArtifact({ hash, identity, mirrorRequested, mirrorError: error });
+        renderDeployStage('Deployment complete', 'Live and seeding; the temporary mirror could not be created');
+        this.toast?.warning?.(
+            `${error.message} Your site is live and seeding over WebTorrent.`,
+            'Fallback mirror unavailable'
+        );
+        return;
+    }
+
+    this.renderDeployedArtifact({ hash, identity, mirror });
+    renderDeployStage('Deployment complete', 'Live, seeding, and temporarily mirrored');
+    this.toast?.success?.('Temporary GoFile fallback mirror created.', 'Mirror ready');
 }
 
 export function setupAuthAwareUi(state) {

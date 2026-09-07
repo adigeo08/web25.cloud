@@ -47,11 +47,13 @@ test('guest token round-trips through wallet encryption and IndexedDB contains c
     await local.unlock();
     const store = new GoFileCredentialStore({ signer: local.signer, now: () => 123 });
     try {
-        await store.write({ token: 'guest-plaintext-secret', folderId: 'folder-uuid' });
-        assert.deepEqual(await store.read(), { token: 'guest-plaintext-secret', folderId: 'folder-uuid' });
+        await store.write({ token: 'guest-plaintext-secret' });
+        assert.deepEqual(await store.read(), { token: 'guest-plaintext-secret' });
         const rows = fake.rawRows(GOFILE_CREDENTIAL_DB_NAME, GOFILE_CREDENTIAL_STORE_NAME);
         assert.equal(rows.length, 1);
-        assert.deepEqual(Object.keys(rows[0]).sort(), ['ciphertext', 'folderId', 'id', 'updatedAt']);
+        // No upload folder is remembered: one would become a public index of
+        // every deployment this publisher has ever mirrored.
+        assert.deepEqual(Object.keys(rows[0]).sort(), ['ciphertext', 'id', 'updatedAt']);
         assert.doesNotMatch(JSON.stringify(rows), /guest-plaintext-secret/);
     } finally {
         fake.restore();
@@ -77,7 +79,7 @@ test('invalid-token reset deletes only the dedicated GoFile credential', async (
     await local.unlock();
     const store = new GoFileCredentialStore({ signer: local.signer });
     try {
-        await store.write({ token: 'expired', folderId: 'guest-folder' });
+        await store.write({ token: 'expired' });
         await store.clearInvalidToken();
         assert.equal(await store.read(), null);
         assert.equal(fake.databases.has('web25-auth'), false, 'the wallet database is never opened or changed');

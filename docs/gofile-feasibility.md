@@ -3,19 +3,32 @@
 ## Confirmed contract used by the client
 
 Guest upload uses `POST https://upload.gofile.io/uploadfile`. A first upload has
-no authorization. A returning guest sends `Authorization: Bearer <guestToken>`
-and multipart `folderId=<parentFolder UUID>`; WEB25 does not rely on the older
-multipart `token` form field. The client accepts `id`, `parentFolder`,
-`parentFolderCode`, `downloadPage`, `servers`, and `guestToken` from the upload
-response.
+no authorization. A returning guest sends `Authorization: Bearer <guestToken>`;
+WEB25 does not rely on the older multipart `token` form field. The client
+accepts `id`, `parentFolder`, `parentFolderCode`, `downloadPage`, `servers`, and
+`guestToken` from the upload response.
 
-The documented contents route uses the `parentFolder` content UUID, so that is
-represented as the prospective `mirrorLocator`; `parentFolderCode` and the
-public `downloadPage` are retained as sharing metadata. These establish that a
-public share is available. They do **not**, on their own, establish that public
-content can be resolved or fetched programmatically, so
+The mirror locator is `data.id`, the content id of the one uploaded mirror.
+`parentFolder` is deliberately **not** the locator and is never sent back as
+`folderId` on a later upload: a folder identifier addresses a growing set, so
+publishing one would turn a single WEB25 link into an index of every site the
+publisher has ever mirrored, and would make each new deployment ambiguous with
+the ones before it. Each deployment is uploaded on its own, under its own
+deterministic filename `web25-gofile-mirror-<infoHash>.json`, and the resolver
+selects by that exact name. Hash verification still rejects the wrong bytes, but
+it is not what picks the right mirror out of a locator that resolves to more
+than one file.
+
+`parentFolderCode` and the public `downloadPage` are retained as diagnostics
+only; neither is shown in the UI or carried in a WEB25 link. They establish that
+a public share is available. They do **not**, on their own, establish that
+public content can be resolved or fetched programmatically, so
 `publicShareAvailable` and `programmaticReadVerified` are separate result
 fields.
+
+Every request is bounded: 30s for upload, 20s for content resolution, 30s for
+the mirror byte download, all via `AbortSignal.timeout`. A caller's own
+cancellation stays distinguishable from a deadline (`aborted` vs `timeout`).
 
 ## Required cross-guest experiment
 
@@ -49,9 +62,21 @@ cross-guest reads require Premium or unsupported authorization. The result is
 **INCONCLUSIVE (test environment)**, and `programmaticReadVerified` remains
 `false` strictly as an unverified capability flag.
 
-The deployment now proceeds on the publisher's explicit acceptance of this
-uncertainty. Runtime failures remain best-effort: the torrent deployment stays
-successful, and receivers attempt the public content endpoint only after the
-normal WebTorrent retry policy reaches terminal failure. Any returned mirror is
-still untrusted and must pass torrent info-hash, piece-hash, TorrentChain, and
-bundle verification before the existing sandbox renderer can see it.
+Because of that, the mirror is opt-in per deployment: the deploy wizard ships
+the checkbox off, and a fresh deployment is WebTorrent-only unless the publisher
+asks for a mirror. Nothing remembers the choice between deployments.
+
+Runtime failures remain best-effort in the strict sense. The successful torrent
+deployment is rendered and persisted _before_ any GoFile request begins, so a
+slow, failing, or timed-out mirror can only cost the fallback: the deployment
+stays successful and the shared link falls back to `?orc=<hash>`. Receivers
+attempt the public content endpoint only after the normal WebTorrent retry
+policy reaches terminal failure, and the loading overlay always terminates. Any
+returned mirror is still untrusted and must pass torrent info-hash, piece-hash,
+TorrentChain, and bundle verification before the existing sandbox renderer can
+see it.
+
+The automated suite covers all of this offline against mocked GoFile responses
+and never contacts a real endpoint. Live endpoint, CORS, and cross-guest
+interoperability validation remains outstanding and is tracked separately from
+the test suite.

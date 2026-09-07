@@ -42,16 +42,17 @@ export class GoFileCredentialStore {
         return owner;
     }
 
-    /** @param {{ token: string, folderId?: string|null }|string} credential */
+    /**
+     * Only the guest token is kept. No upload folder is remembered: reusing one
+     * would collect every deployment this publisher ever mirrored behind a
+     * single public identifier.
+     * @param {{ token: string }|string} credential
+     */
     async write(credential) {
         const owner = await this._owner();
         const token = typeof credential === 'string' ? credential : credential?.token;
-        const folderId = typeof credential === 'string' ? null : credential?.folderId || null;
         if (typeof token !== 'string' || token.length < 1 || token.length > 4096) {
             throw new TypeError('GoFile guest token is invalid.');
-        }
-        if (folderId !== null && (typeof folderId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(folderId))) {
-            throw new TypeError('GoFile guest folder id is invalid.');
         }
         const ciphertext = await this.signer.nostrEncrypt(JSON.stringify({ token }), owner);
         const db = await openDb();
@@ -60,7 +61,7 @@ export class GoFileCredentialStore {
                 db
                     .transaction(GOFILE_CREDENTIAL_STORE_NAME, 'readwrite')
                     .objectStore(GOFILE_CREDENTIAL_STORE_NAME)
-                    .put({ id: RECORD_ID, ciphertext, folderId, updatedAt: this.now() })
+                    .put({ id: RECORD_ID, ciphertext, updatedAt: this.now() })
             );
         } finally {
             db.close();
@@ -80,7 +81,7 @@ export class GoFileCredentialStore {
             if (!row?.ciphertext) return null;
             const value = JSON.parse(await this.signer.nostrDecrypt(row.ciphertext, owner));
             if (typeof value?.token !== 'string' || value.token.length < 1 || value.token.length > 4096) return null;
-            return { token: value.token, folderId: row.folderId || null };
+            return { token: value.token };
         } finally {
             db.close();
         }

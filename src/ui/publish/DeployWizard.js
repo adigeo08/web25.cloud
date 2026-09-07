@@ -39,11 +39,11 @@ export function updateDeployWizard(state) {
 
     const { hasFiles, hasSignature, hasDeployResult, isError = false } = state;
 
-    // Determine active step (1-based, matching the 7 step chips)
-    // 1 – Select  2 – Build  3 – Review  4 – Sign  5 – Torrent  6 – Mirror  7 – Live
+    // Determine active step (1-based, matching the 6 step chips)
+    // 1 – Select files  2 – Build bundle  3 – Review  4 – Sign  5 – Deploy  6 – Live
     let activeStep;
     if (hasDeployResult) {
-        activeStep = 7;
+        activeStep = 6;
     } else if (hasFiles && hasSignature) {
         activeStep = 5;
     } else if (hasFiles) {

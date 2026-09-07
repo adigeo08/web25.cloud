@@ -332,7 +332,7 @@
                                         <div class="notice-box">
                                             <h5>☁️ Hosting Notice</h5>
                                             <p>Your website is signed, deployed, and seeding from an in-memory bundle in this session.</p>
-                                            <p>Keep this tab open for P2P availability. GoFile mirrors are temporary fallback transport.</p>
+                                            <p>Keep this tab open for P2P availability. A GoFile mirror, when you ask for one, is temporary fallback transport only.</p>
                                         </div>
                                     </div>
                                 </div>
@@ -348,14 +348,23 @@
                                 <span class="step-chip">3. Review payload</span>
                                 <span class="step-chip">4. Sign payload</span>
                                 <span class="step-chip">5. Deploy signed memory torrent</span>
-                                <span class="step-chip">6. Create GoFile mirror</span>
-                                <span class="step-chip">7. Live + mirrored</span>
+                                <span class="step-chip">6. Live and seeding</span>
                             </div>
                             <div class="deploy-stage-box">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
                                 <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
                             </div>
                             <p id="deploy-wizard-next" class="deploy-wizard-next">▶ Next: Upload your website folder to stage files.</p>
+                            <div class="deploy-option">
+                                <label class="deploy-option-label" for="deploy-gofile-mirror">
+                                    <input type="checkbox" id="deploy-gofile-mirror" />
+                                    <span>Create temporary GoFile fallback mirror</span>
+                                </label>
+                                <p class="deploy-option-hint">
+                                    Uploads a copy of the signed static-site deployment to GoFile. WebTorrent remains
+                                    the primary transport, and deployment succeeds either way.
+                                </p>
+                            </div>
                             <div class="button-group">
                                 <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Payload</button>
                                 <button id="publish-btn" class="btn btn-create" disabled>Deploy Signed Torrent</button>
