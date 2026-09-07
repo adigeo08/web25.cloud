@@ -60,6 +60,30 @@ test('the shipped timeouts are finite and bounded', () => {
     }
 });
 
+test('the global fetch is never invoked as a method of the service', async () => {
+    // A browser refuses `someObject.fetch(...)` with "Illegal invocation" and
+    // refuses it before the request leaves, so the symptom is an empty network
+    // tab, not a failed call. Node's fetch ignores its receiver, so the only
+    // way to catch this here is a stub that enforces what a browser enforces.
+    const previous = globalThis.fetch;
+    let receiver = 'never called';
+    globalThis.fetch = function (...args) {
+        receiver = this === undefined || this === globalThis ? 'global' : 'not the global';
+        if (receiver !== 'global') {
+            throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+        }
+        return Promise.resolve(reply({ id: 'file_1' }));
+    };
+    try {
+        const service = new GoFileService();
+        const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
+        assert.equal(receiver, 'global');
+        assert.equal(result.mirrorLocator, 'file_1');
+    } finally {
+        globalThis.fetch = previous;
+    }
+});
+
 test('first guest upload has no token and captures the issued credential privately', async () => {
     let request;
     const service = new GoFileService({
