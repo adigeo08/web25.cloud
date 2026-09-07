@@ -1151,7 +1151,12 @@ export function refreshDeployUiState() {
     const hasFiles = Boolean(this.pendingDeployFiles && this.pendingDeployFiles.length > 0);
     const hasSignature = Boolean(this.lastSignature && this.lastSignedPublish);
     setPublishButtonsState({ canSign: hasFiles, canDeploy: hasFiles && hasSignature });
-    updateDeployWizard({ hasFiles, hasSignature, hasDeployResult: Boolean(this.lastDeployResult) });
+    updateDeployWizard({
+        hasFiles,
+        hasSignature,
+        hasDeployResult: Boolean(this.lastDeployResult),
+        mirrorState: this.lastDeployResult?.mirrorState || 'idle'
+    });
 }
 
 export function invalidateSignedState(message = 'Signature invalidated') {
@@ -1324,13 +1329,35 @@ export async function signStagedPayload() {
     this.refreshDeployUiState();
 }
 
-export function renderDeploymentSummary({ hash, url, signedBy, signature, signatureStatus, mirror = null }) {
+/** What the mirror row says, per state. An absent mirror is never rendered as an empty value. */
+const MIRROR_ROW_TEXT = {
+    pending: 'Creating…',
+    unavailable: 'Not created — WebTorrent only'
+};
+
+const TRANSPORT_TEXT = {
+    disabled: 'Live and seeding over WebTorrent',
+    pending: 'Live and seeding over WebTorrent · creating optional mirror',
+    available: 'Live and seeding over WebTorrent · GoFile fallback mirror available',
+    unavailable: 'Live and seeding over WebTorrent · no fallback mirror'
+};
+
+export function renderDeploymentSummary({
+    hash,
+    url,
+    signedBy,
+    signature,
+    signatureStatus,
+    mirror = null,
+    mirrorState = 'disabled'
+}) {
     const resultEl = document.getElementById('upload-result');
     const hashEl = document.getElementById('result-hash');
     const urlEl = document.getElementById('result-url');
     const signedByEl = document.getElementById('result-signed-by');
     const signatureEl = document.getElementById('result-signature-preview');
     const signatureStatusEl = document.getElementById('result-signature-status');
+    const transportEl = document.getElementById('result-transport');
     const mirrorEl = document.getElementById('result-gofile-mirror');
     const mirrorRow = document.getElementById('result-gofile-row');
 
@@ -1339,10 +1366,13 @@ export function renderDeploymentSummary({ hash, url, signedBy, signature, signat
     if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
     if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
     if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
+    if (transportEl) transportEl.textContent = TRANSPORT_TEXT[mirrorState] || TRANSPORT_TEXT.disabled;
+
     // The locator addresses this deployment's mirror only; the folder page it
-    // lives in is never surfaced or shared.
-    if (mirrorEl) mirrorEl.textContent = mirror?.locator || 'Unavailable';
-    if (mirrorRow) mirrorRow.classList.toggle('hidden', !mirror);
+    // lives in is never surfaced or shared. A mirror nobody asked for gets no
+    // row at all, rather than an empty or null-looking value.
+    if (mirrorEl) mirrorEl.textContent = mirror?.locator || MIRROR_ROW_TEXT[mirrorState] || 'Not created';
+    if (mirrorRow) mirrorRow.classList.toggle('hidden', mirrorState === 'disabled' || mirrorState === 'idle');
 
     if (resultEl) resultEl.classList.remove('hidden');
 }
@@ -1360,7 +1390,7 @@ export function isGoFileMirrorRequested() {
  * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
  *           mirrorRequested?: boolean, mirrorError?: Error|null }} state
  */
-export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorRequested = false, mirrorError = null }) {
+export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorState = 'disabled' }) {
     this.showUploadResult(
         hash,
         this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
@@ -1375,11 +1405,9 @@ export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorRe
         pathname: window.location.pathname
     });
 
-    let temporaryMirror;
-    if (mirror) temporaryMirror = { status: 'available', locator: mirror.locator, filename: mirror.filename };
-    else if (mirrorError) temporaryMirror = { status: 'unavailable', error: mirrorError.message };
-    else if (mirrorRequested) temporaryMirror = { status: 'pending' };
-    else temporaryMirror = { status: 'disabled' };
+    const temporaryMirror = mirror
+        ? { status: 'available', locator: mirror.locator, filename: mirror.filename }
+        : { status: mirrorState, ...(mirrorState === 'unavailable' ? { error: this._lastMirrorError || null } : {}) };
 
     const output = document.getElementById('publish-output');
     if (output) {
@@ -1411,10 +1439,11 @@ export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorRe
         signedBy: identity.address,
         signature: this.lastSignature.signature,
         signatureStatus: 'VERIFIED',
-        mirror
+        mirror,
+        mirrorState
     });
 
-    this.lastDeployResult = { hash, url, signedBy: identity.address, mirror };
+    this.lastDeployResult = { hash, url, signedBy: identity.address, mirror, mirrorState };
     this.persistDeploySession();
     this.refreshDeployUiState();
     return url;
@@ -1461,6 +1490,7 @@ export async function deploySignedArtifact() {
     const hash = this.lastPublishCandidate.hash;
     const identity = this.authController.getActiveIdentity();
     const mirrorRequested = this.isGoFileMirrorRequested();
+    this._lastMirrorError = null;
 
     renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
     updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
@@ -1468,11 +1498,23 @@ export async function deploySignedArtifact() {
     // WebTorrent is the deployment. It is seeding by the time we get here, so
     // the successful result is published now — before the optional mirror gets
     // a chance to be slow, fail, or time out.
-    this.renderDeployedArtifact({ hash, identity, mirrorRequested });
-    updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
-    renderDeployStage('Deployment complete', 'Live and seeding from memory');
+    if (!mirrorRequested) {
+        this.renderDeployedArtifact({ hash, identity, mirrorState: 'disabled' });
+        updateDeployProgress({ label: 'Live and seeding', percent: 100, state: 'success' });
+        renderDeployStage('Deployment complete', 'Live and seeding from memory');
+        return;
+    }
 
-    if (!mirrorRequested) return;
+    // The site is already live here, so the stage never claims to be finished
+    // while an optional step is still running, and never implies the site
+    // itself is still pending.
+    this.renderDeployedArtifact({ hash, identity, mirrorState: 'pending' });
+    updateDeployProgress({
+        label: 'Site live. Creating optional GoFile fallback mirror…',
+        percent: 90,
+        state: 'running'
+    });
+    renderDeployStage('Site live', 'Deployed over WebTorrent. Creating the optional GoFile fallback mirror…');
 
     let mirror = null;
     try {
@@ -1481,16 +1523,22 @@ export async function deploySignedArtifact() {
     } catch (error) {
         // A missing mirror is a missing fallback, not a failed deployment.
         this.log(`Temporary GoFile mirror unavailable: ${error.message}`);
-        this.renderDeployedArtifact({ hash, identity, mirrorRequested, mirrorError: error });
-        renderDeployStage('Deployment complete', 'Live and seeding; the temporary mirror could not be created');
+        this._lastMirrorError = error.message;
+        this.renderDeployedArtifact({ hash, identity, mirrorState: 'unavailable' });
+        updateDeployProgress({ label: 'Live and seeding (no fallback mirror)', percent: 100, state: 'success' });
+        renderDeployStage(
+            'Deployment complete',
+            'Live and seeding. The optional GoFile fallback mirror could not be created.'
+        );
         this.toast?.warning?.(
-            `${error.message} Your site is live and seeding over WebTorrent.`,
+            `Site deployed successfully. The optional GoFile fallback mirror could not be created: ${error.message}`,
             'Fallback mirror unavailable'
         );
         return;
     }
 
-    this.renderDeployedArtifact({ hash, identity, mirror });
+    this.renderDeployedArtifact({ hash, identity, mirror, mirrorState: 'available' });
+    updateDeployProgress({ label: 'Live + temporary mirror', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live, seeding, and temporarily mirrored');
     this.toast?.success?.('Temporary GoFile fallback mirror created.', 'Mirror ready');
 }
@@ -2020,7 +2068,10 @@ export async function restoreDeploySession() {
                         signedBy: this.lastDeployResult.signedBy,
                         signature: this.lastSignature.signature,
                         signatureStatus: 'VERIFIED',
-                        mirror: this.lastDeployResult.mirror || null
+                        mirror: this.lastDeployResult.mirror || null,
+                        mirrorState:
+                            this.lastDeployResult.mirrorState ||
+                            (this.lastDeployResult.mirror ? 'available' : 'disabled')
                     });
                 }
                 resolve();

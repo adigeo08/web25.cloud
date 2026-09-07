@@ -300,9 +300,17 @@
                                 <div id="upload-progress" class="upload-progress hidden">
                                     <div class="progress-container">
                                         <div class="progress-track">
-                                            <div id="upload-progress-bar" class="progress-bar"></div>
+                                            <div
+                                                id="upload-progress-bar"
+                                                class="progress-bar"
+                                                role="progressbar"
+                                                aria-valuemin="0"
+                                                aria-valuemax="100"
+                                                aria-valuenow="0"
+                                                aria-labelledby="upload-progress-text"
+                                            ></div>
                                         </div>
-                                        <div id="upload-progress-text" class="progress-text">Processing files...</div>
+                                        <div id="upload-progress-text" class="progress-text" role="status" aria-live="polite">Processing files...</div>
                                     </div>
                                 </div>
                             </div>
@@ -311,8 +319,12 @@
                                 <div class="result-success">
                                     <h4>✅ Website Ready</h4>
                                     <div class="result-info">
+                                        <p><strong>Status:</strong> <code id="result-transport">Live and seeding over WebTorrent</code></p>
                                         <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
-                                        <p id="result-gofile-row" class="hidden"><strong>Temporary GoFile mirror:</strong> <code id="result-gofile-mirror"></code></p>
+                                        <p id="result-gofile-row" class="hidden">
+                                            <strong>GoFile fallback mirror:</strong>
+                                            <code id="result-gofile-mirror"></code>
+                                        </p>
                                         <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
                                         <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
                                         <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
@@ -342,27 +354,47 @@
                         <section class="controls deploy-card card-base">
                             <h3>✍️ Sign and Deploy</h3>
                             <p id="signature-status" class="status-chip status-pending">Signature pending</p>
-                            <div class="deploy-stepper" aria-label="Deployment progress">
-                                <span class="step-chip is-current">1. Select files</span>
-                                <span class="step-chip">2. Build in-memory bundle</span>
-                                <span class="step-chip">3. Review payload</span>
-                                <span class="step-chip">4. Sign payload</span>
-                                <span class="step-chip">5. Deploy signed memory torrent</span>
-                                <span class="step-chip">6. Live and seeding</span>
+                            <div class="deploy-stepper" role="list" aria-label="Deployment progress">
+                                <span class="step-chip is-current" role="listitem"
+                                    ><span class="step-chip-text">1. Select files</span></span
+                                >
+                                <span class="step-chip" role="listitem"
+                                    ><span class="step-chip-text">2. Build in-memory bundle</span></span
+                                >
+                                <span class="step-chip" role="listitem"
+                                    ><span class="step-chip-text">3. Review payload</span></span
+                                >
+                                <span class="step-chip" role="listitem"
+                                    ><span class="step-chip-text">4. Sign payload</span></span
+                                >
+                                <span class="step-chip" role="listitem"
+                                    ><span class="step-chip-text">5. Deploy signed memory torrent</span></span
+                                >
+                                <span class="step-chip" id="step-chip-mirror" role="listitem"
+                                    ><span class="step-chip-text">6. Create GoFile mirror</span
+                                    ><span class="step-chip-note">Optional</span></span
+                                >
+                                <span class="step-chip" id="step-chip-live" role="listitem"
+                                    ><span class="step-chip-text">7. Live + mirrored</span></span
+                                >
                             </div>
-                            <div class="deploy-stage-box">
+                            <div class="deploy-stage-box" role="status" aria-live="polite">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
                                 <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
                             </div>
                             <p id="deploy-wizard-next" class="deploy-wizard-next">▶ Next: Upload your website folder to stage files.</p>
                             <div class="deploy-option">
                                 <label class="deploy-option-label" for="deploy-gofile-mirror">
-                                    <input type="checkbox" id="deploy-gofile-mirror" />
+                                    <input
+                                        type="checkbox"
+                                        id="deploy-gofile-mirror"
+                                        aria-describedby="deploy-gofile-mirror-hint"
+                                    />
                                     <span>Create temporary GoFile fallback mirror</span>
                                 </label>
-                                <p class="deploy-option-hint">
-                                    Uploads a copy of the signed static-site deployment to GoFile. WebTorrent remains
-                                    the primary transport, and deployment succeeds either way.
+                                <p id="deploy-gofile-mirror-hint" class="deploy-option-hint">
+                                    Optional. Uploads a copy of this signed deployment to GoFile. WebTorrent remains the
+                                    primary transport, and your deployment succeeds either way.
                                 </p>
                             </div>
                             <div class="button-group">
@@ -543,7 +575,13 @@
                         <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
                         <p>Resolve and open any peer-hosted website through your local browser node.</p>
                         <div class="hash-input-group">
-                            <input type="text" id="hash-input" placeholder="Torrent hash, hash&amp;mirror, or WEB25 URL..." class="hash-input" />
+                            <input
+                                type="text"
+                                id="hash-input"
+                                placeholder="Torrent hash, hash&amp;mirror, or WEB25 URL..."
+                                class="hash-input"
+                                aria-label="Torrent hash, hash and mirror locator, or complete WEB25 URL"
+                            />
                             <button id="load-site" class="btn btn-primary">Load Site</button>
                         </div>
                         <p>🎯 Enter a hash, <code>hash&amp;GoFileLocator</code>, or a complete WEB25 URL. P2P is always tried first.</p>

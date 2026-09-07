@@ -38,7 +38,8 @@ function boundedSignal(timeoutMs, signal) {
 function transportError(cause, signal, timeoutMs, subject) {
     if (signal?.aborted) return new GoFileError('aborted', `${subject} was cancelled.`, { cause });
     if (cause?.name === 'TimeoutError' || cause?.name === 'AbortError') {
-        return new GoFileError('timeout', `${subject} timed out after ${Math.round(timeoutMs / 1000)}s.`, { cause });
+        const elapsed = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+        return new GoFileError('timeout', `${subject} timed out after ${elapsed}.`, { cause });
     }
     return new GoFileError('network', `${subject} could not be reached.`, { cause });
 }

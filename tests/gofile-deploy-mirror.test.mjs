@@ -180,7 +180,8 @@ test('a stalled GoFile upload cannot hang or fail the deployment', async () => {
     assert.match(document.getElementById('publish-output').textContent, /"status": "unavailable"/);
     assert.match(document.getElementById('publish-output').textContent, /timed out/i);
     assert.equal(warnings.length, 1, 'the failure is reported without blocking');
-    assert.match(warnings[0], /live and seeding/i);
+    assert.match(warnings[0], /deployed successfully/i);
+    assert.match(warnings[0], /could not be created/i);
 });
 
 test('a rejected GoFile upload leaves the deployment successful', async () => {
