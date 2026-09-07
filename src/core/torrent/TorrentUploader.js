@@ -1,6 +1,7 @@
 // @ts-check
 
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
+import { formatWeb25Url } from '../../gofile/Web25Url.js';
 
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
@@ -78,8 +79,7 @@ export function setupQuickUpload() {
     const openSite = document.getElementById('open-site');
     if (openSite) {
         openSite.addEventListener('click', () => {
-            const hash = document.getElementById('result-hash').textContent;
-            const url = `${window.location.origin}${window.location.pathname}?orc=${hash}`;
+            const url = document.getElementById('result-url').textContent;
             window.open(url, '_blank');
         });
     }
@@ -660,11 +660,17 @@ export function hideUploadProgress() {
     }
 }
 
-export function showUploadResult(hash, torrentFile, torrent) {
+export function showUploadResult(hash, torrentFile, torrent, gofileLocator = null) {
     // Sanitize hash before displaying
     const sanitizedHash = this.sanitizeHash(hash);
-    const url = `${window.location.origin}${window.location.pathname}?orc=${sanitizedHash}`;
+    const url = formatWeb25Url({
+        torrentHash: sanitizedHash,
+        gofileLocator,
+        origin: window.location.origin,
+        pathname: window.location.pathname
+    });
     this.lastPublishCandidate = {
+        ...(this.lastPublishCandidate || {}),
         hash: sanitizedHash,
         siteName: torrent?.name || 'website'
     };

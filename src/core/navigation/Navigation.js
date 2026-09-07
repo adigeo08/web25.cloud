@@ -2,6 +2,7 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import SiteSandbox from '../renderer/SiteSandbox.js';
+import { parseWeb25Address } from '../../gofile/Web25Url.js';
 
 export function updateSiteSignatureBadge(status) {
     const badge = document.getElementById('site-signature-status');
@@ -10,7 +11,6 @@ export function updateSiteSignatureBadge(status) {
     badge.textContent = status.label;
     badge.className = status.verified ? 'status-chip status-success' : 'status-chip status-pending';
 }
-
 
 export function checkURL() {
     const urlParams = new URLSearchParams(window.location.search);
@@ -24,10 +24,17 @@ export function checkURL() {
     }
 
     if (orcHash) {
+        let address;
+        try {
+            address = parseWeb25Address(window.location.href);
+        } catch (error) {
+            this.log(`Invalid WEB25 URL: ${error.message}`);
+            return;
+        }
         // Wait for all components to be ready before loading
         const checkReady = () => {
             if (this.serviceWorkerReady && this.clientReady && this.librariesLoaded) {
-                this.loadSite(orcHash);
+                this.loadSite(address);
             } else {
                 setTimeout(checkReady, PEERWEB_CONFIG.READY_CHECK_INTERVAL);
             }
@@ -148,7 +155,9 @@ export function showSiteViewer(site, hash, fromCache) {
         cacheStatus.textContent = fromCache ? '💾 From Cache' : '🌐 Fresh Download';
     }
 
-    this.updateSiteSignatureBadge(this.currentSiteSignatureStatus || { label: "Publisher: unverified", verified: false });
+    this.updateSiteSignatureBadge(
+        this.currentSiteSignatureStatus || { label: 'Publisher: unverified', verified: false }
+    );
 
     if (iframe) {
         iframe.onerror = (e) => {

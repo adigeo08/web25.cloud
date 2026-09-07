@@ -45,6 +45,10 @@ import { bindInvitationsPanel, renderInvitations } from '../../ui/channels/Invit
 import { NostrPresenceService, INTENT } from '../../channels/NostrPresenceService.js';
 import { ContactsStore, TRUST, filterContacts, verifyIdentityTuple } from '../../channels/ContactsStore.js';
 import { PendingInvitations } from '../../channels/PendingInvitations.js';
+import { GoFileService } from '../../gofile/GoFileService.js';
+import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
+import { encodeGoFileMirror, GOFILE_MIRROR_FILENAME } from '../../gofile/GoFileMirrorCodec.js';
+import { formatWeb25Url, parseWeb25Address } from '../../gofile/Web25Url.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /** How long a searched address shows "checking" before it is called offline. */
@@ -145,6 +149,8 @@ export function setupChannels() {
     // encrypted to the wallet's own Nostr identity, so a locked wallet has
     // nothing to read and this list simply cannot be shown.
     this.contactsStore = new ContactsStore({ signer });
+    this.gofileService = new GoFileService();
+    this.gofileCredentialStore = new GoFileCredentialStore({ signer });
     this.dmContacts = [];
     this.dmContactFilter = '';
     this.dmSelectedPeer = '';
@@ -1274,7 +1280,8 @@ export async function signStagedPayload() {
         siteName: prepared.name,
         torrentFile: prepared.torrentFile,
         torrent: prepared,
-        createdAt
+        createdAt,
+        payloadFiles: [torrentChainFile, ...deployPayloadFiles]
     };
 
     const payloadInput = this.getSignedPayloadInput(prepared.infoHash, createdAt);
@@ -1317,19 +1324,23 @@ export async function signStagedPayload() {
     this.refreshDeployUiState();
 }
 
-export function renderDeploymentSummary({ hash, url, signedBy, signature, signatureStatus }) {
+export function renderDeploymentSummary({ hash, url, signedBy, signature, signatureStatus, mirror = null }) {
     const resultEl = document.getElementById('upload-result');
     const hashEl = document.getElementById('result-hash');
     const urlEl = document.getElementById('result-url');
     const signedByEl = document.getElementById('result-signed-by');
     const signatureEl = document.getElementById('result-signature-preview');
     const signatureStatusEl = document.getElementById('result-signature-status');
+    const mirrorEl = document.getElementById('result-gofile-mirror');
+    const mirrorRow = document.getElementById('result-gofile-row');
 
     if (hashEl) hashEl.textContent = hash;
     if (urlEl) urlEl.textContent = url;
     if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
     if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
     if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
+    if (mirrorEl) mirrorEl.textContent = mirror?.downloadPage || mirror?.locator || 'Unavailable';
+    if (mirrorRow) mirrorRow.classList.toggle('hidden', !mirror);
 
     if (resultEl) resultEl.classList.remove('hidden');
 }
@@ -1343,12 +1354,46 @@ export async function deploySignedArtifact() {
     const identity = this.authController.getActiveIdentity();
 
     renderDeployStage('Deploying', 'Finalizing signed in-memory torrent deployment');
-    updateDeployProgress({ label: 'Finalizing deployment', percent: 85, state: 'running' });
+    updateDeployProgress({ label: 'Creating temporary GoFile mirror', percent: 82, state: 'running' });
+
+    let mirror = null;
+    let mirrorError = null;
+    try {
+        const mirrorBytes = await encodeGoFileMirror({
+            torrentFile: this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
+            files: this.lastPublishCandidate.payloadFiles
+        });
+        let credential = await this.gofileCredentialStore.read();
+        let upload;
+        try {
+            upload = await this.gofileService.upload(new Blob([mirrorBytes], { type: 'application/json' }), {
+                filename: GOFILE_MIRROR_FILENAME,
+                token: credential?.token || null,
+                folderId: credential?.folderId || null
+            });
+        } catch (error) {
+            if (error?.code !== 'invalid_token' || !credential) throw error;
+            await this.gofileCredentialStore.clearInvalidToken();
+            credential = null;
+            upload = await this.gofileService.upload(new Blob([mirrorBytes], { type: 'application/json' }), {
+                filename: GOFILE_MIRROR_FILENAME
+            });
+        }
+        if (upload.guestToken) {
+            await this.gofileCredentialStore.write({ token: upload.guestToken, folderId: upload.parentFolder });
+        }
+        if (!upload.mirrorLocator) throw new Error('GoFile upload returned no public mirror locator.');
+        mirror = { locator: upload.mirrorLocator, downloadPage: upload.downloadPage };
+    } catch (error) {
+        mirrorError = error;
+        this.log(`Temporary GoFile mirror unavailable: ${error.message}`);
+    }
 
     this.showUploadResult(
         hash,
         this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
-        this.lastPublishCandidate.torrent
+        this.lastPublishCandidate.torrent,
+        mirror?.locator || null
     );
 
     const output = document.getElementById('publish-output');
@@ -1357,6 +1402,9 @@ export async function deploySignedArtifact() {
             {
                 deploymentStatus: 'completed',
                 torrentHash: hash,
+                temporaryMirror: mirror
+                    ? { status: 'available', locator: mirror.locator, downloadPage: mirror.downloadPage }
+                    : { status: 'unavailable', error: mirrorError?.message || 'Upload failed' },
                 artifactMode: 'in-memory-bundle',
                 signedBy: identity.address,
                 signature: this.lastSignature.signature,
@@ -1373,19 +1421,32 @@ export async function deploySignedArtifact() {
         );
     }
 
-    const url = `${window.location.origin}${window.location.pathname}?orc=${hash}`;
+    const url = formatWeb25Url({
+        torrentHash: hash,
+        gofileLocator: mirror?.locator || null,
+        origin: window.location.origin,
+        pathname: window.location.pathname
+    });
     this.renderDeploymentSummary({
         hash,
         url,
         signedBy: identity.address,
         signature: this.lastSignature.signature,
-        signatureStatus: 'VERIFIED'
+        signatureStatus: 'VERIFIED',
+        mirror
     });
 
-    this.lastDeployResult = { hash, url, signedBy: identity.address };
+    this.lastDeployResult = { hash, url, signedBy: identity.address, mirror };
     this.persistDeploySession();
-    updateDeployProgress({ label: 'Seeding live', percent: 100, state: 'success' });
-    renderDeployStage('Deployment complete', 'Live and seeding from memory');
+    updateDeployProgress({
+        label: mirror ? 'Live + temporary mirror' : 'Live (temporary mirror unavailable)',
+        percent: 100,
+        state: 'success'
+    });
+    renderDeployStage(
+        'Deployment complete',
+        mirror ? 'Live, seeding, and temporarily mirrored' : 'Live and seeding; temporary mirror unavailable'
+    );
 }
 
 export function setupAuthAwareUi(state) {
@@ -1689,9 +1750,9 @@ export function setupEventListeners() {
     if (loadSite) {
         loadSite.addEventListener('click', () => {
             const hashInput = /** @type {HTMLInputElement} */ (document.getElementById('hash-input'));
-            const hash = hashInput.value.trim();
-            if (hash) {
-                this.loadSite(hash);
+            const address = hashInput.value.trim();
+            if (address) {
+                this.loadSite(address);
             }
         });
     }
@@ -1702,9 +1763,9 @@ export function setupEventListeners() {
         hashInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 const target = /** @type {HTMLInputElement} */ (e.target);
-                const hash = target.value.trim();
-                if (hash) {
-                    this.loadSite(hash);
+                const address = target.value.trim();
+                if (address) {
+                    this.loadSite(address);
                 }
             }
         });
@@ -1888,19 +1949,32 @@ export async function restoreDeploySession() {
                 this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
 
                 if (savedSession.deployed) {
-                    const url = `${window.location.origin}${window.location.pathname}?orc=${savedSession.hash}`;
+                    const savedAddress = savedSession.deployResult?.url
+                        ? parseWeb25Address(savedSession.deployResult.url)
+                        : { torrentHash: savedSession.hash, gofileLocator: null };
+                    const url = formatWeb25Url({
+                        ...savedAddress,
+                        origin: window.location.origin,
+                        pathname: window.location.pathname
+                    });
                     this.lastDeployResult = savedSession.deployResult || {
                         hash: savedSession.hash,
                         url,
                         signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
                     };
-                    this.showUploadResult(savedSession.hash, signedTorrentBuffer, torrent);
+                    this.showUploadResult(
+                        savedSession.hash,
+                        signedTorrentBuffer,
+                        torrent,
+                        this.lastDeployResult.mirror?.locator || null
+                    );
                     this.renderDeploymentSummary({
                         hash: savedSession.hash,
                         url: this.lastDeployResult.url,
                         signedBy: this.lastDeployResult.signedBy,
                         signature: this.lastSignature.signature,
-                        signatureStatus: 'VERIFIED'
+                        signatureStatus: 'VERIFIED',
+                        mirror: this.lastDeployResult.mirror || null
                     });
                 }
                 resolve();

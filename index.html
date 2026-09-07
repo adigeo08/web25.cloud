@@ -312,6 +312,7 @@
                                     <h4>✅ Website Ready</h4>
                                     <div class="result-info">
                                         <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
+                                        <p id="result-gofile-row" class="hidden"><strong>Temporary GoFile mirror:</strong> <code id="result-gofile-mirror"></code></p>
                                         <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
                                         <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
                                         <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
@@ -331,7 +332,7 @@
                                         <div class="notice-box">
                                             <h5>☁️ Hosting Notice</h5>
                                             <p>Your website is signed, deployed, and seeding from an in-memory bundle in this session.</p>
-                                            <p>Keep this tab open for longer availability.</p>
+                                            <p>Keep this tab open for P2P availability. GoFile mirrors are temporary fallback transport.</p>
                                         </div>
                                     </div>
                                 </div>
@@ -347,7 +348,8 @@
                                 <span class="step-chip">3. Review payload</span>
                                 <span class="step-chip">4. Sign payload</span>
                                 <span class="step-chip">5. Deploy signed memory torrent</span>
-                                <span class="step-chip">6. Live and seeding</span>
+                                <span class="step-chip">6. Create GoFile mirror</span>
+                                <span class="step-chip">7. Live + mirrored</span>
                             </div>
                             <div class="deploy-stage-box">
                                 <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
@@ -532,10 +534,10 @@
                         <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
                         <p>Resolve and open any peer-hosted website through your local browser node.</p>
                         <div class="hash-input-group">
-                            <input type="text" id="hash-input" placeholder="Enter torrent hash..." class="hash-input" />
+                            <input type="text" id="hash-input" placeholder="Torrent hash, hash&amp;mirror, or WEB25 URL..." class="hash-input" />
                             <button id="load-site" class="btn btn-primary">Load Site</button>
                         </div>
-                        <p>🎯 Just the hash — WEB25.cloud automatically adds the magnet link prefix and trackers.</p>
+                        <p>🎯 Enter a hash, <code>hash&amp;GoFileLocator</code>, or a complete WEB25 URL. P2P is always tried first.</p>
                     </section>
 
                     <section class="debug console-widget card-base">
