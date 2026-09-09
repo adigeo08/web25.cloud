@@ -8,13 +8,20 @@ globalThis.window = globalThis.window || { location: { hostname: 'localhost' } }
 const loader = () => import('../src/core/torrent/TorrentLoader.js');
 
 const HASH = '0123456789abcdef0123456789abcdef01234567';
-const LOCATOR = 'store6~9632c967-30e5-4123-856a-8b2c425d1c74';
+const LOCATOR = '9632c967-30e5-4123-856a-8b2c425d1c74';
+
+/** The Worker needs a credential, and a visitor mints a throwaway one. */
+const guestAccount = async () => {
+    const account = { tier: 'guest' };
+    Object.defineProperty(account, 'token', { value: 'minted-for-this-read', enumerable: false });
+    return account;
+};
 
 test('legacy terminal torrent failure never contacts GoFile', async () => {
     const { handleTerminalP2PFailure } = await loader();
     let contacted = false;
     const context = {
-        gofileService: { downloadPublicMirror: async () => (contacted = true) },
+        gofileService: { createGuestAccount: guestAccount, downloadPublicMirror: async () => (contacted = true) },
         hideLoadingOverlay() {},
         log() {}
     };
@@ -34,6 +41,7 @@ test('terminal torrent failure with locator enters GoFile path but never renders
     let rendered = false;
     const context = {
         gofileService: {
+            createGuestAccount: guestAccount,
             downloadPublicMirror: async () => {
                 contacted += 1;
                 throw new Error('mirror offline');
@@ -81,7 +89,7 @@ test('a valid bound mirror converges on the existing verification and processing
     let chainChecks = 0;
     let processed = 0;
     const context = {
-        gofileService: { downloadPublicMirror: async () => mirrorWire },
+        gofileService: { createGuestAccount: guestAccount, downloadPublicMirror: async () => mirrorWire },
         verifyTorrentChainBeforeDownload: async (torrent, requested) => {
             chainChecks += 1;
             assert.equal(requested, hash);
@@ -108,6 +116,7 @@ test("the resolver asks for this deployment's own locator and mirror filename", 
     const asked = [];
     const context = {
         gofileService: {
+            createGuestAccount: guestAccount,
             downloadPublicMirror: async (locator, options) => {
                 asked.push({ locator, expectedFilename: options?.expectedFilename });
                 throw new Error('mirror offline');
@@ -143,6 +152,9 @@ test('a stalled mirror ends the load instead of hanging the overlay', async () =
                 }),
             downloadTimeoutMs: 25
         }),
+        // A credential already in hand, so the stall under test is the mirror
+        // download rather than the account mint that would precede it.
+        gofileCredentialStore: { read: async () => ({ token: 'visitor-token' }) },
         hideLoadingOverlay() {
             overlayHidden += 1;
         },
@@ -192,7 +204,7 @@ test('a mirror bound to a different torrent is refused before any render', async
     let chainChecks = 0;
     let alerted = '';
     const context = {
-        gofileService: { downloadPublicMirror: async () => mirrorWire },
+        gofileService: { createGuestAccount: guestAccount, downloadPublicMirror: async () => mirrorWire },
         verifyTorrentChainBeforeDownload: async () => {
             chainChecks += 1;
             return { ok: true };
@@ -222,12 +234,13 @@ test('a mirror bound to a different torrent is refused before any render', async
     assert.match(alerted, /info hash mismatch/i);
 });
 
-test('a visitor resolves the mirror without any credential', async () => {
+test('a visitor mints a throwaway credential for the read', async () => {
     const { handleTerminalP2PFailure } = await loader();
     const asked = [];
     const context = {
         gofileCredentialStore: { read: async () => ({ token: 'visitor-token' }) },
         gofileService: {
+            createGuestAccount: guestAccount,
             downloadPublicMirror: async (locator, options) => {
                 asked.push({ locator, token: options?.token ?? null, filename: options?.expectedFilename });
                 throw new Error('mirror offline');
@@ -244,12 +257,12 @@ test('a visitor resolves the mirror without any credential', async () => {
     } finally {
         globalThis.alert = previousAlert;
     }
-    // The storage route is public, so nothing about the visitor's wallet or
-    // stored credential can change whether a mirror resolves.
-    assert.deepEqual(asked, [{ locator: LOCATOR, token: null, filename: gofileMirrorFilename(HASH) }]);
+    // A stored credential is preferred when the wallet is open; this context
+    // has one, so nothing is minted.
+    assert.deepEqual(asked, [{ locator: LOCATOR, token: 'visitor-token', filename: gofileMirrorFilename(HASH) }]);
 });
 
-test('a locked wallet or missing credential still attempts the mirror', async () => {
+test('a locked wallet or empty store still resolves, by minting one', async () => {
     const { handleTerminalP2PFailure } = await loader();
     // The common case: someone opening a WEB25 link who has never deployed.
     for (const store of [
@@ -265,6 +278,7 @@ test('a locked wallet or missing credential still attempts the mirror', async ()
         const context = {
             gofileCredentialStore: store,
             gofileService: {
+                createGuestAccount: guestAccount,
                 downloadPublicMirror: async (locator, options) => {
                     asked.push(options?.token ?? null);
                     throw new Error('mirror offline');
@@ -281,7 +295,11 @@ test('a locked wallet or missing credential still attempts the mirror', async ()
         } finally {
             globalThis.alert = previousAlert;
         }
-        assert.deepEqual(asked, [null], 'the mirror is attempted, unauthenticated, without a wallet error');
+        assert.deepEqual(
+            asked,
+            ['minted-for-this-read'],
+            'a locked wallet is not an error: a throwaway credential is minted instead'
+        );
     }
 });
 
@@ -305,6 +323,7 @@ function loaderContext({ onAdd, contacted, handleTerminalP2PFailure }) {
         log() {},
         toast: { info() {} },
         gofileService: {
+            createGuestAccount: guestAccount,
             downloadPublicMirror: async () => {
                 contacted.push('gofile');
                 throw new Error('mirror offline');

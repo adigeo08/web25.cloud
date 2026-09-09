@@ -384,6 +384,26 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     }
 }
 
+/**
+ * A credential the mirror service will accept.
+ *
+ * A visitor resolving a WEB25 link is usually not the publisher: no wallet is
+ * unlocked and nothing is stored. That is the ordinary case, so a throwaway
+ * guest account is minted for this one read and never persisted — it grants
+ * nothing beyond reading public content, and a locked wallet cannot hold it
+ * anyway. A publisher's own stored credential is preferred when it is there.
+ */
+async function readerCredential(service, store) {
+    try {
+        const credential = await store?.read();
+        if (credential?.token) return credential.token;
+    } catch (_) {
+        // A locked wallet is not an error here; mint one instead.
+    }
+    const account = await service.createGuestAccount();
+    return account.token;
+}
+
 export async function handleTerminalP2PFailure(
     hash,
     gofileLocator,
@@ -411,11 +431,9 @@ export async function handleTerminalP2PFailure(
         this.toast?.info?.('No torrent peers available. Trying the temporary GoFile mirror…', 'Fallback transport');
         const service = this.gofileService || new GoFileService();
         // Ask for this deployment's mirror by name. Hash verification below is
-        // what makes the bytes trustworthy; it is not how the right mirror is
-        // picked out of a locator that may hold more than one.
-        // The public storage route needs no account, so a visitor resolves a
-        // mirror exactly as the publisher verified it.
+        // what makes the bytes trustworthy; the name is only what picks it.
         const wireBytes = await service.downloadPublicMirror(gofileLocator, {
+            token: await readerCredential(service, this.gofileCredentialStore),
             expectedFilename: gofileMirrorFilename(hash),
             signal: controller.signal
         });

@@ -5,32 +5,18 @@ export const GOFILE_UPLOAD_ENDPOINT = 'https://upload.gofile.io/uploadfile';
 export const GOFILE_ACCOUNTS_ENDPOINT = 'https://api.gofile.io/accounts';
 
 /**
- * The route GoFile's own web client uses to fetch a public file's bytes. It is
- * not part of the API reference — the documented listing and direct-link
- * routes are both Premium — so the shape is pinned here and validated hard.
- */
-export const GOFILE_STORAGE_URL = (server, contentId, filename) =>
-    `https://${server}.gofile.io/download/web/${contentId}/${encodeURIComponent(filename)}`;
-
-/**
- * GoFile's storage servers send no `Access-Control-Allow-Origin`, and an
- * unauthenticated request to one is redirected to the human download page —
- * which sends none either. A browser therefore cannot read a mirror directly,
- * whatever the URL. Reads go through a CORS proxy instead.
+ * WEB25's own Cloudflare Worker, which reads GoFile on a browser's behalf.
  *
- * Only reads. The upload carries the account credential and always goes
- * straight to GoFile: handing a bearer token to a third party would give away
- * the account, and the upload has no CORS problem to solve in the first place.
+ * A page cannot do this itself: GoFile's storage servers send no CORS headers,
+ * the byte download is authenticated by a cookie JavaScript may not set, and
+ * listing needs a custom header whose preflight nothing answers. The Worker
+ * holds no credential of its own — each caller sends theirs per request — so it
+ * moves the transport barrier without moving the trust.
  */
-export const GOFILE_READ_PROXY = 'https://api.allorigins.win';
-export const proxiedRawUrl = (proxy, target) => `${proxy}/raw?url=${encodeURIComponent(target)}`;
-export const proxiedEnvelopeUrl = (proxy, target) => `${proxy}/get?url=${encodeURIComponent(target)}`;
+export const GOFILE_WORKER_BASE = 'https://gofile-cf-downloader.carlgray.workers.dev';
+export const workerFileUrl = (base, contentId, filename) =>
+    `${base}/file/${encodeURIComponent(contentId)}/${encodeURIComponent(filename)}`;
 
-/**
- * GoFile is best-effort fallback transport, never the primary one, so every
- * request is bounded. A stalled GoFile call must cost the mirror and nothing
- * else: not the deployment, not the resolver, not the loading overlay.
- */
 export const GOFILE_UPLOAD_TIMEOUT_MS = 30000;
 export const GOFILE_DOWNLOAD_TIMEOUT_MS = 30000;
 export const GOFILE_MIRROR_MAX_BYTES = 64 * 1024 * 1024;
@@ -55,23 +41,28 @@ const STORAGE_SERVER = /^[A-Za-z0-9-]{1,64}$/;
 const CONTENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * A mirror locator names the storage server and the content UUID that together
- * address one uploaded file: `<server>~<uuid>`. Both halves come straight from
- * the upload response, so nothing has to be looked up to read the mirror back.
+ * A mirror locator is the content UUID of one uploaded mirror. The Worker
+ * resolves which storage server holds it, so nothing else has to be carried.
  */
-export function formatMirrorLocator(server, contentId) {
-    return `${server}~${`${contentId}`.toLowerCase()}`;
+export function formatMirrorLocator(contentId) {
+    return `${contentId}`.toLowerCase();
 }
 
+/**
+ * Links published while reads went straight to storage carry `<server>~<uuid>`.
+ * The server half is no longer needed, but those links must keep working, so it
+ * is accepted and dropped.
+ */
 export function parseMirrorLocator(locator) {
-    const [server, contentId, ...extra] = `${locator || ''}`.split('~');
-    if (extra.length > 0 || !STORAGE_SERVER.test(`${server}`) || !CONTENT_UUID.test(`${contentId}`)) {
+    const parts = `${locator || ''}`.split('~');
+    const contentId = parts.length === 2 && STORAGE_SERVER.test(parts[0]) ? parts[1] : parts[0];
+    if (parts.length > 2 || !CONTENT_UUID.test(`${contentId}`)) {
         throw new GoFileError(
             'invalid_locator',
-            'This WEB25 address carries a mirror locator that names no GoFile storage server.'
+            'This WEB25 address carries a mirror locator that is not a GoFile content id.'
         );
     }
-    return { server, contentId: contentId.toLowerCase() };
+    return { contentId: `${contentId}`.toLowerCase() };
 }
 
 /**
@@ -110,20 +101,20 @@ function transportError(cause, signal, timeoutMs, subject) {
  */
 export class GoFileService {
     /**
-     * @param {{ fetchImpl?: typeof fetch, endpoint?: string, readProxy?: string,
+     * @param {{ fetchImpl?: typeof fetch, endpoint?: string, workerBase?: string,
      *           uploadTimeoutMs?: number, downloadTimeoutMs?: number }} [options]
      */
     constructor({
         fetchImpl = globalFetch(),
         endpoint = GOFILE_UPLOAD_ENDPOINT,
-        readProxy = GOFILE_READ_PROXY,
+        workerBase = GOFILE_WORKER_BASE,
         uploadTimeoutMs = GOFILE_UPLOAD_TIMEOUT_MS,
         downloadTimeoutMs = GOFILE_DOWNLOAD_TIMEOUT_MS
     } = {}) {
         if (typeof fetchImpl !== 'function') throw new TypeError('GoFileService requires fetch.');
         this.fetchImpl = fetchImpl;
         this.endpoint = endpoint;
-        this.readProxy = `${readProxy}`.replace(/\/$/, '');
+        this.workerBase = `${workerBase}`.replace(/\/$/, '');
         this.uploadTimeoutMs = uploadTimeoutMs;
         this.downloadTimeoutMs = downloadTimeoutMs;
     }
@@ -241,7 +232,7 @@ export class GoFileService {
             parentFolderCode,
             downloadPage,
             servers,
-            mirrorLocator: servers.length > 0 ? formatMirrorLocator(servers[0], id) : null,
+            mirrorLocator: formatMirrorLocator(id),
             // A share code/page proves that a public share exists, not that an
             // unrelated browser can resolve it through the documented API.
             publicShareAvailable: Boolean(parentFolderCode && downloadPage),
@@ -256,85 +247,74 @@ export class GoFileService {
     }
 
     /**
-     * Fetch one mirror's bytes straight from the storage server that holds it.
+     * Fetch one mirror's bytes through the WEB25 Worker.
      *
-     * There is no lookup step: the locator carries the server and the content
-     * id, and the filename is derived from the torrent hash, so the URL is
-     * fully determined before the first request. That is also what picks the
-     * right mirror — a wrong name is a 404, not a wrong file — and it keeps the
-     * account credential away from a host we do not control.
+     * One request: the locator names the content and the filename comes from
+     * the torrent hash, so the URL is settled before anything is sent. That is
+     * also what picks the deployment — a wrong name is a 404 from the Worker,
+     * never the wrong bytes.
+     *
+     * The token is the caller's own GoFile credential, which the Worker needs
+     * because it deliberately holds none.
      * @param {string} locator
-     * @param {{ expectedFilename: string, signal?: AbortSignal, downloadTimeoutMs?: number }} options
+     * @param {{ token: string, expectedFilename: string, signal?: AbortSignal,
+     *           downloadTimeoutMs?: number }} options
      */
-    async downloadPublicMirror(locator, { expectedFilename, signal, downloadTimeoutMs = this.downloadTimeoutMs } = {}) {
+    async downloadPublicMirror(
+        locator,
+        { token, expectedFilename, signal, downloadTimeoutMs = this.downloadTimeoutMs } = {}
+    ) {
         if (typeof expectedFilename !== 'string' || !MIRROR_FILENAME.test(expectedFilename)) {
             throw new GoFileError('invalid_request', 'GoFile mirror filename is invalid.');
         }
-        const { server, contentId } = parseMirrorLocator(locator);
-        const target = GOFILE_STORAGE_URL(server, contentId, expectedFilename);
-
-        // `/raw` hands back the body untouched, which is what verification
-        // needs. `/get` wraps it in a JSON envelope as a string, so it is only
-        // a fallback for when `/raw` is unavailable — and only survives here
-        // because a mirror is UTF-8 JSON rather than arbitrary bytes.
-        const response = await this._fetchThroughProxy(
-            proxiedRawUrl(this.readProxy, target),
-            signal,
-            downloadTimeoutMs
-        );
-        if (response.ok) return guardMirrorBody(await readBoundedBytes(response, signal, downloadTimeoutMs));
-        if (response.status !== 404 && response.status !== 400) {
-            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${response.status}).`, {
-                status: response.status
-            });
+        if (typeof token !== 'string' || token.length === 0) {
+            throw new GoFileError('invalid_token', 'Reading a GoFile mirror needs a GoFile credential.');
         }
+        const { contentId } = parseMirrorLocator(locator);
 
-        const envelope = await this._fetchThroughProxy(
-            proxiedEnvelopeUrl(this.readProxy, target),
-            signal,
-            downloadTimeoutMs
-        );
-        if (!envelope.ok) {
-            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${envelope.status}).`, {
-                status: envelope.status
-            });
-        }
-        const bytes = await readBoundedBytes(envelope, signal, downloadTimeoutMs);
-        let contents;
+        let response;
         try {
-            contents = JSON.parse(new TextDecoder().decode(bytes))?.contents;
+            response = await this.fetchImpl(workerFileUrl(this.workerBase, contentId, expectedFilename), {
+                headers: { Authorization: `Bearer ${token}` },
+                signal: boundedSignal(downloadTimeoutMs, signal)
+            });
         } catch (cause) {
-            throw new GoFileError('invalid_response', 'The CORS proxy returned an unreadable envelope.', { cause });
+            throw transportError(cause, signal, downloadTimeoutMs, 'The GoFile mirror service');
         }
-        if (typeof contents !== 'string') {
-            throw new GoFileError('invalid_response', 'The CORS proxy returned no mirror contents.');
-        }
-        return guardMirrorBody(new TextEncoder().encode(contents));
-    }
-
-    async _fetchThroughProxy(url, signal, timeoutMs) {
-        try {
-            return await this.fetchImpl(url, { signal: boundedSignal(timeoutMs, signal) });
-        } catch (cause) {
-            throw transportError(cause, signal, timeoutMs, 'GoFile mirror bytes');
-        }
+        if (!response.ok) throw classifyWorkerFailure(await failureBody(response), response.status);
+        return readBoundedBytes(response, signal, downloadTimeoutMs);
     }
 }
 
 /**
- * An unauthenticated storage request is redirected to GoFile's download page,
- * and a proxy follows redirects, so the likeliest wrong answer is a page of
- * HTML rather than a mirror. Say that, instead of failing later as bad JSON.
+ * The Worker answers every failure as {"error", "message"}. It has already
+ * translated GoFile's own statuses, so this maps its vocabulary rather than
+ * re-reading the ones underneath.
  */
-function guardMirrorBody(bytes) {
-    const head = new TextDecoder().decode(bytes.slice(0, 64)).trimStart().toLowerCase();
-    if (head.startsWith('<!doctype') || head.startsWith('<html')) {
-        throw new GoFileError(
-            'mirror_not_found',
-            'GoFile served its download page instead of the mirror: the file is gone, or the storage route now requires a session.'
-        );
+function classifyWorkerFailure(body, status) {
+    const code = typeof body?.error === 'string' ? body.error : null;
+    const detail = typeof body?.message === 'string' ? body.message : `HTTP ${status}`;
+    switch (code) {
+        case 'missing_token':
+        case 'listing_refused':
+            return new GoFileError('invalid_token', `The GoFile mirror service refused the credential: ${detail}`, {
+                status
+            });
+        case 'file_not_found':
+        case 'not_found':
+        case 'download_page_returned':
+            return new GoFileError('mirror_not_found', `This deployment has no readable mirror: ${detail}`, { status });
+        case 'too_large':
+            return new GoFileError('too_large', detail, { status });
+        case 'invalid_content_id':
+        case 'invalid_filename':
+        case 'invalid_path':
+            return new GoFileError('invalid_request', detail, { status });
+        default:
+            return new GoFileError('http', `The GoFile mirror service failed (${code || `HTTP ${status}`}).`, {
+                status
+            });
     }
-    return bytes;
 }
 
 async function readBoundedBytes(response, signal, timeoutMs) {

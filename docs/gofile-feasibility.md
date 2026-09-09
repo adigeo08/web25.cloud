@@ -92,41 +92,45 @@ credential is sent to the storage host at all — a visitor resolves a mirror
 exactly as the publisher verified it, with no account, no wallet, and nothing to
 unlock. The credential is now only ever used for the upload.
 
-## Reads go through a CORS proxy
+## Reads go through WEB25's own Worker
 
-Observed live on 2026-09-09: a browser request to the storage route is
-**redirected** to `https://gofile.io/d/<uuid>`, the human download page, and
-neither the storage server nor that page sends an `Access-Control-Allow-Origin`
-header. So a page on another origin cannot read a mirror directly, whatever URL
-it uses — this is the same wall the Premium listing route hit, one layer down.
+Observed live: a browser request to the storage route is **redirected** to
+`https://gofile.io/d/<uuid>`, and neither the storage server nor that page sends
+an `Access-Control-Allow-Origin` header. A public CORS proxy did not rescue it
+either — `api.allorigins.win/raw` answered without the header too.
 
-Mirror reads therefore go through a CORS proxy, `api.allorigins.win` by default
-and configurable so it need not be a public one. `/raw` is used first because it
-returns the body untouched, which is what piece-hash verification needs; `/get`
-is a fallback for when `/raw` is unavailable, and only works here because a
-mirror is UTF-8 JSON rather than arbitrary bytes.
+Reads now go through a Cloudflare Worker of our own,
+`gofile-cf-downloader.carlgray.workers.dev`, which does the three things a page
+cannot: it reaches storage without CORS in its way, sets the `Cookie` a browser
+forbids JavaScript from setting, and sends the custom `X-Website-Token` whose
+preflight nothing answers. Its source and contract live in
+[adigeo08/gofile-cf-downloader](https://github.com/adigeo08/gofile-cf-downloader);
+the base URL is a constant here and overridable per instance.
 
-**Only reads.** The upload and the account call always go straight to GoFile:
-both carry `Authorization: Bearer`, and routing a token through a third party
-would hand over the whole account. Neither has a CORS problem to solve anyway —
-`api.gofile.io` is CORS-enabled and the upload endpoint accepts the request as
-it is. A test asserts no credentialed call is ever proxied.
+The Worker holds **no GoFile credential**. Each caller sends their own as
+`Authorization: Bearer`, so the transport barrier moves without the trust moving
+with it. Two callers, two situations:
 
-What this costs is honest to state: an optional fallback transport now depends
-on a free third-party service, with its uptime, its rate limits, and its
-operator able to see traffic that is public by construction but was previously
-nobody else's business. It is one more reason the mirror stays opt-in and
-best-effort, and a reason to point `readProxy` at your own deployment if the
-fallback ever matters more than convenience.
+- A **publisher** verifying their own upload sends the credential that owns it —
+  the stored one when it authenticated the upload, otherwise the one GoFile
+  issued for it. The read-back therefore exercises the exact route a visitor
+  will use, rather than a privileged shortcut.
+- A **visitor** resolving a WEB25 link usually has no wallet unlocked and
+  nothing stored, so a throwaway guest account is minted for that one read and
+  never persisted. It grants nothing beyond reading public content, and a locked
+  wallet could not hold it anyway.
 
-Because a proxy follows redirects server-side, the likeliest wrong answer is the
-download page rather than the file. That case is detected by its HTML and named
-as such, instead of surfacing as malformed JSON several layers later.
+A locator is now just the content UUID; the Worker resolves which storage server
+holds it. Links published in the earlier `<server>~<uuid>` form still resolve —
+the prefix is accepted and dropped — so nothing already shared breaks.
 
-Per the conventions in the reference: content ids are UUIDs and that is what a
-locator carries; share codes address the same content but grant no extra access,
-so they are not used here; and all of this is independent of folder listings,
-which is the paginated, Premium-gated surface we no longer touch.
+The Worker's error vocabulary is translated rather than passed through:
+`missing_token` and `listing_refused` become a credential problem,
+`file_not_found` and `download_page_returned` become a missing mirror.
+
+What this costs is a service WEB25 operates. That is a real dependency, but it
+is ours: no third party sees the traffic, and the fallback stops depending on a
+free public proxy's uptime.
 
 ## The credential lives in a browser
 
