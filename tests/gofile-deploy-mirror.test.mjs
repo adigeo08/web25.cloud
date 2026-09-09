@@ -88,6 +88,7 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
         createGoFileMirror: lifecycle.createGoFileMirror,
         isGoFileMirrorRequested: lifecycle.isGoFileMirrorRequested,
         renderDeploymentSummary: lifecycle.renderDeploymentSummary,
+        ensureGoFileCredential: lifecycle.ensureGoFileCredential,
         refreshDeployUiState: lifecycle.refreshDeployUiState,
         showUploadResult: uploader.showUploadResult,
         sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
@@ -390,4 +391,71 @@ test('an expired guest token is reset once and the retry keeps the same filename
     assert.equal(attempts[1].token, null);
     assert.equal(attempts[0].filename, attempts[1].filename);
     assert.equal(context.lastDeployResult.mirror.locator, 'file_retry');
+});
+
+test('signing in provisions a GoFile credential when the identity has none', async () => {
+    const { context } = await deployContext();
+    const written = [];
+    let stored = null;
+    context.gofileCredentialStore = {
+        read: async () => stored,
+        write: async ({ token }) => {
+            written.push(token);
+            stored = { token };
+        },
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        createGuestAccount: async () => {
+            const account = { id: 'acc', rootFolder: 'root', tier: 'guest' };
+            Object.defineProperty(account, 'token', { value: 'minted-at-login', enumerable: false });
+            return account;
+        }
+    };
+
+    assert.equal(await context.ensureGoFileCredential(), 'created');
+    assert.deepEqual(written, ['minted-at-login']);
+
+    // Signing in again must not mint a second credential.
+    assert.equal(await context.ensureGoFileCredential(), 'present');
+    assert.deepEqual(written, ['minted-at-login']);
+});
+
+test('a GoFile outage at sign-in is absorbed, never surfaced as a login failure', async () => {
+    const { context } = await deployContext();
+    context.gofileCredentialStore = {
+        read: async () => null,
+        write: async () => {
+            throw new Error('should not be reached');
+        },
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        createGuestAccount: async () => {
+            throw new Error('GoFile guest account timed out after 20s.');
+        }
+    };
+
+    assert.equal(await context.ensureGoFileCredential(), 'unavailable');
+});
+
+test('a locked wallet at sign-in leaves the credential alone', async () => {
+    const { context } = await deployContext();
+    let minted = 0;
+    context.gofileCredentialStore = {
+        read: async () => {
+            throw new Error('Unlock your wallet to use the GoFile guest credential.');
+        },
+        write: async () => {},
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        createGuestAccount: async () => {
+            minted += 1;
+            return {};
+        }
+    };
+
+    assert.equal(await context.ensureGoFileCredential(), 'unavailable');
+    assert.equal(minted, 0, 'nothing is minted that could not be stored');
 });

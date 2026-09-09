@@ -3,6 +3,7 @@
 /** The only guest operation documented by GoFile. */
 export const GOFILE_UPLOAD_ENDPOINT = 'https://upload.gofile.io/uploadfile';
 export const GOFILE_CONTENT_ENDPOINT = 'https://api.gofile.io/contents';
+export const GOFILE_ACCOUNTS_ENDPOINT = 'https://api.gofile.io/accounts';
 
 /**
  * GoFile is best-effort fallback transport, never the primary one, so every
@@ -13,6 +14,7 @@ export const GOFILE_UPLOAD_TIMEOUT_MS = 30000;
 export const GOFILE_METADATA_TIMEOUT_MS = 20000;
 export const GOFILE_DOWNLOAD_TIMEOUT_MS = 30000;
 export const GOFILE_MIRROR_MAX_BYTES = 64 * 1024 * 1024;
+export const GOFILE_ACCOUNT_TIMEOUT_MS = 20000;
 
 /** A transport/protocol error which is safe to show to a user. */
 export class GoFileError extends Error {
@@ -27,6 +29,7 @@ export class GoFileError extends Error {
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const MIRROR_FILENAME = /^[A-Za-z0-9_.-]{1,128}$/;
+const ACCOUNT_TOKEN = /^[A-Za-z0-9._~+/=-]{8,4096}$/;
 
 /**
  * The global fetch, bound to the global.
@@ -83,6 +86,56 @@ export class GoFileService {
     }
 
     /**
+     * Create a guest account and return its token.
+     *
+     * Documented as unauthenticated with an empty body: GoFile mints a guest
+     * account on the spot. The token it returns is the same kind of credential
+     * a dashboard API key is, so everything downstream treats them alike.
+     * @param {{ signal?: AbortSignal, timeoutMs?: number }} [options]
+     */
+    async createGuestAccount({ signal, timeoutMs = GOFILE_ACCOUNT_TIMEOUT_MS } = {}) {
+        let response;
+        try {
+            response = await this.fetchImpl(GOFILE_ACCOUNTS_ENDPOINT, {
+                method: 'POST',
+                signal: boundedSignal(timeoutMs, signal)
+            });
+        } catch (cause) {
+            throw transportError(cause, signal, timeoutMs, 'GoFile guest account');
+        }
+        if (!response.ok) {
+            throw new GoFileError('http', `GoFile guest account failed (HTTP ${response.status}).`, {
+                status: response.status
+            });
+        }
+        let body;
+        try {
+            body = await response.json();
+        } catch (cause) {
+            if (cause?.name === 'TimeoutError' || cause?.name === 'AbortError') {
+                throw transportError(cause, signal, timeoutMs, 'GoFile guest account');
+            }
+            throw new GoFileError('invalid_response', 'GoFile returned an unreadable account response.', { cause });
+        }
+        if (body?.status !== 'ok' || !body?.data || typeof body.data !== 'object') {
+            throw new GoFileError('api', `GoFile refused to create a guest account (${apiStatus(body)}).`);
+        }
+        const token = body.data.token;
+        if (typeof token !== 'string' || !ACCOUNT_TOKEN.test(token)) {
+            throw new GoFileError('invalid_response', 'GoFile returned an unusable account token.');
+        }
+        const account = {
+            id: optionalId(body.data.id, 'account id'),
+            rootFolder: optionalId(body.data.rootFolder, 'root folder id'),
+            tier: typeof body.data.tier === 'string' ? body.data.tier : null
+        };
+        // Same handling as the upload's guest token: usable, but never carried
+        // into a JSON projection, a log line, or the UI by accident.
+        Object.defineProperty(account, 'token', { value: token, enumerable: false });
+        return account;
+    }
+
+    /**
      * Upload one mirror. No folder is ever reused: each deployment gets its own
      * upload, so one locator can never expose another deployment's mirror.
      * @param {Blob} file
@@ -125,7 +178,7 @@ export class GoFileService {
             throw new GoFileError('invalid_response', 'GoFile returned an unreadable upload response.', { cause });
         }
         if (body?.status !== 'ok' || !body?.data || typeof body.data !== 'object') {
-            throw new GoFileError('api', 'GoFile rejected the upload.');
+            throw new GoFileError('api', `GoFile rejected the upload (${apiStatus(body)}).`);
         }
 
         const data = body.data;
@@ -224,7 +277,9 @@ export class GoFileService {
             }
             throw new GoFileError('invalid_response', 'GoFile mirror metadata is unreadable.', { cause });
         }
-        if (body?.status !== 'ok') throw new GoFileError('api', 'GoFile could not resolve the public mirror.');
+        if (body?.status !== 'ok') {
+            throw new GoFileError('api', `GoFile could not resolve the public mirror (${apiStatus(body)}).`);
+        }
         const mirror = selectMirror(collectFiles(body.data), expectedFilename);
 
         let fileUrl;
@@ -292,6 +347,12 @@ async function readBoundedBytes(response, signal, timeoutMs) {
         offset += chunk.byteLength;
     }
     return bytes;
+}
+
+/** GoFile answers 200 with a status string like "error-notPremium"; keep it. */
+function apiStatus(body) {
+    const status = body?.status;
+    return typeof status === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(status) ? status : 'no status';
 }
 
 /** Pick the one mirror this deployment asked for, or refuse to guess. */

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
     GoFileError,
     GoFileService,
+    GOFILE_ACCOUNTS_ENDPOINT,
     GOFILE_CONTENT_ENDPOINT,
     GOFILE_UPLOAD_ENDPOINT,
     GOFILE_UPLOAD_TIMEOUT_MS,
@@ -111,6 +112,64 @@ test('first guest upload has no token and captures the issued credential private
     assert.equal(result.programmaticReadVerified, false);
     assert.doesNotMatch(JSON.stringify(result), /super-secret-token/);
     assert.deepEqual(Object.keys(result).includes('guestToken'), false);
+});
+
+test('a guest account is created unauthenticated, and its token stays out of projections', async () => {
+    let request;
+    const service = new GoFileService({
+        fetchImpl: async (url, init) => {
+            request = { url, method: init?.method, authorization: init?.headers?.Authorization ?? null };
+            return reply({
+                id: '9ed4fb4e-2f24-44f1-8e40-03e949a36517',
+                rootFolder: '86002706-7aa3-4143-a523-1660f089ba4a',
+                tier: 'guest',
+                token: 'eyJhbGciOiJIUzI1NiJ9.payload.signature'
+            });
+        }
+    });
+
+    const account = await service.createGuestAccount();
+
+    assert.equal(request.url, GOFILE_ACCOUNTS_ENDPOINT);
+    assert.equal(request.method, 'POST');
+    assert.equal(request.authorization, null, 'minting a credential needs no credential');
+    assert.equal(account.token, 'eyJhbGciOiJIUzI1NiJ9.payload.signature');
+    assert.equal(account.tier, 'guest');
+    assert.doesNotMatch(JSON.stringify(account), /eyJhbGciOiJIUzI1NiJ9/);
+});
+
+test('an account response without a usable token is refused', async () => {
+    for (const data of [{ id: 'x' }, { token: '' }, { token: 'has spaces in it' }, { token: 123 }]) {
+        const service = new GoFileService({ fetchImpl: async () => reply(data) });
+        await assert.rejects(
+            () => service.createGuestAccount(),
+            (error) => error instanceof GoFileError && error.code === 'invalid_response'
+        );
+    }
+});
+
+test('a stalled account request ends at its deadline', async () => {
+    const service = new GoFileService({ fetchImpl: stalled() });
+    await assert.rejects(
+        () => service.createGuestAccount({ timeoutMs: 25 }),
+        (error) => error instanceof GoFileError && error.code === 'timeout'
+    );
+});
+
+test("the API's own status string survives into the error", async () => {
+    // GoFile answers 200 with a status like "error-notPremium"; a generic
+    // message would hide exactly the thing worth reading.
+    const notPremium = new GoFileService({
+        fetchImpl: async () =>
+            new Response(JSON.stringify({ status: 'error-notPremium' }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            })
+    });
+    await assert.rejects(
+        () => notPremium.downloadPublicMirror('file_1', { token: 'guest', expectedFilename: NAME_ONE }),
+        (error) => error.code === 'api' && /error-notPremium/.test(error.message)
+    );
 });
 
 test('the locator is the uploaded content id, never the folder holding it', async () => {

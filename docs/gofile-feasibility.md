@@ -32,6 +32,15 @@ cancellation stays distinguishable from a deadline (`aborted` vs `timeout`).
 Mirror bytes are read as a bounded stream and refused past 64 MiB, whether the
 size is declared in `Content-Length` or only discovered while reading.
 
+A credential is provisioned at sign-in, not at upload time. `POST
+https://api.gofile.io/accounts` is documented as unauthenticated with an empty
+body: GoFile mints a guest account and returns its token, and that token is the
+same kind of credential a dashboard API key is. WEB25 mints one the moment the
+wallet unlocks — the only moment it can be encrypted to the identity — so a
+mirror never has to mint one mid-deploy, and someone who has signed in can
+authenticate a mirror read without ever having deployed. The call is
+best-effort: a GoFile outage at sign-in is logged and nothing else.
+
 Resolving content is an **authenticated** call. `GET /contents/<id>` answers
 401 without a credential — observed live on 2026-09-07 against a real upload —
 and GoFile draws no distinction between a token created from the dashboard and
@@ -49,7 +58,14 @@ wherever GoFile points.
 
 Whether one guest's token can resolve another guest's public content — the
 cross-guest question below — is what decides if the fallback works for anyone
-but the publisher. It remains unanswered.
+but the publisher. It remains unanswered, and there is a second, sharper
+version of it: at least one third-party account of the API states that direct
+listing through `/contents` is Premium-only, with non-premium accounts getting
+`status: "error-notPremium"` on a 200 response. That claim is uncorroborated —
+a second source describing the same API does not mention any tier restriction,
+and gofile.io could not be reached from the build environment to check. It is
+why the client now carries the API's own status string into its error message
+instead of a generic one: a single real deployment settles it.
 
 A mirror is only published as a locator once it has been **read back
 publicly**: after uploading, the client resolves its own locator by the same

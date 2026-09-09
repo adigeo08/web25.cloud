@@ -1693,6 +1693,37 @@ export function setupAuthAwareUi(state) {
         if (identityTab instanceof HTMLElement) {
             identityTab.click();
         }
+        // The wallet is unlocked exactly here, which is the only moment the
+        // credential can be encrypted or read. Provisioning now means a mirror
+        // never has to mint a credential mid-deploy, and a visitor who has
+        // signed in can authenticate a mirror read without ever deploying.
+        void this.ensureGoFileCredential();
+    }
+}
+
+/**
+ * Make sure this identity holds a GoFile credential, minting a guest one if it
+ * does not. Best-effort by design: GoFile is optional fallback transport, so
+ * nothing here may interrupt signing in.
+ * @returns {Promise<'present'|'created'|'unavailable'>}
+ */
+export async function ensureGoFileCredential() {
+    try {
+        const existing = await this.gofileCredentialStore.read();
+        if (existing?.token) return 'present';
+    } catch (error) {
+        this.log(`GoFile credential could not be read: ${error.message}`);
+        return 'unavailable';
+    }
+
+    try {
+        const account = await this.gofileService.createGuestAccount();
+        await this.gofileCredentialStore.write({ token: account.token });
+        this.log(`GoFile guest credential provisioned${account.tier ? ` (tier: ${account.tier})` : ''}.`);
+        return 'created';
+    } catch (error) {
+        this.log(`GoFile guest credential unavailable: ${error.message}`);
+        return 'unavailable';
     }
 }
 
