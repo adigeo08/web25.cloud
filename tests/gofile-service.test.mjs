@@ -156,9 +156,37 @@ test('a stalled account request ends at its deadline', async () => {
     );
 });
 
-test("the API's own status string survives into the error", async () => {
-    // GoFile answers 200 with a status like "error-notPremium"; a generic
-    // message would hide exactly the thing worth reading.
+test('failures are classified by the API status, not by the HTTP code', async () => {
+    // GoFile's own guidance: branch on status, since error-token and
+    // error-notPremium are both 401 and mean completely different things.
+    const cases = [
+        ['error-notPremium', 401, 'premium_required', /Premium-only/i],
+        ['error-token', 401, 'invalid_token', /rejected the credential/i],
+        ['error-rateLimit', 429, 'rate_limited', /rate limited/i],
+        ['error-notFound', 404, 'mirror_not_found', /no longer exists/i],
+        ['error-notOwner', 401, 'invalid_token', /belongs to another GoFile account/i]
+    ];
+    for (const [status, httpStatus, code, message] of cases) {
+        const service = new GoFileService({
+            fetchImpl: async () =>
+                new Response(JSON.stringify({ status }), {
+                    status: httpStatus,
+                    headers: { 'content-type': 'application/json' }
+                })
+        });
+        await assert.rejects(
+            () => service.downloadPublicMirror('file_1', { token: 'guest', expectedFilename: NAME_ONE }),
+            (error) => {
+                assert.equal(error.code, code, `${status} should map to ${code}`);
+                assert.match(error.message, message);
+                assert.match(error.message, new RegExp(status));
+                return true;
+            }
+        );
+    }
+});
+
+test('a Premium refusal answered as HTTP 200 is classified the same way', async () => {
     const notPremium = new GoFileService({
         fetchImpl: async () =>
             new Response(JSON.stringify({ status: 'error-notPremium' }), {
@@ -168,7 +196,15 @@ test("the API's own status string survives into the error", async () => {
     });
     await assert.rejects(
         () => notPremium.downloadPublicMirror('file_1', { token: 'guest', expectedFilename: NAME_ONE }),
-        (error) => error.code === 'api' && /error-notPremium/.test(error.message)
+        (error) => error.code === 'premium_required' && /error-notPremium/.test(error.message)
+    );
+});
+
+test('a failure with no readable body still classifies by HTTP code', async () => {
+    const service = new GoFileService({ fetchImpl: async () => new Response('<html>502</html>', { status: 502 }) });
+    await assert.rejects(
+        () => service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
+        (error) => error.code === 'http' && /HTTP 502/.test(error.message)
     );
 });
 
@@ -407,17 +443,11 @@ test('resolving content without a credential sends no Authorization at all', asy
     assert.equal(authorization, null);
 });
 
-test('an unauthorized read is reported as a credential problem, not a transport one', async () => {
+test('an unauthorized read with no status body is still a credential problem', async () => {
     const refused = new GoFileService({ fetchImpl: async () => new Response('nope', { status: 401 }) });
     await assert.rejects(
         () => refused.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error.code === 'invalid_token' && /requires a credential/i.test(error.message)
-    );
-
-    const rejected = new GoFileService({ fetchImpl: async () => new Response('nope', { status: 401 }) });
-    await assert.rejects(
-        () => rejected.downloadPublicMirror('file_1', { token: 'stale', expectedFilename: NAME_ONE }),
-        (error) => error.code === 'invalid_token' && /refused the mirror credential/i.test(error.message)
+        (error) => error.code === 'invalid_token' && /refused the credential/i.test(error.message)
     );
 });
 

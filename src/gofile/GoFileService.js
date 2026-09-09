@@ -104,9 +104,7 @@ export class GoFileService {
             throw transportError(cause, signal, timeoutMs, 'GoFile guest account');
         }
         if (!response.ok) {
-            throw new GoFileError('http', `GoFile guest account failed (HTTP ${response.status}).`, {
-                status: response.status
-            });
+            throw classifyApiFailure(await failureBody(response), response.status, 'Creating a GoFile guest account');
         }
         let body;
         try {
@@ -118,7 +116,7 @@ export class GoFileService {
             throw new GoFileError('invalid_response', 'GoFile returned an unreadable account response.', { cause });
         }
         if (body?.status !== 'ok' || !body?.data || typeof body.data !== 'object') {
-            throw new GoFileError('api', `GoFile refused to create a guest account (${apiStatus(body)}).`);
+            throw classifyApiFailure(body, 200, 'Creating a GoFile guest account');
         }
         const token = body.data.token;
         if (typeof token !== 'string' || !ACCOUNT_TOKEN.test(token)) {
@@ -255,18 +253,11 @@ export class GoFileService {
             throw transportError(cause, signal, metadataTimeoutMs, 'GoFile mirror metadata');
         }
         if (!metadataResponse.ok) {
-            if (metadataResponse.status === 401 || metadataResponse.status === 403) {
-                throw new GoFileError(
-                    'invalid_token',
-                    token
-                        ? `GoFile refused the mirror credential (HTTP ${metadataResponse.status}).`
-                        : `GoFile requires a credential to resolve this mirror (HTTP ${metadataResponse.status}).`,
-                    { status: metadataResponse.status }
-                );
-            }
-            throw new GoFileError('http', `GoFile mirror metadata failed (HTTP ${metadataResponse.status}).`, {
-                status: metadataResponse.status
-            });
+            throw classifyApiFailure(
+                await failureBody(metadataResponse),
+                metadataResponse.status,
+                'Resolving the GoFile mirror'
+            );
         }
         let body;
         try {
@@ -277,9 +268,8 @@ export class GoFileService {
             }
             throw new GoFileError('invalid_response', 'GoFile mirror metadata is unreadable.', { cause });
         }
-        if (body?.status !== 'ok') {
-            throw new GoFileError('api', `GoFile could not resolve the public mirror (${apiStatus(body)}).`);
-        }
+        // A 200 can still carry an error status; the same classification applies.
+        if (body?.status !== 'ok') throw classifyApiFailure(body, 200, 'Resolving the GoFile mirror');
         const mirror = selectMirror(collectFiles(body.data), expectedFilename);
 
         let fileUrl;
@@ -353,6 +343,58 @@ async function readBoundedBytes(response, signal, timeoutMs) {
 function apiStatus(body) {
     const status = body?.status;
     return typeof status === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(status) ? status : 'no status';
+}
+
+/**
+ * GoFile's own guidance is to branch on the status field rather than the HTTP
+ * code, because several statuses share one code: error-token and
+ * error-notPremium are both 401, and mean entirely different things to a
+ * publisher. Falls back to the code when there is no readable status.
+ */
+function classifyApiFailure(body, status, subject) {
+    switch (body?.status) {
+        case 'error-notPremium':
+            return new GoFileError(
+                'premium_required',
+                `${subject} needs a GoFile Premium account: the content API is Premium-only (error-notPremium).`,
+                { status }
+            );
+        case 'error-token':
+            return new GoFileError('invalid_token', `GoFile rejected the credential (error-token).`, { status });
+        case 'error-rateLimit':
+            return new GoFileError('rate_limited', `${subject} was rate limited by GoFile (error-rateLimit).`, {
+                status
+            });
+        case 'error-notFound':
+            return new GoFileError('mirror_not_found', `${subject} no longer exists on GoFile (error-notFound).`, {
+                status
+            });
+        case 'error-owner':
+        case 'error-notOwner':
+            return new GoFileError(
+                'invalid_token',
+                `The content belongs to another GoFile account (${apiStatus(body)}).`,
+                { status }
+            );
+        default:
+            break;
+    }
+    if (typeof body?.status === 'string') {
+        return new GoFileError('api', `${subject} failed (${apiStatus(body)}).`, { status });
+    }
+    if (status === 401 || status === 403) {
+        return new GoFileError('invalid_token', `GoFile refused the credential (HTTP ${status}).`, { status });
+    }
+    return new GoFileError('http', `${subject} failed (HTTP ${status}).`, { status });
+}
+
+/** Read a JSON envelope from a failed response without letting it throw. */
+async function failureBody(response) {
+    try {
+        return await response.json();
+    } catch (_) {
+        return null;
+    }
 }
 
 /** Pick the one mirror this deployment asked for, or refuse to guess. */

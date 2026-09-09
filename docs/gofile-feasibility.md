@@ -64,16 +64,50 @@ It is never attached to the storage URL that the API names in its response:
 that host is chosen by the response, and handing it a credential would leak one
 wherever GoFile points.
 
-Whether one guest's token can resolve another guest's public content — the
-cross-guest question below — is what decides if the fallback works for anyone
-but the publisher. It remains unanswered, and there is a second, sharper
-version of it: at least one third-party account of the API states that direct
-listing through `/contents` is Premium-only, with non-premium accounts getting
-`status: "error-notPremium"` on a 200 response. That claim is uncorroborated —
-a second source describing the same API does not mention any tier restriction,
-and gofile.io could not be reached from the build environment to check. It is
-why the client now carries the API's own status string into its error message
-instead of a generic one: a single real deployment settles it.
+## The blocking finding: the read route is Premium-only
+
+`GET /contents/{contentId}` is badged **Premium** in GoFile's own reference,
+which states it plainly: _"Direct API access to listings is Premium-only: other
+tiers receive `error-notPremium`."_ `error-notPremium` is listed as HTTP 401 —
+the same code as `error-token`, which is why a missing credential and a tier
+refusal look identical until the status field is read.
+
+This is decisive rather than a detail. Both places WEB25 reads a mirror — the
+publisher's own read-back after upload, and a visitor's fallback — go through
+that endpoint, so on a guest or free account **neither can succeed**, with or
+without a token. Adding the credential was still correct and necessary; it was
+simply never the whole obstacle. Creating a direct link
+(`POST /contents/{id}/directlinks`) is Premium too, so that route is closed as
+well.
+
+What a guest account _can_ do, per the same reference, is everything on the
+write side: create an account, upload, create folders, update and delete. The
+public download page at `gofile.io/d/<code>` also stays reachable — for a person
+in a browser. What has no documented, non-Premium API is a program resolving
+those bytes back, which is exactly what a verified fallback transport requires.
+
+So the options are: a Premium account (whose token would then have to live in a
+browser, against the reference's own advice — see below), an undocumented route
+the GoFile web client uses to resolve its own download pages, or accepting that
+GoFile is not a viable programmatic fallback at the free tier.
+
+Failures are now classified by the API's status field rather than the HTTP code,
+following the reference's instruction to _"always branch on the `status` field,
+not the HTTP code alone"_. A Premium refusal reports as `premium_required` and
+says so, instead of being mistaken for a bad credential.
+
+## The credential lives in a browser
+
+The reference is explicit: _"The token authenticates as the account itself —
+anyone holding it has full access. Keep it server-side: never embed it in public
+client-side code."_ WEB25 has no server, so its credential is necessarily
+client-side. It is never embedded in source or shipped in a build: it is minted
+per identity at sign-in and encrypted to that identity's Nostr key before it
+touches IndexedDB, so a locked wallet cannot read it and a second identity in
+the same browser cannot decrypt it. That is meaningfully stronger than what the
+warning is aimed at, and still weaker than server-side custody. It is a
+deliberate trade for a feature that is optional and best-effort by design, and
+it is another reason not to put a paid Premium token here.
 
 A mirror is only published as a locator once it has been **read back
 publicly**: after uploading, the client resolves its own locator by the same
