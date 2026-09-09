@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync } from 'node:zlib';
 
 if (typeof globalThis.DecompressionStream === 'undefined') {
     globalThis.DecompressionStream = class {
@@ -8,7 +8,7 @@ if (typeof globalThis.DecompressionStream === 'undefined') {
             if (format !== 'gzip') throw new Error('Unsupported format');
             const transform = new TransformStream({
                 transform(chunk, controller) {
-                    controller.enqueue(new Uint8Array(gzipSync([]).length ? requireGunzip(chunk) : chunk));
+                    controller.enqueue(new Uint8Array(gunzipSync(chunk)));
                 }
             });
             this.readable = transform.readable;
@@ -16,15 +16,6 @@ if (typeof globalThis.DecompressionStream === 'undefined') {
         }
     };
 }
-
-function requireGunzip(chunk) {
-    // Dynamic import is not available inside TransformStream callbacks in all
-    // supported Node versions, so use the global helper installed below.
-    return globalThis.__web25Gunzip(chunk);
-}
-
-const { gunzipSync } = await import('node:zlib');
-globalThis.__web25Gunzip = (chunk) => gunzipSync(chunk);
 
 const { decodeDroppedSiteBundle } = await import('../src/core/torrent/SiteBundleUpload.js');
 
