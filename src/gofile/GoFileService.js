@@ -22,9 +22,28 @@ export const GOFILE_STORAGE_URL = (server, contentId, filename) =>
  * straight to GoFile: handing a bearer token to a third party would give away
  * the account, and the upload has no CORS problem to solve in the first place.
  */
-export const GOFILE_READ_PROXY = 'https://api.allorigins.win';
-export const proxiedRawUrl = (proxy, target) => `${proxy}/raw?url=${encodeURIComponent(target)}`;
 export const proxiedEnvelopeUrl = (proxy, target) => `${proxy}/get?url=${encodeURIComponent(target)}`;
+export const proxiedRawUrl = (proxy, target) => `${proxy}/raw?url=${encodeURIComponent(target)}`;
+
+/**
+ * Read routes, tried in order until one answers.
+ *
+ * `/get` comes first because it is the route allorigins documents, and the one
+ * observed to carry the CORS headers a browser needs; `/raw` returns the body
+ * untouched, which is preferable when it works. A route that cannot answer —
+ * blocked by CORS, refused, unreachable — is indistinguishable from a network
+ * fault in a browser, so the next one is simply tried.
+ *
+ * Point this at your own deployment to stop depending on a public service.
+ */
+export const GOFILE_READ_ROUTES = [
+    {
+        name: 'allorigins/get',
+        url: (target) => proxiedEnvelopeUrl('https://api.allorigins.win', target),
+        envelope: true
+    },
+    { name: 'allorigins/raw', url: (target) => proxiedRawUrl('https://api.allorigins.win', target), envelope: false }
+];
 
 /**
  * GoFile is best-effort fallback transport, never the primary one, so every
@@ -110,20 +129,20 @@ function transportError(cause, signal, timeoutMs, subject) {
  */
 export class GoFileService {
     /**
-     * @param {{ fetchImpl?: typeof fetch, endpoint?: string, readProxy?: string,
+     * @param {{ fetchImpl?: typeof fetch, endpoint?: string, readRoutes?: Array<object>,
      *           uploadTimeoutMs?: number, downloadTimeoutMs?: number }} [options]
      */
     constructor({
         fetchImpl = globalFetch(),
         endpoint = GOFILE_UPLOAD_ENDPOINT,
-        readProxy = GOFILE_READ_PROXY,
+        readRoutes = GOFILE_READ_ROUTES,
         uploadTimeoutMs = GOFILE_UPLOAD_TIMEOUT_MS,
         downloadTimeoutMs = GOFILE_DOWNLOAD_TIMEOUT_MS
     } = {}) {
         if (typeof fetchImpl !== 'function') throw new TypeError('GoFileService requires fetch.');
         this.fetchImpl = fetchImpl;
         this.endpoint = endpoint;
-        this.readProxy = `${readProxy}`.replace(/\/$/, '');
+        this.readRoutes = readRoutes.length > 0 ? readRoutes : GOFILE_READ_ROUTES;
         this.uploadTimeoutMs = uploadTimeoutMs;
         this.downloadTimeoutMs = downloadTimeoutMs;
     }
@@ -273,52 +292,55 @@ export class GoFileService {
         const { server, contentId } = parseMirrorLocator(locator);
         const target = GOFILE_STORAGE_URL(server, contentId, expectedFilename);
 
-        // `/raw` hands back the body untouched, which is what verification
-        // needs. `/get` wraps it in a JSON envelope as a string, so it is only
-        // a fallback for when `/raw` is unavailable — and only survives here
-        // because a mirror is UTF-8 JSON rather than arbitrary bytes.
-        const response = await this._fetchThroughProxy(
-            proxiedRawUrl(this.readProxy, target),
-            signal,
-            downloadTimeoutMs
-        );
-        if (response.ok) return guardMirrorBody(await readBoundedBytes(response, signal, downloadTimeoutMs));
-        if (response.status !== 404 && response.status !== 400) {
-            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${response.status}).`, {
-                status: response.status
-            });
+        const refusals = [];
+        for (const route of this.readRoutes) {
+            let response;
+            try {
+                response = await this.fetchImpl(route.url(target), {
+                    signal: boundedSignal(downloadTimeoutMs, signal)
+                });
+            } catch (cause) {
+                const failure = transportError(cause, signal, downloadTimeoutMs, 'GoFile mirror bytes');
+                // A caller cancelling, or a deadline, applies to the whole read
+                // rather than to one route.
+                if (failure.code === 'aborted' || failure.code === 'timeout') throw failure;
+                refusals.push(`${route.name}: ${failure.message}`);
+                continue;
+            }
+            if (!response.ok) {
+                refusals.push(`${route.name}: HTTP ${response.status}`);
+                continue;
+            }
+
+            const bytes = await readBoundedBytes(response, signal, downloadTimeoutMs);
+            // Past this point the route answered for GoFile, so its answer
+            // stands: another proxy would only relay the same thing.
+            return guardMirrorBody(route.envelope ? unwrapEnvelope(bytes) : bytes);
         }
 
-        const envelope = await this._fetchThroughProxy(
-            proxiedEnvelopeUrl(this.readProxy, target),
-            signal,
-            downloadTimeoutMs
+        throw new GoFileError(
+            'proxy_unavailable',
+            `No CORS proxy could read the GoFile mirror (${refusals.join('; ') || 'no routes configured'}).`
         );
-        if (!envelope.ok) {
-            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${envelope.status}).`, {
-                status: envelope.status
-            });
-        }
-        const bytes = await readBoundedBytes(envelope, signal, downloadTimeoutMs);
-        let contents;
-        try {
-            contents = JSON.parse(new TextDecoder().decode(bytes))?.contents;
-        } catch (cause) {
-            throw new GoFileError('invalid_response', 'The CORS proxy returned an unreadable envelope.', { cause });
-        }
-        if (typeof contents !== 'string') {
-            throw new GoFileError('invalid_response', 'The CORS proxy returned no mirror contents.');
-        }
-        return guardMirrorBody(new TextEncoder().encode(contents));
     }
+}
 
-    async _fetchThroughProxy(url, signal, timeoutMs) {
-        try {
-            return await this.fetchImpl(url, { signal: boundedSignal(timeoutMs, signal) });
-        } catch (cause) {
-            throw transportError(cause, signal, timeoutMs, 'GoFile mirror bytes');
-        }
+/**
+ * allorigins' documented route wraps the body in JSON as a string. That is
+ * lossless for a mirror, which is UTF-8 JSON, and anything it did mangle would
+ * fail piece verification rather than render.
+ */
+function unwrapEnvelope(bytes) {
+    let contents;
+    try {
+        contents = JSON.parse(new TextDecoder().decode(bytes))?.contents;
+    } catch (cause) {
+        throw new GoFileError('invalid_response', 'The CORS proxy returned an unreadable envelope.', { cause });
     }
+    if (typeof contents !== 'string') {
+        throw new GoFileError('invalid_response', 'The CORS proxy returned no mirror contents.');
+    }
+    return new TextEncoder().encode(contents);
 }
 
 /**

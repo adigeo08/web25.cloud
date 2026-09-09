@@ -100,11 +100,26 @@ neither the storage server nor that page sends an `Access-Control-Allow-Origin`
 header. So a page on another origin cannot read a mirror directly, whatever URL
 it uses — this is the same wall the Premium listing route hit, one layer down.
 
-Mirror reads therefore go through a CORS proxy, `api.allorigins.win` by default
-and configurable so it need not be a public one. `/raw` is used first because it
-returns the body untouched, which is what piece-hash verification needs; `/get`
-is a fallback for when `/raw` is unavailable, and only works here because a
-mirror is UTF-8 JSON rather than arbitrary bytes.
+Mirror reads therefore go through a CORS proxy. `api.allorigins.win/get` is
+tried first — the route allorigins documents, and the one carrying the headers a
+browser needs; `/raw` follows, returning the body untouched, which is preferable
+when it works. `/raw` alone was tried first at one point and was itself blocked
+for want of an `Access-Control-Allow-Origin` header, which is why the order is
+what it is and why there is more than one route.
+
+A route that cannot answer — blocked by CORS, refused, unreachable — reaches
+JavaScript as an opaque `TypeError`, indistinguishable from a network fault, so
+the only way to survive one is to try the next. Once a route does answer, its
+answer stands: another proxy would relay the same thing. A cancellation or a
+deadline ends the whole read rather than being spent per route. When every route
+refuses, the error names each refusal.
+
+The envelope route wraps the body in JSON as a string. That is lossless for a
+mirror, which is UTF-8 JSON, and anything it did mangle would fail piece
+verification rather than render.
+
+The route list is configurable. Pointing it at your own deployment is the way to
+stop depending on a public service.
 
 **Only reads.** The upload and the account call always go straight to GoFile:
 both carry `Authorization: Bearer`, and routing a token through a third party
