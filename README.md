@@ -1,8 +1,8 @@
 # ☁️ WEB25.cloud
 
-**Decentralized web platform for peer-to-peer static-site hosting + local EVM identity + signed torrent publishing + P2P direct messaging, fully in browser.**
+**Decentralized web platform for peer-to-peer static-site hosting + local EVM identity + signed torrent publishing + ephemeral HTTP mirrors + P2P direct messaging, fully in browser.**
 
-WEB25.cloud is a [PeerWeb fork (`Omodaka9375/peerweb`)](https://github.com/Omodaka9375/peerweb) with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, and direct encrypted peer messaging.
+WEB25.cloud is a [PeerWeb fork (`Omodaka9375/peerweb`)](https://github.com/Omodaka9375/peerweb) with identity-aware publishing and verification. It keeps the classic hash-based loading workflow while adding signed provenance, local passkey-protected keys, opportunistic GoFile mirrors for faster delivery, and direct encrypted peer messaging.
 
 ---
 
@@ -25,8 +25,11 @@ The UI is organized into:
   - Preview signing payload
   - Sign payload with local EVM identity
   - Seed signed output
+  - Optionally create an ephemeral GoFile mirror for faster HTTP delivery
 - **Browse / Load**
-  - Existing torrent hash loading flow remains available
+  - Load by torrent hash or complete WEB25 URL
+  - Resolution order: local cache → GoFile mirror, when present → WebTorrent/P2P
+  - GoFile failure transparently falls back to P2P
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -201,6 +204,63 @@ To avoid regressions from verified → pending after refresh:
 - Signed deploy artifacts are persisted in `localStorage` (`web25.deploy.session.v1`)
 - On refresh, UI/deploy state can be restored and reseeded
 - Helps continue normal seeding/deploy flow without repeating steps
+
+---
+
+### 6b) Ephemeral GoFile mirrors — cache → HTTP → P2P
+
+GoFile is used as an optional **CDN-like acceleration layer**, not as the source of truth for a WEB25 deployment.
+
+Preferred load order:
+
+```text
+local cache
+    ↓ miss
+GoFile mirror
+    ↓ unavailable / expired / invalid
+WebTorrent / P2P
+```
+
+A successful mirror load is cached normally, so later visits can load entirely from the local browser cache.
+
+Each deployment can receive a separate GoFile mirror. Mirrors are treated as ephemeral because WEB25 relies on disposable guest accounts and makes no durability assumption about GoFile storage. Losing a mirror does not invalidate the deployment and does not prevent it from loading through WebTorrent.
+
+The torrent hash remains the identity and integrity boundary. GoFile only changes how the bytes arrive. Mirror bytes are verified client-side against the included BitTorrent metainfo, expected info hash, file layout and BitTorrent v1 pieces before they enter the normal WEB25 verification/render path.
+
+#### Local GoFile guest credential
+
+Each unlocked WEB25 identity may hold one local GoFile guest token.
+
+The token is never stored as plaintext. It inherits the existing wallet security boundary:
+
+```text
+WebAuthn PRF
+    ↓
+wallet vault / local wallet unlock
+    ↓
+dedicated wallet worker
+    ↓
+NIP-44 encrypt-to-self
+    ↓
+encrypted GoFile guest token in IndexedDB
+```
+
+The raw WebAuthn PRF output is never persisted, and the GoFile token is not encrypted directly with the PRF output. Instead, WebAuthn protects access to the local wallet, whose worker-backed Nostr identity encrypts the GoFile credential before persistence.
+
+The credential is:
+
+- scoped to the local WEB25 identity;
+- reused while valid;
+- replaced only when GoFile explicitly rejects it as invalid;
+- never placed in WEB25 URLs;
+- never logged or rendered in the UI;
+- intentionally a disposable guest credential rather than a valuable Premium account.
+
+A visitor without a readable local credential can use a temporary guest account for mirror retrieval without persisting it.
+
+Browser-side GoFile reads pass through WEB25's GoFile Worker because the GoFile web download flow requires session/CORS handling that cannot be performed reliably from browser JavaScript alone. The Worker keeps no shared GoFile credential at rest; the client supplies its guest credential per request.
+
+See [`docs/gofile-local-account-cdn.md`](docs/gofile-local-account-cdn.md) for the complete architecture and trust model.
 
 ---
 
@@ -409,6 +469,11 @@ src/
 │   ├── NostrDirectMessageBootstrap.js
 │   ├── NostrDirectMessageSession.js
 │   └── ecies.js
+├── gofile/
+│   ├── GoFileCredentialStore.js
+│   ├── GoFileMirrorCodec.js
+│   ├── GoFileService.js
+│   └── Web25Url.js
 ├── nostr/
 │   ├── NostrIdentityPreference.js
 │   ├── NostrProfileLookup.js
@@ -422,6 +487,7 @@ src/
 │   ├── cache/
 │   │   └── SignatureStateVersion.js
 │   └── torrent/
+│       ├── PreferredSiteLoader.js
 │       └── TorrentLoader.js
 ├── ui/
 │   ├── auth/
@@ -437,7 +503,6 @@ src/
 ```
 
 ---
-
 
 ## Upstream credits and how Web25 integrates them
 
@@ -497,6 +562,9 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - STUN: `stun:stun.l.google.com:19302`
 - Nostr rendezvous relay (configurable in `src/config/nostr.config.js`): `wss://nos.lol`
   — one relay on purpose, so two Web25 browsers always share one; see §8c
+- GoFile: optional ephemeral HTTP mirror for static deployments
+- WEB25 GoFile transport Worker: `https://gofile-cf-downloader.carlgray.workers.dev`
+  — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
 
 ---
 
