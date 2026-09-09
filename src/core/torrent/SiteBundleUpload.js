@@ -16,11 +16,12 @@ function isBundleFilename(name) {
 }
 
 function normalizeBundlePath(path) {
-    const normalized = `${path || ''}`.replace(/\\/g, '/').replace(/^\/+/, '');
-    if (!normalized || normalized.split('/').some((part) => part === '..')) {
+    const normalized = `${path || ''}`.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+    const parts = normalized.split('/');
+    if (!normalized || parts.some((part) => !part || part === '.' || part === '..')) {
         throw new Error(`Invalid site-bundle path: ${path || '(empty)'}`);
     }
-    return normalized;
+    return parts.join('/');
 }
 
 function base64ToBytes(base64) {
