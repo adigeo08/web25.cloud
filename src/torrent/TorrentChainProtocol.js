@@ -108,10 +108,11 @@ export function hashFileEntries(fileEntries) {
 /**
  * The publisher's identity, as the manifest records it.
  *
- * All four fields are views of the *same* secp256k1 key: the EVM address and
- * the Nostr key are both derived from the ECIES public key, and the npub is the
- * NIP-19 form of the Nostr key. They are recorded together so a viewer who has
- * no decrypt grant can still be told, from verified data, whom to ask.
+ * All four fields are views of the *same* secp256k1 key. `eciesPublicKey` is
+ * the source of truth: the Nostr x-only key and its npub are derived from it,
+ * independently of whether the publisher currently enables Nostr relay
+ * reachability in the UI. Explicit Nostr fields, when supplied, are treated as
+ * assertions and must match those derived values exactly.
  *
  * @param {{ evmAddress: string, eciesPublicKey: string, nostrPublicKey?: string, npub?: string }} owner
  */
@@ -124,21 +125,26 @@ export function canonicalizeOwner(owner) {
     // including a point that merely looks like one but is not on the curve.
     const eciesPublicKey = normalizeRecipientPublicKey(owner?.eciesPublicKey, { isValidUncompressedPublicKey });
 
-    const nostrPublicKey = `${owner?.nostrPublicKey || ''}`.trim().toLowerCase();
-    if (!NOSTR_PUBKEY_RE.test(nostrPublicKey)) {
+    // Nostr uses the x-only coordinate of the same secp256k1 point. This
+    // identity exists regardless of the user's relay reachability preference,
+    // so manifests derive it from the wallet key rather than from UI state.
+    const derivedNostrPublicKey = eciesPublicKey.slice(2, 66);
+    const suppliedNostrPublicKey = `${owner?.nostrPublicKey || ''}`.trim().toLowerCase();
+    if (suppliedNostrPublicKey && !NOSTR_PUBKEY_RE.test(suppliedNostrPublicKey)) {
         throw new Error('Owner nostrPublicKey must be a 32-byte hex key.');
     }
-    const npub = `${owner?.npub || ''}`.trim();
-    if (!npub) {
-        throw new Error('Owner npub must be a NIP-19 npub string.');
+    if (suppliedNostrPublicKey && suppliedNostrPublicKey !== derivedNostrPublicKey) {
+        throw new Error('Owner nostrPublicKey is not the x coordinate of the ECIES key.');
     }
-    try {
-        if (npubEncode(nostrPublicKey) !== npub.toLowerCase()) {
-            throw new Error('Owner npub is not encoded from owner nostrPublicKey.');
-        }
-    } catch (error) {
-        throw new Error(`Owner npub is invalid: ${error.message}`);
+    const nostrPublicKey = derivedNostrPublicKey;
+
+    const derivedNpub = npubEncode(nostrPublicKey);
+    const suppliedNpub = `${owner?.npub || ''}`.trim().toLowerCase();
+    if (suppliedNpub && suppliedNpub !== derivedNpub) {
+        throw new Error('Owner npub is not encoded from owner nostrPublicKey.');
     }
+    const npub = derivedNpub;
+
     const tuple = verifyIdentityTuple({ evmAddress, eciesPublicKey, nostrPublicKey, npub });
     if (!tuple.ok) {
         throw new Error(tuple.reason);
