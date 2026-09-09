@@ -1,0 +1,15 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "gofile-cf-downloader",
+    "main": "gofile-cf-downloader.js",
+    "compatibility_date": "2025-06-01",
+    "workers_dev": true,
+    "observability": {
+        "enabled": true
+    },
+    "vars": {
+        "ALLOWED_ORIGINS": "https://web25.cloud",
+        "GF_USER_AGENT": "Mozilla/5.0",
+        "MAX_BYTES": "67108864"
+    }
+}
