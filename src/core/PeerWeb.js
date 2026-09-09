@@ -7,6 +7,7 @@ import * as navigation from './navigation/Navigation.js';
 import * as protectedNavigation from './navigation/ProtectedNavigation.js';
 import * as serviceWorker from './serviceworker/ServiceWorkerBridge.js';
 import * as torrentLoader from './torrent/TorrentLoader.js';
+import * as protectedLoaderGate from './torrent/ProtectedLoaderGate.js';
 import * as preferredSiteLoader from './torrent/PreferredSiteLoader.js';
 import * as torrentUploader from './torrent/TorrentUploader.js';
 import * as siteBundleUpload from './torrent/SiteBundleUpload.js';
@@ -82,6 +83,9 @@ Object.assign(
     navigation,
     serviceWorker,
     torrentLoader,
+    // Fail closed if published HTML contains protected placeholders that are
+    // absent/duplicated in the verified capability manifest.
+    protectedLoaderGate,
     // Override TorrentLoader.loadSite only; the rest of the torrent helpers stay
     // on the prototype and are reused by the preferred cache → GoFile → P2P flow.
     preferredSiteLoader,
