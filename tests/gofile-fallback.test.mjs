@@ -18,9 +18,10 @@ const guestAccount = async () => {
 };
 
 test('legacy terminal torrent failure never contacts GoFile', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     let contacted = false;
     const context = {
+        releaseLoadTorrent,
         gofileService: { createGuestAccount: guestAccount, downloadPublicMirror: async () => (contacted = true) },
         hideLoadingOverlay() {},
         log() {}
@@ -36,10 +37,11 @@ test('legacy terminal torrent failure never contacts GoFile', async () => {
 });
 
 test('terminal torrent failure with locator enters GoFile path but never renders failed verification', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     let contacted = 0;
     let rendered = false;
     const context = {
+        releaseLoadTorrent,
         gofileService: {
             createGuestAccount: guestAccount,
             downloadPublicMirror: async () => {
@@ -65,7 +67,7 @@ test('terminal torrent failure with locator enters GoFile path but never renders
 });
 
 test('a valid bound mirror converges on the existing verification and processing path', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     const bytes = new TextEncoder().encode('{"torrentchain":"fixture"}');
     const piece = new Uint8Array(await crypto.subtle.digest('SHA-1', bytes));
     const info = { name: '.torrentchain', length: bytes.length, 'piece length': 16384, pieces: piece };
@@ -89,6 +91,7 @@ test('a valid bound mirror converges on the existing verification and processing
     let chainChecks = 0;
     let processed = 0;
     const context = {
+        releaseLoadTorrent,
         gofileService: { createGuestAccount: guestAccount, downloadPublicMirror: async () => mirrorWire },
         verifyTorrentChainBeforeDownload: async (torrent, requested) => {
             chainChecks += 1;
@@ -112,9 +115,10 @@ test('a valid bound mirror converges on the existing verification and processing
 });
 
 test("the resolver asks for this deployment's own locator and mirror filename", async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     const asked = [];
     const context = {
+        releaseLoadTorrent,
         gofileService: {
             createGuestAccount: guestAccount,
             downloadPublicMirror: async (locator, options) => {
@@ -137,10 +141,11 @@ test("the resolver asks for this deployment's own locator and mirror filename", 
 });
 
 test('a stalled mirror ends the load instead of hanging the overlay', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     let overlayHidden = 0;
     let alerted = '';
     const context = {
+        releaseLoadTorrent,
         gofileService: new GoFileService({
             fetchImpl: (_url, init) =>
                 new Promise((_resolve, reject) => {
@@ -183,7 +188,7 @@ test('a stalled mirror ends the load instead of hanging the overlay', async () =
 });
 
 test('a mirror bound to a different torrent is refused before any render', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     const bytes = new TextEncoder().encode('{"torrentchain":"other deployment"}');
     const piece = new Uint8Array(await crypto.subtle.digest('SHA-1', bytes));
     const info = { name: '.torrentchain', length: bytes.length, 'piece length': 16384, pieces: piece };
@@ -204,6 +209,7 @@ test('a mirror bound to a different torrent is refused before any render', async
     let chainChecks = 0;
     let alerted = '';
     const context = {
+        releaseLoadTorrent,
         gofileService: { createGuestAccount: guestAccount, downloadPublicMirror: async () => mirrorWire },
         verifyTorrentChainBeforeDownload: async () => {
             chainChecks += 1;
@@ -235,9 +241,10 @@ test('a mirror bound to a different torrent is refused before any render', async
 });
 
 test('a visitor mints a throwaway credential for the read', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     const asked = [];
     const context = {
+        releaseLoadTorrent,
         gofileCredentialStore: { read: async () => ({ token: 'visitor-token' }) },
         gofileService: {
             createGuestAccount: guestAccount,
@@ -263,7 +270,7 @@ test('a visitor mints a throwaway credential for the read', async () => {
 });
 
 test('a locked wallet or empty store still resolves, by minting one', async () => {
-    const { handleTerminalP2PFailure } = await loader();
+    const { handleTerminalP2PFailure, releaseLoadTorrent } = await loader();
     // The common case: someone opening a WEB25 link who has never deployed.
     for (const store of [
         undefined,
@@ -276,6 +283,7 @@ test('a locked wallet or empty store still resolves, by minting one', async () =
     ]) {
         const asked = [];
         const context = {
+            releaseLoadTorrent,
             gofileCredentialStore: store,
             gofileService: {
                 createGuestAccount: guestAccount,
@@ -304,9 +312,11 @@ test('a locked wallet or empty store still resolves, by minting one', async () =
 });
 
 /** A loader context whose only failing part is the torrent transport. */
-function loaderContext({ onAdd, contacted, handleTerminalP2PFailure }) {
+function loaderContext({ onAdd, contacted, handleTerminalP2PFailure, releaseLoadTorrent, registerLoadTorrent }) {
     return {
         handleTerminalP2PFailure,
+        releaseLoadTorrent,
+        registerLoadTorrent,
         sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
         isValidTorrentHash: () => true,
         buildSignatureState: (state) => state,
@@ -333,80 +343,51 @@ function loaderContext({ onAdd, contacted, handleTerminalP2PFailure }) {
     };
 }
 
-/** Drive one load attempt, reporting what it tried and what it scheduled. */
-async function oneLoadAttempt(loadSite, handleTerminalP2PFailure, address, attempt) {
-    const previousTimeout = globalThis.setTimeout;
-    const contacted = [];
-    const magnets = [];
-    let scheduled = 0;
-    globalThis.setTimeout = () => {
-        scheduled += 1;
-        return previousTimeout(() => {}, 0);
-    };
-    try {
-        const context = loaderContext({
-            contacted,
-            handleTerminalP2PFailure,
-            onAdd: (magnetURI) => {
-                magnets.push(magnetURI);
-                throw new Error('WebTorrent could not add the torrent');
-            }
-        });
-        await loadSite.call(context, address, attempt);
-    } finally {
-        globalThis.setTimeout = previousTimeout;
-    }
-    return { contacted, magnets, scheduled };
-}
-
-test('WebTorrent is always tried first, tracker and all', async () => {
-    const { loadSite, handleTerminalP2PFailure } = await loader();
+test('the mirror is only reached after the WebRTC tracker budget is spent', async () => {
+    const { loadSite, handleTerminalP2PFailure, releaseLoadTorrent, registerLoadTorrent } = await loader();
     const previousAlert = globalThis.alert;
+    const previousTimeout = globalThis.setTimeout;
     globalThis.alert = () => {};
+
+    let firstFallbackAttempt = null;
+    const scheduledRetries = [];
     try {
-        for (const address of [`${HASH}&${LOCATOR}`, HASH]) {
-            const { magnets } = await oneLoadAttempt(loadSite, handleTerminalP2PFailure, address, 0);
-            assert.equal(magnets.length, 1, 'the torrent transport is attempted before anything else');
+        for (let attempt = 0; attempt < 10 && firstFallbackAttempt === null; attempt += 1) {
+            const contacted = [];
+            const magnets = [];
+            let scheduled = 0;
+            globalThis.setTimeout = (fn, delay) => {
+                scheduled += 1;
+                return previousTimeout(() => {}, 0);
+            };
+            const context = loaderContext({
+                contacted,
+                handleTerminalP2PFailure,
+                releaseLoadTorrent,
+                registerLoadTorrent,
+                onAdd: (magnetURI) => {
+                    magnets.push(magnetURI);
+                    throw new Error('WebTorrent could not add the torrent');
+                }
+            });
+
+            await loadSite.call(context, `${HASH}&Mirror123`, attempt);
+
+            assert.equal(magnets.length, 1, 'every attempt really tries the torrent transport first');
             assert.match(magnets[0], /^magnet:\?xt=urn:btih:/);
             assert.match(magnets[0], /tr=wss%3A%2F%2Ftracker/, 'the WebRTC tracker is in the magnet');
+            if (contacted.length > 0) firstFallbackAttempt = attempt;
+            else scheduledRetries.push(scheduled);
         }
     } finally {
         globalThis.alert = previousAlert;
+        globalThis.setTimeout = previousTimeout;
     }
-});
 
-test('a mirrored address falls back after one attempt, not after the full budget', async () => {
-    // Each WebTorrent attempt costs 20-30s waiting for a tracker to report no
-    // peers, and a mirrored address has something better to do with that time.
-    const { loadSite, handleTerminalP2PFailure } = await loader();
-    const previousAlert = globalThis.alert;
-    globalThis.alert = () => {};
-    try {
-        const first = await oneLoadAttempt(loadSite, handleTerminalP2PFailure, `${HASH}&${LOCATOR}`, 0);
-        assert.equal(first.contacted.length, 1, 'the mirror is reached on the very first failure');
-        assert.equal(first.scheduled, 0, 'no further torrent attempt is scheduled');
-    } finally {
-        globalThis.alert = previousAlert;
-    }
-});
-
-test('an address with no mirror keeps the whole retry budget', async () => {
-    // Retries exist because there is nothing else to try. Cutting them here
-    // would only make a hopeless load fail faster.
-    const { loadSite, handleTerminalP2PFailure } = await loader();
-    const previousAlert = globalThis.alert;
-    globalThis.alert = () => {};
-    let firstTerminalAttempt = null;
-    try {
-        for (let attempt = 0; attempt < 10 && firstTerminalAttempt === null; attempt += 1) {
-            const { scheduled } = await oneLoadAttempt(loadSite, handleTerminalP2PFailure, HASH, attempt);
-            if (scheduled === 0) firstTerminalAttempt = attempt;
-        }
-    } finally {
-        globalThis.alert = previousAlert;
-    }
+    assert.notEqual(firstFallbackAttempt, null, 'the mirror is eventually reached');
+    assert.ok(firstFallbackAttempt >= 5, `the mirror waited for the retry budget, not attempt ${firstFallbackAttempt}`);
     assert.ok(
-        firstTerminalAttempt >= 5,
-        `an unmirrored load kept retrying to attempt ${firstTerminalAttempt}, not one`
+        scheduledRetries.every((count) => count >= 1),
+        'each earlier attempt schedules another torrent attempt instead of falling back'
     );
 });

@@ -33,6 +33,8 @@ class PeerWeb {
         this.timeouts = [];
         this.processingInProgress = false;
         this.processingTimeout = null;
+        /** @type {{ torrent: any, guard: { stop: () => void } } | null} the torrent the current load owns */
+        this._activeLoadTorrent = null;
         this.signedTorrentMetadata = new Map();
         this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
         const overrideTrackers =
