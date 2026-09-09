@@ -18,6 +18,7 @@ import {
     gofileMirrorFilename,
     verifyGoFileMirror
 } from '../../gofile/GoFileMirrorCodec.js';
+import { attachTrackerConnectionGuard } from './TrackerConnectionGuard.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -50,7 +51,15 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     const loadGeneration = this._loadGeneration;
     this._gofileFallbackController?.abort();
     this._gofileFallbackController = null;
+    // One load owns the transport at a time. A torrent left over from an
+    // earlier load keeps announcing over its tracker sockets and keeps firing
+    // handlers at a page that has moved on, so it goes before the next one
+    // starts.
+    this.releaseLoadTorrent();
     const isActiveLoad = () => this._loadGeneration === loadGeneration && this.currentHash === sanitizedHash;
+    // The torrent phase is over once the mirror fallback has taken this hash
+    // over: its late events must not touch the loading state any more.
+    const isTorrentPhase = () => isActiveLoad() && this._gofileFallbackStarted !== sanitizedHash;
     if (_retryAttempt === 0) this._gofileFallbackStarted = null;
     this.log(`Loading site with hash: ${sanitizedHash}`);
 
@@ -128,6 +137,21 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     try {
         this.client.add(magnetURI, async (torrent) => {
             this.log(`Torrent added: ${torrent.name || 'Unknown'}`);
+            this.registerLoadTorrent(torrent, {
+                // Every tracker given up on means no way left to find a peer,
+                // and nothing else will say so: WebTorrent only emits
+                // `noPeers` off an announce that actually happened.
+                onTrackersExhausted: () => {
+                    if (!isTorrentPhase() || this.processingInProgress) return;
+                    void this.handleTerminalP2PFailure(
+                        sanitizedHash,
+                        gofileLocator,
+                        new Error('No WebRTC tracker could be reached.'),
+                        torrent,
+                        loadGeneration
+                    );
+                }
+            });
             this.log(`Signature status: ${this.currentSiteSignatureStatus.label}`);
 
             // Verify embedded signed metadata when available from torrent payload.
@@ -170,6 +194,7 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
 
             const processCompletedTorrent = async (reason = 'done') => {
                 if (this.processingInProgress || this.currentHash !== sanitizedHash) return;
+                if (!isTorrentPhase()) return;
                 this.log(`Download completed (100%) via ${reason}; processing site.`);
                 this.sendToServiceWorker('SITE_LOADING', {
                     hash: sanitizedHash,
@@ -188,6 +213,7 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
             };
 
             torrent.on('download', () => {
+                if (!isTorrentPhase()) return;
                 this.updateProgress(torrent);
                 this.updatePeerStats(torrent);
 
@@ -212,11 +238,17 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
             });
 
             torrent.on('done', async () => {
+                if (!isTorrentPhase()) return;
                 await processCompletedTorrent('done-event');
             });
 
             torrent.on('error', (error) => {
                 this.log(`Torrent error: ${error.message}`);
+                // A torrent that errors out after the mirror has rendered the
+                // site must not report the load as stopped: the service worker
+                // reads that as "this site is going away" and drops the file
+                // list it serves the rendered page from.
+                if (!isTorrentPhase()) return;
                 this.sendToServiceWorker('SITE_LOADING', {
                     hash: sanitizedHash,
                     state: 'stop',
@@ -248,7 +280,7 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
 
             torrent.on('noPeers', () => {
                 if (this.processingInProgress) return;
-                if (this.currentHash !== sanitizedHash) return;
+                if (!isTorrentPhase()) return;
                 if (_retryAttempt >= LOAD_RETRY_MAX) {
                     this.log(`No peers found after ${LOAD_RETRY_MAX} retries, giving up`);
                     void this.handleTerminalP2PFailure(
@@ -385,6 +417,37 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
 }
 
 /**
+ * Take ownership of the torrent this load is running on.
+ *
+ * Only one loaded site is on screen at a time, so only one load torrent may be
+ * alive: everything registered here is destroyed when the next load starts.
+ * The tracker guard rides along so its sweep timer dies with the torrent.
+ *
+ * @param {any} torrent
+ */
+export function registerLoadTorrent(torrent, { onTrackersExhausted = () => {} } = {}) {
+    this.releaseLoadTorrent();
+    const guard = attachTrackerConnectionGuard(torrent, {
+        log: (message) => this.log(message),
+        onExhausted: onTrackersExhausted
+    });
+    this._activeLoadTorrent = { torrent, guard };
+}
+
+/** Destroy the torrent (and stop the tracker guard) of the load that just ended. */
+export function releaseLoadTorrent() {
+    const active = this._activeLoadTorrent;
+    if (!active) return;
+    this._activeLoadTorrent = null;
+    try {
+        active.guard?.stop?.();
+    } catch (_) {}
+    try {
+        active.torrent?.destroy?.();
+    } catch (_) {}
+}
+
+/**
  * A credential the mirror service will accept.
  *
  * A visitor resolving a WEB25 link is usually not the publisher: no wallet is
@@ -424,6 +487,13 @@ export async function handleTerminalP2PFailure(
     const controller = new AbortController();
     this._gofileFallbackController = controller;
     try {
+        // The torrent phase is over. Its timers, tracker sockets and torrent go
+        // now, so nothing from it can report progress over the mirrored render.
+        if (this.processingTimeout) {
+            clearTimeout(this.processingTimeout);
+            this.processingTimeout = null;
+        }
+        this.releaseLoadTorrent();
         try {
             torrent?.destroy?.();
         } catch (_) {}

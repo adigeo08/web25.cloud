@@ -49,6 +49,15 @@ self.addEventListener('message', (event) => {
             break;
 
         case 'SITE_LOADING':
+            // Only the start of a load replaces the site being served. A
+            // `stop` says the download phase ended — which is also what the
+            // page sends just before it renders — and clearing the file list
+            // there left a rendered site with a service worker that answers
+            // nothing, so the page came up without its sub-resources.
+            if (data.state === 'stop') {
+                console.log('[PeerWeb SW] Site download stopped:', data.hash);
+                break;
+            }
             currentSiteHash = data.hash;
             currentEntryFile = null;
             currentSiteFiles.clear();
@@ -758,6 +767,15 @@ if (typeof module !== 'undefined' && module.exports) {
         createMediaResponse,
         isMediaPath,
         withSiteIsolationHeaders,
-        SITE_SANDBOX_CSP
+        SITE_SANDBOX_CSP,
+        // Only reachable from the test runner: a real service worker has no
+        // CommonJS `module`. What the message handler does to this state is the
+        // difference between a rendered site keeping its files and losing them.
+        __siteState: () => ({
+            hash: currentSiteHash,
+            entryFile: currentEntryFile,
+            files: [...currentSiteFiles],
+            mediaCacheSize: mediaCache.size
+        })
     };
 }

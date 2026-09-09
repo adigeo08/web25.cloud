@@ -40,6 +40,17 @@ export const NOSTR_CONFIG = Object.freeze({
     /** Reconnect backoff bounds for a relay that drops. */
     RELAY_RECONNECT_MIN_MS: 2000,
     RELAY_RECONNECT_MAX_MS: 60000,
+    /**
+     * Consecutive failed connection attempts before a relay is given up on.
+     *
+     * A relay that never answers is not going to start answering because we
+     * asked a hundredth time, and every attempt is a WebSocket the browser has
+     * to open, fail and log. Two tries, then the relay is marked `unavailable`
+     * and left alone until something explicitly calls `connect()` again. A
+     * socket that opened and later dropped does not count as a failed attempt:
+     * that relay has proven reachable, so it keeps its full backoff.
+     */
+    RELAY_MAX_CONNECT_FAILURES: 2,
     /** Hard cap on a single relay frame; anything larger is dropped unparsed. */
     MAX_RELAY_FRAME_BYTES: 512 * 1024,
     /** Bound on a subscription's "already seen" set so a hostile relay cannot grow it without limit. */

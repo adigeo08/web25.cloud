@@ -56,7 +56,13 @@ export class NostrRelayPool {
      *   config?: typeof NOSTR_CONFIG
      * }} options
      */
-    constructor({ relays = DEFAULT_NOSTR_RELAYS, verifyEvent, WebSocketImpl = null, now = Date.now, config = NOSTR_CONFIG }) {
+    constructor({
+        relays = DEFAULT_NOSTR_RELAYS,
+        verifyEvent,
+        WebSocketImpl = null,
+        now = Date.now,
+        config = NOSTR_CONFIG
+    }) {
         if (typeof verifyEvent !== 'function') throw new Error('NostrRelayPool requires an event verifier.');
 
         this.config = config;
@@ -66,7 +72,7 @@ export class NostrRelayPool {
         this.relayUrls = normalizeRelayUrls(relays);
         if (this.relayUrls.length === 0) throw new Error('At least one Nostr relay URL is required.');
 
-        /** @type {Map<string, { url: string, socket: any, status: string, lastError: string|null, reconnectDelay: number, timer: any }>} */
+        /** @type {Map<string, { url: string, socket: any, status: string, lastError: string|null, reconnectDelay: number, timer: any, failures: number }>} */
         this.relays = new Map();
         /** @type {Map<string, { id: string, filters: any[], onEvent: Function, onEose: Function|null, seen: Set<string>, closed: boolean }>} */
         this.subscriptions = new Map();
@@ -100,8 +106,23 @@ export class NostrRelayPool {
     async connect() {
         if (this.closed) throw new Error('This relay pool has been closed.');
         if (!this.WebSocketImpl) throw new Error('WebSockets are not available in this environment.');
+        // Calling `connect()` is a deliberate act, so it clears the give-up
+        // state: automatic retries stop after `RELAY_MAX_CONNECT_FAILURES`, but
+        // the application asking again gets a fresh set of attempts.
+        for (const entry of this.relays.values()) {
+            if (entry.status !== 'unavailable') continue;
+            entry.failures = 0;
+            entry.reconnectDelay = this.config.RELAY_RECONNECT_MIN_MS;
+            entry.status = 'idle';
+        }
         await Promise.all(this.relayUrls.map((url) => this._openRelay(url)));
         return { connected: this.connectedCount, total: this.relayUrls.length };
+    }
+
+    /** Consecutive connect failures a relay is allowed before it is left alone. */
+    get maxConnectFailures() {
+        const configured = Number(this.config.RELAY_MAX_CONNECT_FAILURES);
+        return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 2;
     }
 
     /**
@@ -112,42 +133,84 @@ export class NostrRelayPool {
         const existing = this.relays.get(url);
         if (existing && (existing.status === 'connected' || existing.status === 'connecting')) return Promise.resolve();
 
-        const entry = existing || { url, socket: null, status: 'idle', lastError: null, reconnectDelay: this.config.RELAY_RECONNECT_MIN_MS, timer: null };
+        const entry = existing || {
+            url,
+            socket: null,
+            status: 'idle',
+            lastError: null,
+            reconnectDelay: this.config.RELAY_RECONNECT_MIN_MS,
+            timer: null,
+            failures: 0
+        };
+        this.relays.set(url, entry);
+
+        // Exactly one attempt per relay may be in flight. A scheduled retry and
+        // an explicit connect must never race into two sockets for one relay.
+        if (entry.timer) {
+            clearTimeout(entry.timer);
+            entry.timer = null;
+        }
+        if (entry.failures >= this.maxConnectFailures) {
+            entry.status = 'unavailable';
+            return Promise.resolve();
+        }
+
         entry.status = 'connecting';
         entry.lastError = null;
-        this.relays.set(url, entry);
 
         return new Promise((resolve) => {
             let settled = false;
+            let counted = false;
+            let opened = false;
+            let abandoned = false;
+
             const settle = () => {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timeout);
                 resolve();
             };
+            // One attempt counts at most once, however many of onerror,
+            // onclose and the timeout fire for the same dead socket.
+            const fail = (reason) => {
+                entry.status = 'error';
+                entry.lastError = reason;
+                if (!counted) {
+                    counted = true;
+                    entry.failures += 1;
+                }
+                settle();
+            };
 
             const timeout = setTimeout(() => {
-                entry.status = 'error';
-                entry.lastError = 'connect-timeout';
+                abandoned = true;
+                fail('connect-timeout');
                 try {
                     entry.socket?.close();
                 } catch (_) {}
-                settle();
             }, this.config.RELAY_CONNECT_TIMEOUT_MS);
 
             let socket;
             try {
                 socket = new this.WebSocketImpl(url);
             } catch (error) {
-                entry.status = 'error';
-                entry.lastError = error instanceof Error ? error.message : String(error);
-                settle();
+                fail(error instanceof Error ? error.message : String(error));
                 return;
             }
             entry.socket = socket;
 
             socket.onopen = () => {
+                // A socket that opens after its own timeout is not this relay's
+                // connection any more; drop it rather than adopt it.
+                if (abandoned || entry.socket !== socket) {
+                    try {
+                        socket.close();
+                    } catch (_) {}
+                    return;
+                }
+                opened = true;
                 entry.status = 'connected';
+                entry.failures = 0;
                 entry.reconnectDelay = this.config.RELAY_RECONNECT_MIN_MS;
                 // Replay live subscriptions onto a relay that (re)joined late.
                 for (const subscription of this.subscriptions.values()) {
@@ -157,15 +220,20 @@ export class NostrRelayPool {
             };
 
             socket.onerror = (event) => {
-                entry.status = 'error';
-                entry.lastError = `${event?.message || 'socket-error'}`;
-                settle();
+                if (opened) return;
+                fail(`${event?.message || 'socket-error'}`);
             };
 
             socket.onclose = () => {
-                if (entry.status !== 'error') entry.status = 'disconnected';
-                entry.socket = null;
-                settle();
+                if (entry.socket === socket) entry.socket = null;
+                if (opened) {
+                    // The relay answered once, so this is a drop, not a failed
+                    // attempt: it keeps its full reconnect budget.
+                    if (entry.status !== 'error') entry.status = 'disconnected';
+                    settle();
+                } else {
+                    fail(entry.lastError || 'socket-closed');
+                }
                 this._scheduleReconnect(entry);
             };
 
@@ -173,10 +241,21 @@ export class NostrRelayPool {
         });
     }
 
-    /** @param {{ url: string, status: string, reconnectDelay: number, timer: any }} entry */
+    /** @param {{ url: string, status: string, lastError: string|null, reconnectDelay: number, timer: any, failures: number }} entry */
     _scheduleReconnect(entry) {
         if (this.closed) return;
-        if (entry.timer) clearTimeout(entry.timer);
+        if (entry.timer) {
+            clearTimeout(entry.timer);
+            entry.timer = null;
+        }
+        if (entry.status === 'connected' || entry.status === 'connecting') return;
+        if (entry.failures >= this.maxConnectFailures) {
+            // Two failed attempts is the answer. Stop opening sockets at it and
+            // wait for an explicit `connect()`.
+            entry.status = 'unavailable';
+            entry.lastError = entry.lastError || 'connect-failed';
+            return;
+        }
         const delay = Math.min(entry.reconnectDelay, this.config.RELAY_RECONNECT_MAX_MS);
         entry.reconnectDelay = Math.min(delay * 2, this.config.RELAY_RECONNECT_MAX_MS);
         entry.timer = setTimeout(() => {
