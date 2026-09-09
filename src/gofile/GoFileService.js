@@ -39,30 +39,45 @@ const ACCOUNT_TOKEN = /^[A-Za-z0-9._~+/=-]{8,4096}$/;
 const STORAGE_SERVER = /^[A-Za-z0-9-]{1,64}$/;
 /** Content ids are UUIDs, per the API's conventions. */
 const CONTENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A share code out of a gofile.io/d/<code> link. Case is significant. */
+const SHARE_CODE = /^[A-Za-z0-9]{4,32}$/;
+const SHARE_LINK = /^https:\/\/gofile\.io\/d\/([A-Za-z0-9]{4,32})$/;
 
 /**
- * A mirror locator is the content UUID of one uploaded mirror. The Worker
- * resolves which storage server holds it, so nothing else has to be carried.
+ * A mirror locator addresses one uploaded mirror for the Worker to resolve.
+ *
+ * A share code is the canonical form and its case is part of it — `1J53t9zb`
+ * and `1j53t9zb` are different links — so it is passed through untouched. A
+ * UUID is case-insensitive by definition, so it is normalised.
  */
-export function formatMirrorLocator(contentId) {
-    return `${contentId}`.toLowerCase();
+export function formatMirrorLocator(value) {
+    const locator = `${value || ''}`.trim();
+    return CONTENT_UUID.test(locator) ? locator.toLowerCase() : locator;
+}
+
+/** The share code inside a `https://gofile.io/d/<code>` download page. */
+export function shareCodeFromDownloadPage(downloadPage) {
+    const match = SHARE_LINK.exec(`${downloadPage || ''}`.trim());
+    return match ? match[1] : null;
 }
 
 /**
- * Links published while reads went straight to storage carry `<server>~<uuid>`.
- * The server half is no longer needed, but those links must keep working, so it
- * is accepted and dropped.
+ * Read a locator in any form WEB25 has ever published.
+ *
+ * Share codes are current. UUIDs were published before that, and links minted
+ * while reads went straight to storage carry a `<server>~` prefix the Worker no
+ * longer needs. All three keep resolving; only the prefix is dropped.
  */
 export function parseMirrorLocator(locator) {
-    const parts = `${locator || ''}`.split('~');
-    const contentId = parts.length === 2 && STORAGE_SERVER.test(parts[0]) ? parts[1] : parts[0];
-    if (parts.length > 2 || !CONTENT_UUID.test(`${contentId}`)) {
+    const parts = `${locator || ''}`.trim().split('~');
+    const candidate = parts.length === 2 && STORAGE_SERVER.test(parts[0]) ? parts[1] : parts[0];
+    if (parts.length > 2 || !(CONTENT_UUID.test(candidate) || SHARE_CODE.test(candidate))) {
         throw new GoFileError(
             'invalid_locator',
-            'This WEB25 address carries a mirror locator that is not a GoFile content id.'
+            'This WEB25 address carries a mirror locator that is neither a GoFile share code nor a content id.'
         );
     }
-    return { contentId: `${contentId}`.toLowerCase() };
+    return { locator: formatMirrorLocator(candidate) };
 }
 
 /**
@@ -221,10 +236,12 @@ export class GoFileService {
             ? data.servers.filter((server) => typeof server === 'string' && SAFE_ID.test(server)).slice(0, 20)
             : [];
 
-        // The locator addresses this one uploaded file on the server holding
-        // it, never the folder around it: a folder identifier would grow into a
-        // public index of every site this publisher has ever mirrored, and
-        // would make each new deployment ambiguous with the ones before it.
+        // The share code is what GoFile itself hands out for this upload, and
+        // it addresses the folder this one mirror was uploaded into — a fresh
+        // one every time, since no folder is ever reused, so it still names a
+        // single deployment. The file UUID stands in only when GoFile returned
+        // no code at all.
+        const shareCode = parentFolderCode || shareCodeFromDownloadPage(downloadPage);
         const result = {
             id,
             filename,
@@ -232,7 +249,8 @@ export class GoFileService {
             parentFolderCode,
             downloadPage,
             servers,
-            mirrorLocator: formatMirrorLocator(id),
+            shareCode,
+            mirrorLocator: formatMirrorLocator(shareCode || id),
             // A share code/page proves that a public share exists, not that an
             // unrelated browser can resolve it through the documented API.
             publicShareAvailable: Boolean(parentFolderCode && downloadPage),
@@ -270,11 +288,11 @@ export class GoFileService {
         if (typeof token !== 'string' || token.length === 0) {
             throw new GoFileError('invalid_token', 'Reading a GoFile mirror needs a GoFile credential.');
         }
-        const { contentId } = parseMirrorLocator(locator);
+        const { locator: workerLocator } = parseMirrorLocator(locator);
 
         let response;
         try {
-            response = await this.fetchImpl(workerFileUrl(this.workerBase, contentId, expectedFilename), {
+            response = await this.fetchImpl(workerFileUrl(this.workerBase, workerLocator, expectedFilename), {
                 headers: { Authorization: `Bearer ${token}` },
                 signal: boundedSignal(downloadTimeoutMs, signal)
             });
@@ -288,8 +306,12 @@ export class GoFileService {
 
 /**
  * The Worker answers every failure as {"error", "message"}. It has already
- * translated GoFile's own statuses, so this maps its vocabulary rather than
- * re-reading the ones underneath.
+ * translated GoFile's own statuses and made its own integrity judgements, so
+ * this maps its vocabulary rather than re-reading anything underneath.
+ *
+ * Every branch throws. There is no code path here that returns bytes the
+ * Worker would not vouch for, so a refusal always aborts the mirror rather
+ * than degrading into something rendered unverified.
  */
 function classifyWorkerFailure(body, status) {
     const code = typeof body?.error === 'string' ? body.error : null;
@@ -302,8 +324,23 @@ function classifyWorkerFailure(body, status) {
             });
         case 'file_not_found':
         case 'not_found':
+            return new GoFileError('mirror_not_found', `This deployment has no mirror to read: ${detail}`, { status });
+
+        // The Worker judges a download by where the bytes came from and how
+        // many there are. Each of these means it could not vouch for them, so
+        // none of them may end in a render.
         case 'download_page_returned':
-            return new GoFileError('mirror_not_found', `This deployment has no readable mirror: ${detail}`, { status });
+        case 'size_mismatch':
+        case 'untrusted_link':
+        case 'untrusted_redirect':
+        case 'too_many_redirects':
+        case 'invalid_link':
+        case 'invalid_redirect':
+        case 'unreadable_response':
+            return new GoFileError('mirror_untrusted', `The GoFile mirror did not verify: ${detail}`, { status });
+
+        case 'download_refused':
+            return new GoFileError('mirror_unavailable', `GoFile would not serve the mirror: ${detail}`, { status });
         case 'too_large':
             return new GoFileError('too_large', detail, { status });
         case 'invalid_content_id':

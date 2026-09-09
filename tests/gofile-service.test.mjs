@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
     formatMirrorLocator,
     parseMirrorLocator,
+    shareCodeFromDownloadPage,
     GoFileError,
     GoFileService,
     GOFILE_ACCOUNTS_ENDPOINT,
@@ -21,6 +22,7 @@ const HASH_TWO = 'fedcba9876543210fedcba9876543210fedcba98';
 const NAME_ONE = gofileMirrorFilename(HASH_ONE);
 const NAME_TWO = gofileMirrorFilename(HASH_TWO);
 const UUID_ONE = '9632c967-30e5-4123-856a-8b2c425d1c74';
+const SHARE_CODE = '1J53t9zb';
 const UUID_TWO = '9ed4fb4e-2f24-44f1-8e40-03e949a36517';
 
 const reply = (data, options = {}) =>
@@ -52,24 +54,49 @@ const stalled = () => (_url, init) =>
 
 // ── Locators ────────────────────────────────────────────────────────────────
 
-test('a locator is the content UUID of one uploaded mirror', () => {
-    assert.equal(formatMirrorLocator(UUID_ONE), UUID_ONE);
-    assert.equal(formatMirrorLocator(UUID_ONE.toUpperCase()), UUID_ONE);
-    assert.deepEqual(parseMirrorLocator(UUID_ONE), { contentId: UUID_ONE });
+test('a share code is the canonical locator, and its case is part of it', () => {
+    // gofile.io/d/1J53t9zb and gofile.io/d/1j53t9zb are different links, so a
+    // share code is passed through exactly as GoFile issued it.
+    assert.equal(formatMirrorLocator(SHARE_CODE), SHARE_CODE);
+    assert.deepEqual(parseMirrorLocator(SHARE_CODE), { locator: SHARE_CODE });
+    assert.notEqual(SHARE_CODE, SHARE_CODE.toLowerCase(), 'the fixture actually has mixed case');
+    assert.deepEqual(parseMirrorLocator(SHARE_CODE.toLowerCase()), { locator: SHARE_CODE.toLowerCase() });
+    assert.deepEqual(parseMirrorLocator(SHARE_CODE.toUpperCase()), { locator: SHARE_CODE.toUpperCase() });
+});
+
+test('a share code is read out of a download page when GoFile returns no code', () => {
+    assert.equal(shareCodeFromDownloadPage(`https://gofile.io/d/${SHARE_CODE}`), SHARE_CODE);
+    for (const page of [
+        null,
+        '',
+        'https://gofile.io/d/',
+        'http://gofile.io/d/1J53t9zb',
+        'https://evil.example/d/1J53t9zb',
+        'https://gofile.io/download/1J53t9zb'
+    ]) {
+        assert.equal(shareCodeFromDownloadPage(page), null, `${page} is not a share link`);
+    }
+});
+
+test('UUID locators published before share codes still resolve', () => {
+    assert.deepEqual(parseMirrorLocator(UUID_ONE), { locator: UUID_ONE });
+    // UUIDs are case-insensitive by definition, so they are normalised.
+    assert.deepEqual(parseMirrorLocator(UUID_ONE.toUpperCase()), { locator: UUID_ONE });
 });
 
 test('links published in the older server~uuid form keep resolving', () => {
-    // Those were minted when reads went straight to a storage server. The
-    // Worker finds the server itself, so the prefix is accepted and dropped.
-    assert.deepEqual(parseMirrorLocator(`store6~${UUID_ONE}`), { contentId: UUID_ONE });
-    assert.deepEqual(parseMirrorLocator(`store-eu-par-3~${UUID_ONE.toUpperCase()}`), { contentId: UUID_ONE });
+    // Minted when reads went straight to a storage server. The Worker finds
+    // the server itself, so the prefix is accepted and dropped.
+    assert.deepEqual(parseMirrorLocator(`store6~${UUID_ONE}`), { locator: UUID_ONE });
+    assert.deepEqual(parseMirrorLocator(`store-eu-par-3~${UUID_ONE.toUpperCase()}`), { locator: UUID_ONE });
 });
 
-test('a locator that is not a content id is refused rather than guessed at', () => {
-    for (const locator of ['', 'store6', `store6~not-a-uuid`, `a~b~${UUID_ONE}`, 'not-a-uuid']) {
+test('a locator in none of those forms is refused rather than guessed at', () => {
+    for (const locator of ['', 'no', `a~b~${UUID_ONE}`, 'has spaces', 'has/slash', `store6~not-a-uuid`]) {
         assert.throws(
             () => parseMirrorLocator(locator),
-            (error) => error instanceof GoFileError && error.code === 'invalid_locator'
+            (error) => error instanceof GoFileError && error.code === 'invalid_locator',
+            `${locator} should be refused`
         );
     }
 });
@@ -151,20 +178,34 @@ test('first guest upload has no token and captures the issued credential private
     assert.doesNotMatch(JSON.stringify(result), /super-secret-token/);
 });
 
-test('the locator names the uploaded file, never the folder around it', async () => {
+test('the share code GoFile returns becomes the locator', async () => {
     const service = new GoFileService({
         fetchImpl: async () =>
             reply({
                 id: UUID_ONE,
-                parentFolder: 'shared_guest_folder',
-                parentFolderCode: 'vznxYrkN',
+                parentFolder: 'a-folder-uuid',
+                parentFolderCode: SHARE_CODE,
+                downloadPage: `https://gofile.io/d/${SHARE_CODE}`,
                 servers: ['store6']
             })
     });
     const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
-    assert.equal(result.mirrorLocator, UUID_ONE);
+    assert.equal(result.mirrorLocator, SHARE_CODE, 'exact case, straight from GoFile');
     assert.notEqual(result.mirrorLocator, result.parentFolder);
-    assert.doesNotMatch(result.mirrorLocator, /store6/, "the storage server is the Worker's to resolve");
+});
+
+test('the share code is recovered from the download page when the field is absent', async () => {
+    const service = new GoFileService({
+        fetchImpl: async () => reply({ id: UUID_ONE, downloadPage: `https://gofile.io/d/${SHARE_CODE}` })
+    });
+    const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
+    assert.equal(result.mirrorLocator, SHARE_CODE);
+});
+
+test('the file UUID stands in only when there is no share code at all', async () => {
+    const service = new GoFileService({ fetchImpl: async () => reply({ id: UUID_ONE }) });
+    const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
+    assert.equal(result.mirrorLocator, UUID_ONE);
 });
 
 test('every mirrored deployment gets its own locator and filename', async () => {
@@ -369,9 +410,10 @@ test("the Worker's error vocabulary is translated, not passed through raw", asyn
         ['missing_token', 401, 'invalid_token'],
         ['listing_refused', 502, 'invalid_token'],
         ['file_not_found', 404, 'mirror_not_found'],
-        ['download_page_returned', 502, 'mirror_not_found'],
+        ['not_found', 404, 'mirror_not_found'],
         ['too_large', 413, 'too_large'],
-        ['invalid_content_id', 400, 'invalid_request']
+        ['invalid_content_id', 400, 'invalid_request'],
+        ['download_refused', 502, 'mirror_unavailable']
     ];
     for (const [error, status, code] of cases) {
         const service = new GoFileService({
@@ -382,10 +424,42 @@ test("the Worker's error vocabulary is translated, not passed through raw", asyn
                 })
         });
         await assert.rejects(
-            () => service.downloadPublicMirror(UUID_ONE, { token: 't', expectedFilename: NAME_ONE }),
+            () => service.downloadPublicMirror(SHARE_CODE, { token: 't', expectedFilename: NAME_ONE }),
             (thrown) => {
                 assert.equal(thrown.code, code, `${error} should map to ${code}`);
                 assert.match(thrown.message, new RegExp(error));
+                return true;
+            }
+        );
+    }
+});
+
+test('every judgement the Worker makes about the bytes aborts the mirror', async () => {
+    // These are the Worker refusing to vouch for what it fetched. None of them
+    // may end in bytes reaching the renderer.
+    const integrity = [
+        'download_page_returned',
+        'size_mismatch',
+        'untrusted_link',
+        'untrusted_redirect',
+        'too_many_redirects',
+        'invalid_link',
+        'invalid_redirect',
+        'unreadable_response'
+    ];
+    for (const error of integrity) {
+        const service = new GoFileService({
+            fetchImpl: async () =>
+                new Response(JSON.stringify({ error, message: `${error} happened` }), {
+                    status: 502,
+                    headers: { 'content-type': 'application/json' }
+                })
+        });
+        await assert.rejects(
+            () => service.downloadPublicMirror(SHARE_CODE, { token: 't', expectedFilename: NAME_ONE }),
+            (thrown) => {
+                assert.equal(thrown.code, 'mirror_untrusted', `${error} must not be survivable`);
+                assert.match(thrown.message, /did not verify/);
                 return true;
             }
         );
@@ -476,7 +550,7 @@ test('the resolver rejects a stream that exceeds the cap while arriving', async 
     );
 });
 
-test('a locator naming no content id never reaches the Worker', async () => {
+test('a locator in no recognised form never reaches the Worker', async () => {
     let called = 0;
     const service = new GoFileService({
         fetchImpl: async () => {
@@ -485,8 +559,27 @@ test('a locator naming no content id never reaches the Worker', async () => {
         }
     });
     await assert.rejects(
-        () => service.downloadPublicMirror('store6', { token: 't', expectedFilename: NAME_ONE }),
+        () => service.downloadPublicMirror('has spaces', { token: 't', expectedFilename: NAME_ONE }),
         (error) => error.code === 'invalid_locator'
     );
     assert.equal(called, 0);
+});
+
+test('the mirror bytes arrive byte for byte, whatever the payload looks like', async () => {
+    // GoFileService neither inspects nor transforms what it carries: a JSON
+    // mirror and a gzip bundle are the same thing to it, and any change would
+    // fail the piece verification that runs afterwards.
+    const payloads = [
+        ['json', new TextEncoder().encode('{"schema":"web25-gofile-mirror-v1","files":[]}')],
+        ['gzip', new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0x00, 0xff, 0xfe, 0x01, 0x00, 0x7f, 0x80])],
+        ['binary with nulls', new Uint8Array([0, 1, 0, 255, 0, 128, 0])]
+    ];
+    for (const [label, bytes] of payloads) {
+        const service = new GoFileService({ fetchImpl: async () => new Response(bytes) });
+        const received = await service.downloadPublicMirror(SHARE_CODE, {
+            token: 't',
+            expectedFilename: NAME_ONE
+        });
+        assert.deepEqual(received, bytes, `${label} survived the transport unchanged`);
+    }
 });

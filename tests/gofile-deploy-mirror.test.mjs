@@ -609,3 +609,50 @@ test('the two-file deploy bundle survives the mirror round trip intact', async (
     assert.equal(new TextDecoder().decode(decoded.files[1].bytes), bundle);
     assert.ok(decoded.torrentFile.length > 0, 'the signed metainfo travels with the payload');
 });
+
+test('a share-code locator is read back through the Worker before it is published', async () => {
+    // Nothing about the mirror reaches the WEB25 URL until the bytes GoFile
+    // will actually serve have been fetched back and matched.
+    const events = [];
+    const uploaded = [];
+    const { context, url } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => ({ token: 'publisher-token' }),
+        write: async () => {},
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            events.push('upload');
+            return { mirrorLocator: '1J53t9zb', filename: options.filename };
+        },
+        downloadPublicMirror: async (locator, options) => {
+            events.push(`read:${locator}:${options?.token}`);
+            // The URL must still be torrent-only at this point.
+            events.push(`url:${url()}`);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(events, ['upload', 'read:1J53t9zb:publisher-token', `url:https://web25.cloud/?orc=${HASH_ONE}`]);
+    assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}&1J53t9zb`, 'exact share-code case in the link');
+    assert.equal(context.lastDeployResult.mirror.locator, '1J53t9zb');
+});
+
+test('a share-code mirror that does not read back is never published', async () => {
+    const { context, url } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async () => ({ mirrorLocator: '1J53t9zb' }),
+            downloadPublicMirror: async () => new TextEncoder().encode('something else entirely')
+        }
+    });
+
+    await context.deploySignedArtifact();
+
+    assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`, 'the unverified share code is never shared');
+    assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
+});

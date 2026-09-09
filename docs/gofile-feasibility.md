@@ -120,13 +120,34 @@ with it. Two callers, two situations:
   never persisted. It grants nothing beyond reading public content, and a locked
   wallet could not hold it anyway.
 
-A locator is now just the content UUID; the Worker resolves which storage server
-holds it. Links published in the earlier `<server>~<uuid>` form still resolve —
-the prefix is accepted and dropped — so nothing already shared breaks.
+A locator is the **share code** GoFile hands out for the upload — `1J53t9zb` in
+a `https://gofile.io/d/1J53t9zb` link — taken from `parentFolderCode`, or read
+out of `downloadPage` when that field is absent, and falling back to the file
+UUID only when neither exists. Its case is part of it, so it is passed through
+untouched; `1J53t9zb` and `1j53t9zb` are different links. The code names the
+folder this one mirror was uploaded into, and since no folder is ever reused it
+still names a single deployment.
 
-The Worker's error vocabulary is translated rather than passed through:
-`missing_token` and `listing_refused` become a credential problem,
-`file_not_found` and `download_page_returned` become a missing mirror.
+Every form WEB25 has ever published keeps resolving: share codes, the bare
+UUIDs published before them, and the `<server>~<uuid>` links minted while reads
+went straight to storage, whose prefix is accepted and dropped. UUIDs are
+case-insensitive by definition, so those are normalised; share codes are not.
+
+The Worker's error vocabulary is translated rather than passed through.
+`missing_token` and `listing_refused` become a credential problem;
+`file_not_found` a missing mirror; `download_refused` an unavailable one. The
+judgements the Worker makes about the bytes themselves — `download_page_returned`
+and `size_mismatch`, and the trust and redirect refusals `untrusted_link`,
+`untrusted_redirect`, `too_many_redirects`, `invalid_link`, `invalid_redirect`
+and `unreadable_response` — all become `mirror_untrusted`. Every one of them
+throws, so a mirror the Worker will not vouch for aborts the fallback rather
+than degrading into something rendered unverified.
+
+`GoFileService` carries bytes and never reads them: no sniffing, no
+decompression, no transformation. A mirror is UTF-8 JSON and a site bundle is
+gzip, and both cross it identically — which is what lets the info-hash, piece,
+TorrentChain and bundle checks downstream stay the only thing that decides
+whether anything renders.
 
 What this costs is a service WEB25 operates. That is a real dependency, but it
 is ours: no third party sees the traffic, and the fallback stops depending on a
