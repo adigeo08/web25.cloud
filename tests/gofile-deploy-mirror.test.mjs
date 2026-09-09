@@ -304,7 +304,11 @@ test('the upload authenticates with the freshly issued guest token', async () =>
 
     await context.deploySignedArtifact();
 
-    assert.deepEqual(reads, [{ locator: 'file_fresh', token: null }], 'the public read needs no credential');
+    assert.deepEqual(
+        reads,
+        [{ locator: 'file_fresh', token: 'brand-new-token' }],
+        'the read-back authenticates with the credential that owns the upload'
+    );
     assert.equal(context.lastDeployResult.mirror.locator, 'file_fresh');
 });
 
@@ -333,7 +337,7 @@ test('the upload falls back to the stored credential when no new one is issued',
     await context.deploySignedArtifact();
 
     assert.deepEqual(uploads, ['stored-token']);
-    assert.deepEqual(reads, [null]);
+    assert.deepEqual(reads, ['stored-token'], 'the read-back reuses the credential that authenticated the upload');
     assert.equal(context.lastDeployResult.mirrorState, 'available');
 });
 
@@ -495,7 +499,7 @@ test('a deployment never replaces a credential that already works', async () => 
         uploaded.map(() => 'uploaded'),
         ['uploaded']
     );
-    assert.deepEqual(reads, [null], 'the public read-back carries no credential');
+    assert.deepEqual(reads, ['token-from-login'], 'the read-back uses the credential that owns the upload');
     assert.equal(context.lastDeployResult.mirrorState, 'available');
 });
 
@@ -525,7 +529,7 @@ test('a deployment does persist a credential when the identity holds none', asyn
     await context.deploySignedArtifact();
 
     assert.deepEqual(writes, ['token-from-upload']);
-    assert.deepEqual(reads, [null]);
+    assert.deepEqual(reads, ['token-from-upload']);
 });
 
 test('a refused credential is replaced, not kept', async () => {
@@ -563,4 +567,45 @@ test('a refused credential is replaced, not kept', async () => {
 
     assert.equal(cleared, 1);
     assert.deepEqual(writes, ['replacement-token']);
+});
+
+test('the two-file deploy bundle survives the mirror round trip intact', async () => {
+    // What a real deploy stages: the signature manifest plus the gzip site
+    // bundle. Both have to come back byte-identical, in metainfo order, or the
+    // piece verification a visitor runs would reject them.
+    const { decodeGoFileMirror } = await import('../src/gofile/GoFileMirrorCodec.js');
+    const manifest = '{"payload":{"publisher":"0xpublisher"},"signature":"0xsig"}';
+    const bundle = 'gzip-bytes-standing-in-for-site.bundle.json.gz';
+
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.lastPublishCandidate.payloadFiles = [
+        payloadFile('.torrentchain', manifest),
+        payloadFile('site.bundle.json.gz', bundle)
+    ];
+    context.gofileCredentialStore = {
+        read: async () => ({ token: 'publisher-token' }),
+        write: async () => {},
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            return { mirrorLocator: '9632c967-30e5-4123-856a-8b2c425d1c74', filename: options.filename };
+        },
+        downloadPublicMirror: async () => new Uint8Array(await uploaded[0].arrayBuffer())
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.equal(context.lastDeployResult.mirrorState, 'available');
+    const decoded = decodeGoFileMirror(new Uint8Array(await uploaded[0].arrayBuffer()));
+    assert.deepEqual(
+        decoded.files.map((file) => file.path),
+        ['.torrentchain', 'site.bundle.json.gz'],
+        'both files, in the order the torrent lays them out'
+    );
+    assert.equal(new TextDecoder().decode(decoded.files[0].bytes), manifest);
+    assert.equal(new TextDecoder().decode(decoded.files[1].bytes), bundle);
+    assert.ok(decoded.torrentFile.length > 0, 'the signed metainfo travels with the payload');
 });
