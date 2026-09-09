@@ -275,9 +275,9 @@ test('a mirror whose read-back fails outright leaves the deployment successful',
     assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
 });
 
-test('the read-back authenticates with the freshly issued guest token', async () => {
-    // The upload may have just replaced the stored credential, so the token
-    // that comes back with it is the one the read has to use.
+test('the upload authenticates with the freshly issued guest token', async () => {
+    // The credential belongs to the upload. The read-back is the public route
+    // a visitor uses, so it deliberately carries none.
     const reads = [];
     const { context } = await deployContext({
         mirrorEnabled: true,
@@ -304,11 +304,12 @@ test('the read-back authenticates with the freshly issued guest token', async ()
 
     await context.deploySignedArtifact();
 
-    assert.deepEqual(reads, [{ locator: 'file_fresh', token: 'brand-new-token' }]);
+    assert.deepEqual(reads, [{ locator: 'file_fresh', token: null }], 'the public read needs no credential');
     assert.equal(context.lastDeployResult.mirror.locator, 'file_fresh');
 });
 
-test('the read-back falls back to the stored credential when no new one is issued', async () => {
+test('the upload falls back to the stored credential when no new one is issued', async () => {
+    const uploads = [];
     const reads = [];
     const uploaded = [];
     const { context } = await deployContext({ mirrorEnabled: true });
@@ -319,6 +320,7 @@ test('the read-back falls back to the stored credential when no new one is issue
     };
     context.gofileService = {
         upload: async (blob, options) => {
+            uploads.push(options.token ?? null);
             uploaded.push(blob);
             return { mirrorLocator: 'file_stored', filename: options.filename };
         },
@@ -330,7 +332,8 @@ test('the read-back falls back to the stored credential when no new one is issue
 
     await context.deploySignedArtifact();
 
-    assert.deepEqual(reads, ['stored-token']);
+    assert.deepEqual(uploads, ['stored-token']);
+    assert.deepEqual(reads, [null]);
     assert.equal(context.lastDeployResult.mirrorState, 'available');
 });
 
@@ -488,7 +491,11 @@ test('a deployment never replaces a credential that already works', async () => 
     await context.deploySignedArtifact();
 
     assert.deepEqual(writes, [], 'the login credential is left exactly as it was');
-    assert.deepEqual(reads, ['token-from-login'], 'the read uses the credential that owns the upload');
+    assert.deepEqual(
+        uploaded.map(() => 'uploaded'),
+        ['uploaded']
+    );
+    assert.deepEqual(reads, [null], 'the public read-back carries no credential');
     assert.equal(context.lastDeployResult.mirrorState, 'available');
 });
 
@@ -518,7 +525,7 @@ test('a deployment does persist a credential when the identity holds none', asyn
     await context.deploySignedArtifact();
 
     assert.deepEqual(writes, ['token-from-upload']);
-    assert.deepEqual(reads, ['token-from-upload']);
+    assert.deepEqual(reads, [null]);
 });
 
 test('a refused credential is replaced, not kept', async () => {

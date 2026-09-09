@@ -122,6 +122,7 @@ test('wallet credentials are isolated by owner and clearing A keeps B', async ()
 });
 
 const HASH = '0123456789abcdef0123456789abcdef01234567';
+const UUID = '9632c967-30e5-4123-856a-8b2c425d1c74';
 
 test('the token put on the wire is the decrypted one, not the stored ciphertext', async () => {
     const fake = installFakeIndexedDb();
@@ -134,37 +135,27 @@ test('the token put on the wire is the decrypted one, not the stored ciphertext'
         const row = fake.rawRows(GOFILE_CREDENTIAL_DB_NAME, GOFILE_CREDENTIAL_STORE_NAME)[0];
         assert.notEqual(row.ciphertext, 'guest-plaintext-secret', 'the row really is encrypted');
 
-        // Round-trip the way both call sites do: read from IndexedDB, decrypt,
-        // hand the plaintext to the service, and inspect the actual header.
+        // Round-trip the way the deploy does: read from IndexedDB, decrypt, and
+        // hand the plaintext to the upload, then inspect the actual header.
         const credential = await store.read();
-        const headers = [];
+        let authorization = 'unset';
         const service = new GoFileService({
-            fetchImpl: async (url, init) => {
-                headers.push(init?.headers?.Authorization ?? null);
-                if (url.startsWith('https://api.gofile.io/contents')) {
-                    return new Response(
-                        JSON.stringify({
-                            status: 'ok',
-                            data: {
-                                type: 'file',
-                                name: gofileMirrorFilename(HASH),
-                                link: 'https://cold1.gofile.io/download/one'
-                            }
-                        }),
-                        { status: 200, headers: { 'content-type': 'application/json' } }
-                    );
-                }
-                return new Response(new Uint8Array([1, 2, 3]));
+            fetchImpl: async (_url, init) => {
+                authorization = init?.headers?.Authorization ?? null;
+                return new Response(JSON.stringify({ status: 'ok', data: { id: UUID, servers: ['store6'] } }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' }
+                });
             }
         });
 
-        await service.downloadPublicMirror('file_1', {
-            token: credential.token,
-            expectedFilename: gofileMirrorFilename(HASH)
+        await service.upload(new Blob(['mirror']), {
+            filename: gofileMirrorFilename(HASH),
+            token: credential.token
         });
 
-        assert.equal(headers[0], 'Bearer guest-plaintext-secret');
-        assert.doesNotMatch(`${headers[0]}`, /[{}]/, 'no ciphertext envelope reaches the header');
+        assert.equal(authorization, 'Bearer guest-plaintext-secret');
+        assert.doesNotMatch(`${authorization}`, /[{}]/, 'no ciphertext envelope reaches the header');
     } finally {
         fake.restore();
     }

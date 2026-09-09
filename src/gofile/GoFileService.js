@@ -2,8 +2,15 @@
 
 /** The only guest operation documented by GoFile. */
 export const GOFILE_UPLOAD_ENDPOINT = 'https://upload.gofile.io/uploadfile';
-export const GOFILE_CONTENT_ENDPOINT = 'https://api.gofile.io/contents';
 export const GOFILE_ACCOUNTS_ENDPOINT = 'https://api.gofile.io/accounts';
+
+/**
+ * The route GoFile's own web client uses to fetch a public file's bytes. It is
+ * not part of the API reference — the documented listing and direct-link
+ * routes are both Premium — so the shape is pinned here and validated hard.
+ */
+export const GOFILE_STORAGE_URL = (server, contentId, filename) =>
+    `https://${server}.gofile.io/download/web/${contentId}/${encodeURIComponent(filename)}`;
 
 /**
  * GoFile is best-effort fallback transport, never the primary one, so every
@@ -11,7 +18,6 @@ export const GOFILE_ACCOUNTS_ENDPOINT = 'https://api.gofile.io/accounts';
  * else: not the deployment, not the resolver, not the loading overlay.
  */
 export const GOFILE_UPLOAD_TIMEOUT_MS = 30000;
-export const GOFILE_METADATA_TIMEOUT_MS = 20000;
 export const GOFILE_DOWNLOAD_TIMEOUT_MS = 30000;
 export const GOFILE_MIRROR_MAX_BYTES = 64 * 1024 * 1024;
 export const GOFILE_ACCOUNT_TIMEOUT_MS = 20000;
@@ -30,6 +36,29 @@ export class GoFileError extends Error {
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const MIRROR_FILENAME = /^[A-Za-z0-9_.-]{1,128}$/;
 const ACCOUNT_TOKEN = /^[A-Za-z0-9._~+/=-]{8,4096}$/;
+const STORAGE_SERVER = /^[A-Za-z0-9-]{1,64}$/;
+/** Content ids are UUIDs, per the API's conventions. */
+const CONTENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A mirror locator names the storage server and the content UUID that together
+ * address one uploaded file: `<server>~<uuid>`. Both halves come straight from
+ * the upload response, so nothing has to be looked up to read the mirror back.
+ */
+export function formatMirrorLocator(server, contentId) {
+    return `${server}~${`${contentId}`.toLowerCase()}`;
+}
+
+export function parseMirrorLocator(locator) {
+    const [server, contentId, ...extra] = `${locator || ''}`.split('~');
+    if (extra.length > 0 || !STORAGE_SERVER.test(`${server}`) || !CONTENT_UUID.test(`${contentId}`)) {
+        throw new GoFileError(
+            'invalid_locator',
+            'This WEB25 address carries a mirror locator that names no GoFile storage server.'
+        );
+    }
+    return { server, contentId: contentId.toLowerCase() };
+}
 
 /**
  * The global fetch, bound to the global.
@@ -68,20 +97,18 @@ function transportError(cause, signal, timeoutMs, subject) {
 export class GoFileService {
     /**
      * @param {{ fetchImpl?: typeof fetch, endpoint?: string, uploadTimeoutMs?: number,
-     *           metadataTimeoutMs?: number, downloadTimeoutMs?: number }} [options]
+     *           downloadTimeoutMs?: number }} [options]
      */
     constructor({
         fetchImpl = globalFetch(),
         endpoint = GOFILE_UPLOAD_ENDPOINT,
         uploadTimeoutMs = GOFILE_UPLOAD_TIMEOUT_MS,
-        metadataTimeoutMs = GOFILE_METADATA_TIMEOUT_MS,
         downloadTimeoutMs = GOFILE_DOWNLOAD_TIMEOUT_MS
     } = {}) {
         if (typeof fetchImpl !== 'function') throw new TypeError('GoFileService requires fetch.');
         this.fetchImpl = fetchImpl;
         this.endpoint = endpoint;
         this.uploadTimeoutMs = uploadTimeoutMs;
-        this.metadataTimeoutMs = metadataTimeoutMs;
         this.downloadTimeoutMs = downloadTimeoutMs;
     }
 
@@ -162,8 +189,7 @@ export class GoFileService {
             throw transportError(cause, signal, timeoutMs, 'GoFile upload');
         }
         if (!response.ok) {
-            const code = response.status === 401 || response.status === 403 ? 'invalid_token' : 'http';
-            throw new GoFileError(code, `GoFile upload failed (HTTP ${response.status}).`, { status: response.status });
+            throw classifyApiFailure(await failureBody(response), response.status, 'The GoFile upload');
         }
 
         let body;
@@ -176,7 +202,7 @@ export class GoFileService {
             throw new GoFileError('invalid_response', 'GoFile returned an unreadable upload response.', { cause });
         }
         if (body?.status !== 'ok' || !body?.data || typeof body.data !== 'object') {
-            throw new GoFileError('api', `GoFile rejected the upload (${apiStatus(body)}).`);
+            throw classifyApiFailure(body, 200, 'The GoFile upload');
         }
 
         const data = body.data;
@@ -188,10 +214,10 @@ export class GoFileService {
             ? data.servers.filter((server) => typeof server === 'string' && SAFE_ID.test(server)).slice(0, 20)
             : [];
 
-        // The locator is the content id of this one uploaded mirror, never the
-        // folder holding it: a folder identifier would grow into a public index
-        // of every site this publisher has ever mirrored, and would make each
-        // new deployment ambiguous with the ones before it.
+        // The locator addresses this one uploaded file on the server holding
+        // it, never the folder around it: a folder identifier would grow into a
+        // public index of every site this publisher has ever mirrored, and
+        // would make each new deployment ambiguous with the ones before it.
         const result = {
             id,
             filename,
@@ -199,7 +225,7 @@ export class GoFileService {
             parentFolderCode,
             downloadPage,
             servers,
-            mirrorLocator: id,
+            mirrorLocator: servers.length > 0 ? formatMirrorLocator(servers[0], id) : null,
             // A share code/page proves that a public share exists, not that an
             // unrelated browser can resolve it through the documented API.
             publicShareAvailable: Boolean(parentFolderCode && downloadPage),
@@ -214,83 +240,40 @@ export class GoFileService {
     }
 
     /**
-     * Resolve one mirror locator and fetch the named mirror object it holds.
-     * `expectedFilename` selects the deployment: hash verification downstream
-     * rejects a wrong mirror, but it is not how the right one is chosen.
+     * Fetch one mirror's bytes straight from the storage server that holds it.
+     *
+     * There is no lookup step: the locator carries the server and the content
+     * id, and the filename is derived from the torrent hash, so the URL is
+     * fully determined before the first request. That is also what picks the
+     * right mirror — a wrong name is a 404, not a wrong file — and it keeps the
+     * account credential away from a host we do not control.
      * @param {string} locator
-     * @param {{ expectedFilename?: string|null, signal?: AbortSignal, metadataTimeoutMs?: number, downloadTimeoutMs?: number }} [options]
+     * @param {{ expectedFilename: string, signal?: AbortSignal, downloadTimeoutMs?: number }} options
      */
-    async downloadPublicMirror(
-        locator,
-        {
-            token = null,
-            expectedFilename = null,
-            signal,
-            metadataTimeoutMs = this.metadataTimeoutMs,
-            downloadTimeoutMs = this.downloadTimeoutMs
-        } = {}
-    ) {
-        const safeLocator = validId(locator, 'mirror locator');
-        if (expectedFilename !== null && !MIRROR_FILENAME.test(`${expectedFilename}`)) {
+    async downloadPublicMirror(locator, { expectedFilename, signal, downloadTimeoutMs = this.downloadTimeoutMs } = {}) {
+        if (typeof expectedFilename !== 'string' || !MIRROR_FILENAME.test(expectedFilename)) {
             throw new GoFileError('invalid_request', 'GoFile mirror filename is invalid.');
         }
+        const { server, contentId } = parseMirrorLocator(locator);
+        const url = GOFILE_STORAGE_URL(server, contentId, expectedFilename);
 
-        // GoFile draws no distinction between a token issued from the dashboard
-        // and the guest token an upload hands back: both authenticate the same
-        // way. The bearer goes only to the content API, whose host is a
-        // constant here — never to the storage URL that same API names, which
-        // would hand a credential to whatever host the response points at.
-        const headers = {};
-        if (token) headers.Authorization = `Bearer ${token}`;
-
-        let metadataResponse;
+        let response;
         try {
-            metadataResponse = await this.fetchImpl(`${GOFILE_CONTENT_ENDPOINT}/${encodeURIComponent(safeLocator)}`, {
-                headers,
-                signal: boundedSignal(metadataTimeoutMs, signal)
-            });
-        } catch (cause) {
-            throw transportError(cause, signal, metadataTimeoutMs, 'GoFile mirror metadata');
-        }
-        if (!metadataResponse.ok) {
-            throw classifyApiFailure(
-                await failureBody(metadataResponse),
-                metadataResponse.status,
-                'Resolving the GoFile mirror'
-            );
-        }
-        let body;
-        try {
-            body = await metadataResponse.json();
-        } catch (cause) {
-            if (cause?.name === 'TimeoutError' || cause?.name === 'AbortError') {
-                throw transportError(cause, signal, metadataTimeoutMs, 'GoFile mirror metadata');
-            }
-            throw new GoFileError('invalid_response', 'GoFile mirror metadata is unreadable.', { cause });
-        }
-        // A 200 can still carry an error status; the same classification applies.
-        if (body?.status !== 'ok') throw classifyApiFailure(body, 200, 'Resolving the GoFile mirror');
-        const mirror = selectMirror(collectFiles(body.data), expectedFilename);
-
-        let fileUrl;
-        try {
-            fileUrl = new URL(mirror.link);
-            if (fileUrl.protocol !== 'https:') throw new Error('not HTTPS');
-        } catch (_) {
-            throw new GoFileError('invalid_response', 'GoFile returned an invalid mirror byte URL.');
-        }
-        let bytesResponse;
-        try {
-            bytesResponse = await this.fetchImpl(fileUrl.href, { signal: boundedSignal(downloadTimeoutMs, signal) });
+            response = await this.fetchImpl(url, { signal: boundedSignal(downloadTimeoutMs, signal) });
         } catch (cause) {
             throw transportError(cause, signal, downloadTimeoutMs, 'GoFile mirror bytes');
         }
-        if (!bytesResponse.ok) {
-            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${bytesResponse.status}).`, {
-                status: bytesResponse.status
+        if (response.status === 404) {
+            throw new GoFileError('mirror_not_found', 'This deployment has no mirror on that GoFile server.', {
+                status: 404
             });
         }
-        return readBoundedBytes(bytesResponse, signal, downloadTimeoutMs);
+        if (!response.ok) {
+            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${response.status}).`, {
+                status: response.status
+            });
+        }
+        return readBoundedBytes(response, signal, downloadTimeoutMs);
     }
 }
 
@@ -395,34 +378,6 @@ async function failureBody(response) {
     } catch (_) {
         return null;
     }
-}
-
-/** Pick the one mirror this deployment asked for, or refuse to guess. */
-function selectMirror(candidates, expectedFilename) {
-    if (expectedFilename) {
-        const matches = candidates.filter((file) => file.name === expectedFilename);
-        if (matches.length === 0) {
-            throw new GoFileError('mirror_not_found', 'The GoFile locator holds no mirror for this deployment.');
-        }
-        if (matches.length > 1) {
-            throw new GoFileError('ambiguous_mirror', 'The GoFile locator holds more than one copy of this mirror.');
-        }
-        return matches[0];
-    }
-    if (candidates.length !== 1) {
-        throw new GoFileError('ambiguous_mirror', 'The GoFile locator does not identify exactly one mirror.');
-    }
-    return candidates[0];
-}
-
-function collectFiles(node, output = []) {
-    if (!node || typeof node !== 'object') return output;
-    if (node.type === 'file' && typeof node.link === 'string') output.push(node);
-    const children = node.children;
-    if (children && typeof children === 'object') {
-        Object.values(children).forEach((child) => collectFiles(child, output));
-    }
-    return output;
 }
 
 function validId(value, label) {

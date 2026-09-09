@@ -384,21 +384,6 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     }
 }
 
-/**
- * A visitor resolving a WEB25 link is usually not the publisher: no wallet is
- * unlocked and no GoFile credential exists. That is an ordinary case, not an
- * error, so the credential is read best-effort and its absence simply means the
- * mirror is attempted unauthenticated.
- */
-async function guestTokenFrom(store) {
-    try {
-        const credential = await store?.read();
-        return credential?.token || null;
-    } catch (_) {
-        return null;
-    }
-}
-
 export async function handleTerminalP2PFailure(
     hash,
     gofileLocator,
@@ -428,8 +413,9 @@ export async function handleTerminalP2PFailure(
         // Ask for this deployment's mirror by name. Hash verification below is
         // what makes the bytes trustworthy; it is not how the right mirror is
         // picked out of a locator that may hold more than one.
+        // The public storage route needs no account, so a visitor resolves a
+        // mirror exactly as the publisher verified it.
         const wireBytes = await service.downloadPublicMirror(gofileLocator, {
-            token: await guestTokenFrom(this.gofileCredentialStore),
             expectedFilename: gofileMirrorFilename(hash),
             signal: controller.signal
         });

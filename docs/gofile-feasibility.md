@@ -49,52 +49,53 @@ one case that does replace is a credential GoFile refused, which has already
 been cleared by then. The read-back uses whichever token actually owns the
 upload.
 
-Resolving content is an **authenticated** call. `GET /contents/<id>` answers
-401 without a credential — observed live on 2026-09-07 against a real upload —
-and GoFile draws no distinction between a token created from the dashboard and
-the `guestToken` an upload hands back: both go in as `Authorization: Bearer`,
-the same scheme the upload itself already uses. The publisher's read-back sends
-the token the upload just issued, falling back to the stored one. A visitor
-sends the stored credential when this browser has one and attempts the read
-unauthenticated otherwise, since someone opening a WEB25 link is usually not the
-publisher and has no wallet unlocked.
+Uploading is an **authenticated** call once an account exists, and GoFile draws
+no distinction between a token created from the dashboard and the `guestToken`
+an upload hands back: both go in as `Authorization: Bearer`. The upload sends
+the stored credential when this identity has one, and otherwise lets GoFile mint
+a guest account and keeps what comes back. Reading is a separate matter and
+carries no credential at all — see below.
 
-The bearer reaches only `api.gofile.io`, whose host is a constant in the client.
-It is never attached to the storage URL that the API names in its response:
-that host is chosen by the response, and handing it a credential would leak one
-wherever GoFile points.
+The bearer reaches only the upload endpoint and `api.gofile.io`, whose hosts are
+constants in the client. It never reaches a storage server: reading is a public
+route and needs no credential, so there is nothing to leak there.
 
-## The blocking finding: the read route is Premium-only
+## Reading: the storage route, not the content API
 
-`GET /contents/{contentId}` is badged **Premium** in GoFile's own reference,
-which states it plainly: _"Direct API access to listings is Premium-only: other
-tiers receive `error-notPremium`."_ `error-notPremium` is listed as HTTP 401 —
-the same code as `error-token`, which is why a missing credential and a tier
-refusal look identical until the status field is read.
+`GET /contents/{contentId}` is badged **Premium** in GoFile's reference — _"Direct
+API access to listings is Premium-only: other tiers receive
+`error-notPremium`"_ — and `error-notPremium` answers 401, the same code as
+`error-token`, which is why a tier refusal first looked like a credential
+problem. Creating a direct link is Premium too. There is no documented,
+non-Premium API route for a program to read public content back.
 
-This is decisive rather than a detail. Both places WEB25 reads a mirror — the
-publisher's own read-back after upload, and a visitor's fallback — go through
-that endpoint, so on a guest or free account **neither can succeed**, with or
-without a token. Adding the credential was still correct and necessary; it was
-simply never the whole obstacle. Creating a direct link
-(`POST /contents/{id}/directlinks`) is Premium too, so that route is closed as
-well.
+WEB25 therefore reads the way GoFile's own web client does, straight from the
+storage server holding the file:
 
-What a guest account _can_ do, per the same reference, is everything on the
-write side: create an account, upload, create folders, update and delete. The
-public download page at `gofile.io/d/<code>` also stays reachable — for a person
-in a browser. What has no documented, non-Premium API is a program resolving
-those bytes back, which is exactly what a verified fallback transport requires.
+```
+https://<server>.gofile.io/download/web/<content uuid>/<filename>
+```
 
-So the options are: a Premium account (whose token would then have to live in a
-browser, against the reference's own advice — see below), an undocumented route
-the GoFile web client uses to resolve its own download pages, or accepting that
-GoFile is not a viable programmatic fallback at the free tier.
+Nothing is looked up to build it. The upload response already names the server
+(`servers[0]`) and the content id (`id`), and the filename is derived from the
+torrent hash, so the whole URL is determined before the first request. That is
+also what selects the deployment: a wrong name is a 404 rather than the wrong
+bytes. A mirror locator is consequently `<server>~<content uuid>` — `~` is
+unreserved, so it survives a WEB25 link unencoded. Locators from earlier builds
+were bare UUIDs, which name no server; they are refused with `invalid_locator`
+rather than guessed at.
 
-Failures are now classified by the API's status field rather than the HTTP code,
-following the reference's instruction to _"always branch on the `status` field,
-not the HTTP code alone"_. A Premium refusal reports as `premium_required` and
-says so, instead of being mistaken for a bad credential.
+Two consequences worth stating plainly. The route is **not in the API
+reference**: it is the web client's, so it can change without notice, and the
+client validates its shape strictly for that reason. And it is **public**, so no
+credential is sent to the storage host at all — a visitor resolves a mirror
+exactly as the publisher verified it, with no account, no wallet, and nothing to
+unlock. The credential is now only ever used for the upload.
+
+Per the conventions in the reference: content ids are UUIDs and that is what a
+locator carries; share codes address the same content but grant no extra access,
+so they are not used here; and all of this is independent of folder listings,
+which is the paginated, Premium-gated surface we no longer touch.
 
 ## The credential lives in a browser
 

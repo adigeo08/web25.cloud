@@ -49,6 +49,21 @@ test('WEB25 address parser rejects malformed hashes and locators', () => {
     assert.throws(() => parseWeb25Address(`${HASH}&one&two`), /only one/i);
 });
 
+test('a WEB25 link carries a storage locator through unchanged', () => {
+    // `<server>~<uuid>` is the shape the resolver needs; "~" is unreserved, so
+    // it survives both directions without percent-encoding.
+    const locator = 'store6~9632c967-30e5-4123-856a-8b2c425d1c74';
+    assert.deepEqual(parseWeb25Address(`${HASH}&${locator}`), { torrentHash: HASH, gofileLocator: locator });
+    assert.equal(
+        formatWeb25Url({ torrentHash: HASH, gofileLocator: locator, origin: 'https://web25.cloud', pathname: '/' }),
+        `https://web25.cloud/?orc=${HASH}&${locator}`
+    );
+    assert.deepEqual(parseWeb25Address(`https://web25.cloud/?orc=${HASH}&${locator}`), {
+        torrentHash: HASH,
+        gofileLocator: locator
+    });
+});
+
 test('WEB25 URL formatter emits canonical legacy and mirrored links', () => {
     assert.equal(
         formatWeb25Url({ torrentHash: HASH, origin: 'https://web25.cloud', pathname: '/' }),

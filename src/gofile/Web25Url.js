@@ -1,7 +1,8 @@
 // @ts-check
 
 const HASH_RE = /^[0-9a-f]{40}$/i;
-const LOCATOR_RE = /^[A-Za-z0-9_-]{1,256}$/;
+// A locator is `<storage server>~<content uuid>`; "~" is URL-safe and unreserved.
+const LOCATOR_RE = /^[A-Za-z0-9_~-]{1,256}$/;
 
 export class Web25UrlError extends Error {
     constructor(message) {

@@ -1495,10 +1495,10 @@ export async function createGoFileMirror(hash) {
         }
     }
     if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
-    // Read with the credential that owns the upload: the stored one when it
-    // authenticated the upload, otherwise the one GoFile issued for it.
+    // Read back over the public storage route, which takes no credential: the
+    // proof a mirror is resolvable has to be made the way a visitor will make
+    // it, and a visitor has no account.
     const readBack = await this.gofileService.downloadPublicMirror(upload.mirrorLocator, {
-        token: credential?.token || upload.guestToken || null,
         expectedFilename: filename
     });
     if (!sameBytes(readBack, mirrorBytes)) {

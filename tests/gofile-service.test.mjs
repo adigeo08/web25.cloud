@@ -2,15 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    formatMirrorLocator,
+    parseMirrorLocator,
     GoFileError,
     GoFileService,
     GOFILE_ACCOUNTS_ENDPOINT,
-    GOFILE_CONTENT_ENDPOINT,
+    GOFILE_STORAGE_URL,
     GOFILE_UPLOAD_ENDPOINT,
     GOFILE_UPLOAD_TIMEOUT_MS,
-    GOFILE_METADATA_TIMEOUT_MS,
     GOFILE_DOWNLOAD_TIMEOUT_MS,
-    GOFILE_MIRROR_MAX_BYTES
+    GOFILE_ACCOUNT_TIMEOUT_MS
 } from '../src/gofile/GoFileService.js';
 import { gofileMirrorFilename } from '../src/gofile/GoFileMirrorCodec.js';
 
@@ -18,6 +19,8 @@ const HASH_ONE = '0123456789abcdef0123456789abcdef01234567';
 const HASH_TWO = 'fedcba9876543210fedcba9876543210fedcba98';
 const NAME_ONE = gofileMirrorFilename(HASH_ONE);
 const NAME_TWO = gofileMirrorFilename(HASH_TWO);
+const UUID_ONE = '9632c967-30e5-4123-856a-8b2c425d1c74';
+const UUID_TWO = '9ed4fb4e-2f24-44f1-8e40-03e949a36517';
 
 const reply = (data, options = {}) =>
     new Response(JSON.stringify({ status: 'ok', data }), {
@@ -26,26 +29,16 @@ const reply = (data, options = {}) =>
         ...options
     });
 
-const fileNode = (name, link) => ({ type: 'file', name, link });
-const streamResponse = (chunks, headers = {}) =>
-    new Response(
-        new ReadableStream({
-            start(controller) {
-                for (const chunk of chunks) controller.enqueue(chunk);
-                controller.close();
-            }
-        }),
-        { headers }
-    );
-
-const mirrorMetadata = () =>
-    reply({ type: 'folder', children: { a: fileNode(NAME_ONE, 'https://store1.gofile.io/download/one') } });
+const errorReply = (status, httpStatus = 200) =>
+    new Response(JSON.stringify({ status }), {
+        status: httpStatus,
+        headers: { 'content-type': 'application/json' }
+    });
 
 /**
  * A request that never answers until its deadline aborts it. The keep-alive
  * timer stands in for a real socket: AbortSignal.timeout does not hold the
- * event loop open by itself, so without it the stall would end early for the
- * wrong reason.
+ * event loop open by itself.
  */
 const stalled = () => (_url, init) =>
     new Promise((_resolve, reject) => {
@@ -56,63 +49,37 @@ const stalled = () => (_url, init) =>
         });
     });
 
+// ── Locators ────────────────────────────────────────────────────────────────
+
+test('a locator names a storage server and a content UUID', () => {
+    assert.equal(formatMirrorLocator('store6', UUID_ONE), `store6~${UUID_ONE}`);
+    assert.deepEqual(parseMirrorLocator(`store6~${UUID_ONE}`), { server: 'store6', contentId: UUID_ONE });
+    // Server names carry hyphens too, so the separator has to be its own thing.
+    assert.deepEqual(parseMirrorLocator(`store-1~${UUID_ONE}`), { server: 'store-1', contentId: UUID_ONE });
+    assert.deepEqual(parseMirrorLocator(`store6~${UUID_ONE.toUpperCase()}`), {
+        server: 'store6',
+        contentId: UUID_ONE
+    });
+});
+
+test('a locator that names no server is refused rather than guessed at', () => {
+    // Bare UUIDs are what earlier builds published, back when the read went
+    // through the listing API. They cannot address a storage server.
+    for (const locator of [UUID_ONE, '', 'store6', 'store6~not-a-uuid', `a~b~${UUID_ONE}`, `sto re~${UUID_ONE}`]) {
+        assert.throws(
+            () => parseMirrorLocator(locator),
+            (error) => error instanceof GoFileError && error.code === 'invalid_locator'
+        );
+    }
+});
+
 test('the shipped timeouts are finite and bounded', () => {
-    for (const value of [GOFILE_UPLOAD_TIMEOUT_MS, GOFILE_METADATA_TIMEOUT_MS, GOFILE_DOWNLOAD_TIMEOUT_MS]) {
+    for (const value of [GOFILE_UPLOAD_TIMEOUT_MS, GOFILE_DOWNLOAD_TIMEOUT_MS, GOFILE_ACCOUNT_TIMEOUT_MS]) {
         assert.ok(Number.isFinite(value) && value >= 1000 && value <= 60000, `unusable timeout: ${value}`);
     }
 });
 
-test('the global fetch is never invoked as a method of the service', async () => {
-    // A browser refuses `someObject.fetch(...)` with "Illegal invocation" and
-    // refuses it before the request leaves, so the symptom is an empty network
-    // tab, not a failed call. Node's fetch ignores its receiver, so the only
-    // way to catch this here is a stub that enforces what a browser enforces.
-    const previous = globalThis.fetch;
-    let receiver = 'never called';
-    globalThis.fetch = function (...args) {
-        receiver = this === undefined || this === globalThis ? 'global' : 'not the global';
-        if (receiver !== 'global') {
-            throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
-        }
-        return Promise.resolve(reply({ id: 'file_1' }));
-    };
-    try {
-        const service = new GoFileService();
-        const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
-        assert.equal(receiver, 'global');
-        assert.equal(result.mirrorLocator, 'file_1');
-    } finally {
-        globalThis.fetch = previous;
-    }
-});
-
-test('first guest upload has no token and captures the issued credential privately', async () => {
-    let request;
-    const service = new GoFileService({
-        fetchImpl: async (url, init) => {
-            request = { url, init };
-            return reply({
-                id: 'file_1',
-                parentFolder: 'folder_1',
-                parentFolderCode: 'Share123',
-                downloadPage: 'https://gofile.io/d/Share123',
-                servers: ['store1'],
-                guestToken: 'super-secret-token'
-            });
-        }
-    });
-    const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
-
-    assert.equal(request.url, GOFILE_UPLOAD_ENDPOINT);
-    assert.equal(request.init.method, 'POST');
-    assert.equal(request.init.body.get('token'), null);
-    assert.equal(request.init.headers.Authorization, undefined);
-    assert.equal(result.guestToken, 'super-secret-token');
-    assert.equal(result.publicShareAvailable, true);
-    assert.equal(result.programmaticReadVerified, false);
-    assert.doesNotMatch(JSON.stringify(result), /super-secret-token/);
-    assert.deepEqual(Object.keys(result).includes('guestToken'), false);
-});
+// ── Accounts ────────────────────────────────────────────────────────────────
 
 test('a guest account is created unauthenticated, and its token stays out of projections', async () => {
     let request;
@@ -120,7 +87,7 @@ test('a guest account is created unauthenticated, and its token stays out of pro
         fetchImpl: async (url, init) => {
             request = { url, method: init?.method, authorization: init?.headers?.Authorization ?? null };
             return reply({
-                id: '9ed4fb4e-2f24-44f1-8e40-03e949a36517',
+                id: UUID_TWO,
                 rootFolder: '86002706-7aa3-4143-a523-1660f089ba4a',
                 tier: 'guest',
                 token: 'eyJhbGciOiJIUzI1NiJ9.payload.signature'
@@ -156,83 +123,59 @@ test('a stalled account request ends at its deadline', async () => {
     );
 });
 
-test('failures are classified by the API status, not by the HTTP code', async () => {
-    // GoFile's own guidance: branch on status, since error-token and
-    // error-notPremium are both 401 and mean completely different things.
-    const cases = [
-        ['error-notPremium', 401, 'premium_required', /Premium-only/i],
-        ['error-token', 401, 'invalid_token', /rejected the credential/i],
-        ['error-rateLimit', 429, 'rate_limited', /rate limited/i],
-        ['error-notFound', 404, 'mirror_not_found', /no longer exists/i],
-        ['error-notOwner', 401, 'invalid_token', /belongs to another GoFile account/i]
-    ];
-    for (const [status, httpStatus, code, message] of cases) {
-        const service = new GoFileService({
-            fetchImpl: async () =>
-                new Response(JSON.stringify({ status }), {
-                    status: httpStatus,
-                    headers: { 'content-type': 'application/json' }
-                })
-        });
-        await assert.rejects(
-            () => service.downloadPublicMirror('file_1', { token: 'guest', expectedFilename: NAME_ONE }),
-            (error) => {
-                assert.equal(error.code, code, `${status} should map to ${code}`);
-                assert.match(error.message, message);
-                assert.match(error.message, new RegExp(status));
-                return true;
-            }
-        );
-    }
-});
+// ── Uploads ─────────────────────────────────────────────────────────────────
 
-test('a Premium refusal answered as HTTP 200 is classified the same way', async () => {
-    const notPremium = new GoFileService({
-        fetchImpl: async () =>
-            new Response(JSON.stringify({ status: 'error-notPremium' }), {
-                status: 200,
-                headers: { 'content-type': 'application/json' }
-            })
+test('first guest upload has no token and captures the issued credential privately', async () => {
+    let request;
+    const service = new GoFileService({
+        fetchImpl: async (url, init) => {
+            request = { url, init };
+            return reply({
+                id: UUID_ONE,
+                parentFolder: '86002706-7aa3-4143-a523-1660f089ba4a',
+                parentFolderCode: 'vznxYrkN',
+                downloadPage: 'https://gofile.io/d/vznxYrkN',
+                servers: ['store6'],
+                guestToken: 'super-secret-token'
+            });
+        }
     });
-    await assert.rejects(
-        () => notPremium.downloadPublicMirror('file_1', { token: 'guest', expectedFilename: NAME_ONE }),
-        (error) => error.code === 'premium_required' && /error-notPremium/.test(error.message)
-    );
+    const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
+
+    assert.equal(request.url, GOFILE_UPLOAD_ENDPOINT);
+    assert.equal(request.init.method, 'POST');
+    assert.equal(request.init.body.get('folderId'), null, 'no upload is aimed at a remembered folder');
+    assert.equal(request.init.headers.Authorization, undefined);
+    assert.equal(result.guestToken, 'super-secret-token');
+    assert.doesNotMatch(JSON.stringify(result), /super-secret-token/);
 });
 
-test('a failure with no readable body still classifies by HTTP code', async () => {
-    const service = new GoFileService({ fetchImpl: async () => new Response('<html>502</html>', { status: 502 }) });
-    await assert.rejects(
-        () => service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error.code === 'http' && /HTTP 502/.test(error.message)
-    );
-});
-
-test('the locator is the uploaded content id, never the folder holding it', async () => {
+test('the locator names the storage server and the file, never the folder', async () => {
     const service = new GoFileService({
         fetchImpl: async () =>
             reply({
-                id: 'file_1',
+                id: UUID_ONE,
                 parentFolder: 'shared_guest_folder',
-                parentFolderCode: 'Share123',
-                downloadPage: 'https://gofile.io/d/Share123'
+                parentFolderCode: 'vznxYrkN',
+                servers: ['store6']
             })
     });
     const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
-    assert.equal(result.mirrorLocator, 'file_1');
+    assert.equal(result.mirrorLocator, `store6~${UUID_ONE}`);
     assert.notEqual(result.mirrorLocator, result.parentFolder);
 });
 
+test('an upload GoFile stores on no named server yields no locator', async () => {
+    const service = new GoFileService({ fetchImpl: async () => reply({ id: UUID_ONE, servers: [] }) });
+    const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
+    assert.equal(result.mirrorLocator, null, 'a mirror nobody can address is not advertised');
+});
+
 test('every mirrored deployment gets its own locator and filename', async () => {
-    let counter = 0;
+    const ids = [UUID_ONE, UUID_TWO];
+    let call = 0;
     const service = new GoFileService({
-        fetchImpl: async (_url, init) => {
-            counter += 1;
-            // Same guest account, same folder: only the content id and the
-            // filename separate one deployment from the next.
-            assert.equal(init.body.get('folderId'), null, 'no upload is ever aimed at a remembered folder');
-            return reply({ id: `file_${counter}`, parentFolder: 'shared_guest_folder' });
-        }
+        fetchImpl: async () => reply({ id: ids[call++], servers: ['store6'] })
     });
 
     const first = await service.upload(new Blob(['one']), { filename: NAME_ONE, token: 'guest' });
@@ -240,12 +183,10 @@ test('every mirrored deployment gets its own locator and filename', async () => 
 
     assert.notEqual(first.mirrorLocator, second.mirrorLocator);
     assert.notEqual(first.filename, second.filename);
-    assert.equal(first.filename, NAME_ONE);
-    assert.equal(second.filename, NAME_TWO);
 });
 
 test('an upload without a deployment-specific filename is refused', async () => {
-    const service = new GoFileService({ fetchImpl: async () => reply({ id: 'file_1' }) });
+    const service = new GoFileService({ fetchImpl: async () => reply({ id: UUID_ONE, servers: ['store6'] }) });
     await assert.rejects(() => service.upload(new Blob(['mirror'])), TypeError);
     await assert.rejects(() => service.upload(new Blob(['mirror']), { filename: 'no slashes/allowed' }), TypeError);
 });
@@ -255,7 +196,7 @@ test('a subsequent upload authenticates with the stored guest token', async () =
     const service = new GoFileService({
         fetchImpl: async (_, init) => {
             request = init;
-            return reply({ id: 'file2' });
+            return reply({ id: UUID_ONE, servers: ['store6'] });
         }
     });
     await service.upload(new Blob(['mirror']), { token: 'existing-token', filename: NAME_ONE });
@@ -273,28 +214,6 @@ test('a stalled upload ends at its deadline instead of hanging', async () => {
     assert.ok(Date.now() - started < 5000, 'the upload returned control promptly');
 });
 
-test('a stalled metadata lookup and a stalled byte download both end at their deadline', async () => {
-    const metadataStall = new GoFileService({ fetchImpl: stalled(), metadataTimeoutMs: 25 });
-    await assert.rejects(
-        () => metadataStall.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error instanceof GoFileError && error.code === 'timeout'
-    );
-
-    let call = 0;
-    const downloadStall = new GoFileService({
-        fetchImpl: (url, init) => {
-            call += 1;
-            if (call === 1) return Promise.resolve(reply(fileNode(NAME_ONE, 'https://store1.gofile.io/download/one')));
-            return stalled()(url, init);
-        },
-        downloadTimeoutMs: 25
-    });
-    await assert.rejects(
-        () => downloadStall.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error instanceof GoFileError && error.code === 'timeout'
-    );
-});
-
 test('caller cancellation stays distinguishable from a deadline', async () => {
     const controller = new AbortController();
     const service = new GoFileService({
@@ -309,206 +228,175 @@ test('caller cancellation stays distinguishable from a deadline', async () => {
     );
 });
 
-test('HTTP and malformed responses produce safe structured errors', async () => {
-    const unauthorized = new GoFileService({ fetchImpl: async () => new Response('secret-response', { status: 401 }) });
-    await assert.rejects(
-        () => unauthorized.upload(new Blob(['x']), { token: 'do-not-leak', filename: NAME_ONE }),
-        (error) =>
-            error instanceof GoFileError && error.code === 'invalid_token' && !error.message.includes('do-not-leak')
-    );
+test('upload failures are classified by the API status, not the HTTP code', async () => {
+    // GoFile's own guidance: branch on status, since error-token and
+    // error-notPremium are both 401 and mean completely different things.
+    const cases = [
+        ['error-notPremium', 401, 'premium_required', /Premium-only/i],
+        ['error-token', 401, 'invalid_token', /rejected the credential/i],
+        ['error-rateLimit', 429, 'rate_limited', /rate limited/i],
+        ['error-limits', 403, 'api', /error-limits/]
+    ];
+    for (const [status, httpStatus, code, message] of cases) {
+        const service = new GoFileService({ fetchImpl: async () => errorReply(status, httpStatus) });
+        await assert.rejects(
+            () => service.upload(new Blob(['x']), { filename: NAME_ONE, token: 'do-not-leak' }),
+            (error) => {
+                assert.equal(error.code, code, `${status} should map to ${code}`);
+                assert.match(error.message, message);
+                assert.doesNotMatch(error.message, /do-not-leak/);
+                return true;
+            }
+        );
+    }
+});
 
-    const malformed = new GoFileService({ fetchImpl: async () => reply({ id: '../unsafe' }) });
+test('a malformed upload response is refused', async () => {
+    const malformed = new GoFileService({ fetchImpl: async () => reply({ id: '../unsafe', servers: ['store6'] }) });
     await assert.rejects(
         () => malformed.upload(new Blob(['x']), { filename: NAME_ONE }),
         (error) => error instanceof GoFileError && error.code === 'invalid_response'
     );
 });
 
-test('the resolver asks for the exact locator it was given, then the byte URL', async () => {
-    const calls = [];
-    const service = new GoFileService({
-        fetchImpl: async (url) => {
-            calls.push(url);
-            if (calls.length === 1) {
-                return reply({
-                    type: 'folder',
-                    children: { a: fileNode(NAME_ONE, 'https://store1.gofile.io/download/one') }
-                });
-            }
-            return new Response(new Uint8Array([7, 8, 9]));
+test('the global fetch is never invoked as a method of the service', async () => {
+    // A browser refuses `someObject.fetch(...)` with "Illegal invocation" and
+    // refuses it before the request leaves, so the symptom is an empty network
+    // tab, not a failed call. Node's fetch ignores its receiver.
+    const previous = globalThis.fetch;
+    let receiver = 'never called';
+    globalThis.fetch = function (...args) {
+        receiver = this === undefined || this === globalThis ? 'global' : 'not the global';
+        if (receiver !== 'global') {
+            throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
         }
-    });
-    assert.deepEqual(
-        await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        new Uint8Array([7, 8, 9])
-    );
-    assert.deepEqual(calls, ['https://api.gofile.io/contents/file_1', 'https://store1.gofile.io/download/one']);
+        return Promise.resolve(reply({ id: UUID_ONE, servers: ['store6'] }));
+    };
+    try {
+        const service = new GoFileService();
+        const result = await service.upload(new Blob(['mirror']), { filename: NAME_ONE });
+        assert.equal(receiver, 'global');
+        assert.equal(result.mirrorLocator, `store6~${UUID_ONE}`);
+    } finally {
+        globalThis.fetch = previous;
+    }
 });
 
-test('the resolver rejects an oversized Content-Length before reading bytes', async () => {
-    const service = new GoFileService({
-        fetchImpl: async (url) =>
-            url.startsWith('https://api.gofile.io/')
-                ? mirrorMetadata()
-                : streamResponse([new Uint8Array([1])], { 'content-length': `${GOFILE_MIRROR_MAX_BYTES + 1}` })
-    });
-    await assert.rejects(
-        () => service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error instanceof GoFileError && error.code === 'too_large'
-    );
-});
+// ── Reading a mirror back ───────────────────────────────────────────────────
 
-test('the resolver rejects a missing-length stream once it exceeds the cap', async () => {
-    let cancelled = false;
-    const service = new GoFileService({
-        fetchImpl: async (url) => {
-            if (url.startsWith('https://api.gofile.io/')) return mirrorMetadata();
-            return {
-                ok: true,
-                headers: new Headers(),
-                body: {
-                    getReader() {
-                        let index = 0;
-                        const chunk = new Uint8Array(1024 * 1024);
-                        const count = Math.ceil((GOFILE_MIRROR_MAX_BYTES + 1) / chunk.length);
-                        return {
-                            async read() {
-                                return index === count ? { done: true } : { done: false, value: (index++, chunk) };
-                            },
-                            async cancel() {
-                                cancelled = true;
-                            }
-                        };
-                    }
-                }
-            };
-        }
-    });
-    await assert.rejects(
-        () => service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error instanceof GoFileError && error.code === 'too_large'
-    );
-    assert.equal(cancelled, true);
-});
-
-test('the resolver accepts a valid under-limit stream', async () => {
-    const service = new GoFileService({
-        fetchImpl: async (url) =>
-            url.startsWith('https://api.gofile.io/')
-                ? mirrorMetadata()
-                : streamResponse([new Uint8Array([7]), new Uint8Array([8, 9])])
-    });
-    assert.deepEqual(
-        await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        new Uint8Array([7, 8, 9])
-    );
-});
-
-test('resolving content authenticates, and the credential never reaches the storage host', async () => {
-    // GoFile treats a guest token from an upload exactly like a dashboard
-    // token, so the read call carries it the same way the upload does.
+test('a mirror is fetched straight from its storage server, with no credential', async () => {
     const seen = [];
     const service = new GoFileService({
         fetchImpl: async (url, init) => {
             seen.push({ url, authorization: init?.headers?.Authorization ?? null });
-            if (url.startsWith(GOFILE_CONTENT_ENDPOINT)) {
-                return reply({
-                    type: 'folder',
-                    children: { a: fileNode(NAME_ONE, 'https://cold1.gofile.io/download/one') }
-                });
-            }
-            return new Response(new Uint8Array([1, 2, 3]));
+            return new Response(new Uint8Array([7, 8, 9]));
         }
     });
 
-    await service.downloadPublicMirror('file_1', { token: 'guest-token', expectedFilename: NAME_ONE });
+    const bytes = await service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE });
 
-    assert.equal(seen[0].url, `${GOFILE_CONTENT_ENDPOINT}/file_1`);
-    assert.equal(seen[0].authorization, 'Bearer guest-token');
-    assert.equal(seen[1].url, 'https://cold1.gofile.io/download/one');
-    assert.equal(seen[1].authorization, null, 'the bearer is never handed to the host the API named');
-});
-
-test('resolving content without a credential sends no Authorization at all', async () => {
-    let authorization = 'unset';
-    const service = new GoFileService({
-        fetchImpl: async (url, init) => {
-            authorization = init?.headers?.Authorization ?? null;
-            if (url.startsWith(GOFILE_CONTENT_ENDPOINT)) return reply(fileNode(NAME_ONE, 'https://s/one'));
-            return new Response(new Uint8Array([1]));
-        }
-    });
-
-    await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE });
-    assert.equal(authorization, null);
-});
-
-test('an unauthorized read with no status body is still a credential problem', async () => {
-    const refused = new GoFileService({ fetchImpl: async () => new Response('nope', { status: 401 }) });
-    await assert.rejects(
-        () => refused.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error.code === 'invalid_token' && /refused the credential/i.test(error.message)
-    );
+    assert.deepEqual(bytes, new Uint8Array([7, 8, 9]));
+    assert.equal(seen.length, 1, 'one request: no lookup step to authenticate');
+    assert.equal(seen[0].url, `https://store6.gofile.io/download/web/${UUID_ONE}/${NAME_ONE}`);
+    assert.equal(seen[0].url, GOFILE_STORAGE_URL('store6', UUID_ONE, NAME_ONE));
+    assert.equal(seen[0].authorization, null, 'the storage host is never handed an account credential');
 });
 
 test('a later deployment cannot shadow or break an earlier one', async () => {
-    // Worst case: both deployments end up visible under one locator. Each is
-    // still selected by its own deployment-specific name.
-    const bothMirrors = {
-        type: 'folder',
-        children: {
-            a: fileNode(NAME_ONE, 'https://store1.gofile.io/download/one'),
-            b: fileNode(NAME_TWO, 'https://store1.gofile.io/download/two')
-        }
-    };
+    // Two deployments differ in both halves of the address, so one can never
+    // resolve to the other's bytes.
     const served = [];
     const service = new GoFileService({
         fetchImpl: async (url) => {
-            if (url.startsWith('https://api.gofile.io/')) return reply(bothMirrors);
             served.push(url);
-            return new Response(new Uint8Array([url.endsWith('one') ? 1 : 2]));
+            return new Response(new Uint8Array([url.includes(NAME_ONE) ? 1 : 2]));
         }
     });
 
     assert.deepEqual(
-        await service.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        new Uint8Array([1]),
-        'the first deployment still resolves to its own mirror'
+        await service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+        new Uint8Array([1])
     );
-    assert.deepEqual(await service.downloadPublicMirror('file_2', { expectedFilename: NAME_TWO }), new Uint8Array([2]));
-    assert.deepEqual(served, ['https://store1.gofile.io/download/one', 'https://store1.gofile.io/download/two']);
+    assert.deepEqual(
+        await service.downloadPublicMirror(`store6~${UUID_TWO}`, { expectedFilename: NAME_TWO }),
+        new Uint8Array([2])
+    );
+    assert.notEqual(served[0], served[1]);
 });
 
-test('the resolver refuses to guess when the named mirror is absent or duplicated', async () => {
-    const missing = new GoFileService({
-        fetchImpl: async () => reply({ type: 'folder', children: { b: fileNode(NAME_TWO, 'https://s/two') } })
-    });
+test('a mirror missing from its server is reported as missing, not as a transport fault', async () => {
+    const service = new GoFileService({ fetchImpl: async () => new Response('not found', { status: 404 }) });
     await assert.rejects(
-        () => missing.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error instanceof GoFileError && error.code === 'mirror_not_found'
+        () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+        (error) => error.code === 'mirror_not_found'
     );
+});
 
-    const duplicated = new GoFileService({
-        fetchImpl: async () =>
-            reply({
-                type: 'folder',
-                children: { a: fileNode(NAME_ONE, 'https://s/a'), b: fileNode(NAME_ONE, 'https://s/b') }
-            })
+test('a read without a deployment-specific filename is refused before any request', async () => {
+    let called = 0;
+    const service = new GoFileService({
+        fetchImpl: async () => {
+            called += 1;
+            return new Response(new Uint8Array([1]));
+        }
     });
-    await assert.rejects(
-        () => duplicated.downloadPublicMirror('file_1', { expectedFilename: NAME_ONE }),
-        (error) => error instanceof GoFileError && error.code === 'ambiguous_mirror'
-    );
+    for (const filename of [undefined, null, '', 'no slashes/allowed']) {
+        await assert.rejects(
+            () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: filename }),
+            (error) => error.code === 'invalid_request'
+        );
+    }
+    assert.equal(called, 0);
+});
 
-    const ambiguous = new GoFileService({
+test('a stalled mirror download ends at its deadline', async () => {
+    const service = new GoFileService({ fetchImpl: stalled(), downloadTimeoutMs: 25 });
+    await assert.rejects(
+        () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+        (error) => error instanceof GoFileError && error.code === 'timeout'
+    );
+});
+
+test('the resolver rejects an oversized Content-Length before reading bytes', async () => {
+    const service = new GoFileService({
         fetchImpl: async () =>
-            reply({
-                type: 'folder',
-                children: { a: fileNode(NAME_ONE, 'https://s/a'), b: fileNode(NAME_TWO, 'https://s/b') }
-            })
+            new Response(new Uint8Array([1]), { headers: { 'content-length': `${64 * 1024 * 1024 + 1}` } })
     });
     await assert.rejects(
-        () => ambiguous.downloadPublicMirror('file_1'),
-        (error) => error instanceof GoFileError && error.code === 'ambiguous_mirror'
+        () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+        (error) => error.code === 'too_large'
     );
+});
+
+test('the resolver rejects a stream that exceeds the cap while arriving', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    const service = new GoFileService({
+        fetchImpl: async () =>
+            new Response(
+                new ReadableStream({
+                    pull(controller) {
+                        controller.enqueue(chunk.slice());
+                    }
+                })
+            )
+    });
+    await assert.rejects(
+        () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+        (error) => error.code === 'too_large'
+    );
+});
+
+test('a legacy bare-UUID locator is refused with a locator error', async () => {
+    let called = 0;
+    const service = new GoFileService({
+        fetchImpl: async () => {
+            called += 1;
+            return new Response(new Uint8Array([1]));
+        }
+    });
+    await assert.rejects(
+        () => service.downloadPublicMirror(UUID_ONE, { expectedFilename: NAME_ONE }),
+        (error) => error.code === 'invalid_locator'
+    );
+    assert.equal(called, 0);
 });
