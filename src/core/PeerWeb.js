@@ -4,10 +4,12 @@ import PeerWebCache from '../cache/PeerWebCache.js';
 import ToastNotification from '../ui/ToastNotification.js';
 import * as lifecycle from './bootstrap/Lifecycle.js';
 import * as navigation from './navigation/Navigation.js';
+import * as protectedNavigation from './navigation/ProtectedNavigation.js';
 import * as serviceWorker from './serviceworker/ServiceWorkerBridge.js';
 import * as torrentLoader from './torrent/TorrentLoader.js';
 import * as preferredSiteLoader from './torrent/PreferredSiteLoader.js';
 import * as torrentUploader from './torrent/TorrentUploader.js';
+import * as siteBundleUpload from './torrent/SiteBundleUpload.js';
 import * as torrentCreator from './torrent/TorrentCreator.js';
 import * as siteRenderer from './renderer/SiteRenderer.js';
 import * as debugPanel from '../ui/DebugPanel.js';
@@ -63,7 +65,7 @@ class PeerWeb {
         this.protectedStagedFiles = null;
         /** @type {{ siteId: string, protectedAssets: any[] } | null} */
         this.protectedSiteContext = null;
-        this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
+        this.currentSiteSignatureStatus = { label: 'Publisher: unverified', verified: false };
         const overrideTrackers =
             Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0
                 ? window.PEERWEB_TRACKERS
@@ -84,6 +86,11 @@ Object.assign(
     // on the prototype and are reused by the preferred cache → GoFile → P2P flow.
     preferredSiteLoader,
     torrentUploader,
+    // These two narrowly override the merged behavior: portable site bundles
+    // are expanded before Preview & Protect, and protected-content navigation
+    // keeps the verified decrypt context + owner DM handoff alive.
+    siteBundleUpload,
+    protectedNavigation,
     torrentCreator,
     siteRenderer,
     debugPanel,
