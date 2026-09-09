@@ -13,6 +13,20 @@ export const GOFILE_STORAGE_URL = (server, contentId, filename) =>
     `https://${server}.gofile.io/download/web/${contentId}/${encodeURIComponent(filename)}`;
 
 /**
+ * GoFile's storage servers send no `Access-Control-Allow-Origin`, and an
+ * unauthenticated request to one is redirected to the human download page —
+ * which sends none either. A browser therefore cannot read a mirror directly,
+ * whatever the URL. Reads go through a CORS proxy instead.
+ *
+ * Only reads. The upload carries the account credential and always goes
+ * straight to GoFile: handing a bearer token to a third party would give away
+ * the account, and the upload has no CORS problem to solve in the first place.
+ */
+export const GOFILE_READ_PROXY = 'https://api.allorigins.win';
+export const proxiedRawUrl = (proxy, target) => `${proxy}/raw?url=${encodeURIComponent(target)}`;
+export const proxiedEnvelopeUrl = (proxy, target) => `${proxy}/get?url=${encodeURIComponent(target)}`;
+
+/**
  * GoFile is best-effort fallback transport, never the primary one, so every
  * request is bounded. A stalled GoFile call must cost the mirror and nothing
  * else: not the deployment, not the resolver, not the loading overlay.
@@ -96,18 +110,20 @@ function transportError(cause, signal, timeoutMs, subject) {
  */
 export class GoFileService {
     /**
-     * @param {{ fetchImpl?: typeof fetch, endpoint?: string, uploadTimeoutMs?: number,
-     *           downloadTimeoutMs?: number }} [options]
+     * @param {{ fetchImpl?: typeof fetch, endpoint?: string, readProxy?: string,
+     *           uploadTimeoutMs?: number, downloadTimeoutMs?: number }} [options]
      */
     constructor({
         fetchImpl = globalFetch(),
         endpoint = GOFILE_UPLOAD_ENDPOINT,
+        readProxy = GOFILE_READ_PROXY,
         uploadTimeoutMs = GOFILE_UPLOAD_TIMEOUT_MS,
         downloadTimeoutMs = GOFILE_DOWNLOAD_TIMEOUT_MS
     } = {}) {
         if (typeof fetchImpl !== 'function') throw new TypeError('GoFileService requires fetch.');
         this.fetchImpl = fetchImpl;
         this.endpoint = endpoint;
+        this.readProxy = `${readProxy}`.replace(/\/$/, '');
         this.uploadTimeoutMs = uploadTimeoutMs;
         this.downloadTimeoutMs = downloadTimeoutMs;
     }
@@ -255,26 +271,70 @@ export class GoFileService {
             throw new GoFileError('invalid_request', 'GoFile mirror filename is invalid.');
         }
         const { server, contentId } = parseMirrorLocator(locator);
-        const url = GOFILE_STORAGE_URL(server, contentId, expectedFilename);
+        const target = GOFILE_STORAGE_URL(server, contentId, expectedFilename);
 
-        let response;
-        try {
-            response = await this.fetchImpl(url, { signal: boundedSignal(downloadTimeoutMs, signal) });
-        } catch (cause) {
-            throw transportError(cause, signal, downloadTimeoutMs, 'GoFile mirror bytes');
-        }
-        if (response.status === 404) {
-            throw new GoFileError('mirror_not_found', 'This deployment has no mirror on that GoFile server.', {
-                status: 404
-            });
-        }
-        if (!response.ok) {
+        // `/raw` hands back the body untouched, which is what verification
+        // needs. `/get` wraps it in a JSON envelope as a string, so it is only
+        // a fallback for when `/raw` is unavailable — and only survives here
+        // because a mirror is UTF-8 JSON rather than arbitrary bytes.
+        const response = await this._fetchThroughProxy(
+            proxiedRawUrl(this.readProxy, target),
+            signal,
+            downloadTimeoutMs
+        );
+        if (response.ok) return guardMirrorBody(await readBoundedBytes(response, signal, downloadTimeoutMs));
+        if (response.status !== 404 && response.status !== 400) {
             throw new GoFileError('http', `GoFile mirror download failed (HTTP ${response.status}).`, {
                 status: response.status
             });
         }
-        return readBoundedBytes(response, signal, downloadTimeoutMs);
+
+        const envelope = await this._fetchThroughProxy(
+            proxiedEnvelopeUrl(this.readProxy, target),
+            signal,
+            downloadTimeoutMs
+        );
+        if (!envelope.ok) {
+            throw new GoFileError('http', `GoFile mirror download failed (HTTP ${envelope.status}).`, {
+                status: envelope.status
+            });
+        }
+        const bytes = await readBoundedBytes(envelope, signal, downloadTimeoutMs);
+        let contents;
+        try {
+            contents = JSON.parse(new TextDecoder().decode(bytes))?.contents;
+        } catch (cause) {
+            throw new GoFileError('invalid_response', 'The CORS proxy returned an unreadable envelope.', { cause });
+        }
+        if (typeof contents !== 'string') {
+            throw new GoFileError('invalid_response', 'The CORS proxy returned no mirror contents.');
+        }
+        return guardMirrorBody(new TextEncoder().encode(contents));
     }
+
+    async _fetchThroughProxy(url, signal, timeoutMs) {
+        try {
+            return await this.fetchImpl(url, { signal: boundedSignal(timeoutMs, signal) });
+        } catch (cause) {
+            throw transportError(cause, signal, timeoutMs, 'GoFile mirror bytes');
+        }
+    }
+}
+
+/**
+ * An unauthenticated storage request is redirected to GoFile's download page,
+ * and a proxy follows redirects, so the likeliest wrong answer is a page of
+ * HTML rather than a mirror. Say that, instead of failing later as bad JSON.
+ */
+function guardMirrorBody(bytes) {
+    const head = new TextDecoder().decode(bytes.slice(0, 64)).trimStart().toLowerCase();
+    if (head.startsWith('<!doctype') || head.startsWith('<html')) {
+        throw new GoFileError(
+            'mirror_not_found',
+            'GoFile served its download page instead of the mirror: the file is gone, or the storage route now requires a session.'
+        );
+    }
+    return bytes;
 }
 
 async function readBoundedBytes(response, signal, timeoutMs) {

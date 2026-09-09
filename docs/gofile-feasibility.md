@@ -92,6 +92,37 @@ credential is sent to the storage host at all — a visitor resolves a mirror
 exactly as the publisher verified it, with no account, no wallet, and nothing to
 unlock. The credential is now only ever used for the upload.
 
+## Reads go through a CORS proxy
+
+Observed live on 2026-09-09: a browser request to the storage route is
+**redirected** to `https://gofile.io/d/<uuid>`, the human download page, and
+neither the storage server nor that page sends an `Access-Control-Allow-Origin`
+header. So a page on another origin cannot read a mirror directly, whatever URL
+it uses — this is the same wall the Premium listing route hit, one layer down.
+
+Mirror reads therefore go through a CORS proxy, `api.allorigins.win` by default
+and configurable so it need not be a public one. `/raw` is used first because it
+returns the body untouched, which is what piece-hash verification needs; `/get`
+is a fallback for when `/raw` is unavailable, and only works here because a
+mirror is UTF-8 JSON rather than arbitrary bytes.
+
+**Only reads.** The upload and the account call always go straight to GoFile:
+both carry `Authorization: Bearer`, and routing a token through a third party
+would hand over the whole account. Neither has a CORS problem to solve anyway —
+`api.gofile.io` is CORS-enabled and the upload endpoint accepts the request as
+it is. A test asserts no credentialed call is ever proxied.
+
+What this costs is honest to state: an optional fallback transport now depends
+on a free third-party service, with its uptime, its rate limits, and its
+operator able to see traffic that is public by construction but was previously
+nobody else's business. It is one more reason the mirror stays opt-in and
+best-effort, and a reason to point `readProxy` at your own deployment if the
+fallback ever matters more than convenience.
+
+Because a proxy follows redirects server-side, the likeliest wrong answer is the
+download page rather than the file. That case is detected by its HTML and named
+as such, instead of surfacing as malformed JSON several layers later.
+
 Per the conventions in the reference: content ids are UUIDs and that is what a
 locator carries; share codes address the same content but grant no extra access,
 so they are not used here; and all of this is independent of folder listings,
