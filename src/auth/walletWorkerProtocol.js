@@ -16,6 +16,7 @@ export const WALLET_WORKER_OPS = /** @type {const} */ ({
     GET_PUBLIC_KEY: 'GET_PUBLIC_KEY',
     ECIES_DECRYPT: 'ECIES_DECRYPT',
     ECIES_SIGN: 'ECIES_SIGN',
+    PROTECTED_ASSET_DECRYPT: 'PROTECTED_ASSET_DECRYPT',
     NOSTR_GET_PUBLIC_KEY: 'NOSTR_GET_PUBLIC_KEY',
     NOSTR_SIGN_EVENT: 'NOSTR_SIGN_EVENT',
     NOSTR_NIP44_ENCRYPT: 'NOSTR_NIP44_ENCRYPT',
@@ -34,6 +35,15 @@ const NOSTR_PUBKEY_RE = /^[0-9a-f]{64}$/;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_MESSAGE_LENGTH = 128 * 1024;
 const MAX_CIPHERTEXT_LENGTH = 4 * 1024 * 1024;
+
+/** Bounds and shapes for one protected `.torrentchain` asset. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const CONTENT_SALT_RE = /^[0-9a-f]{16,128}$/;
+const GCM_IV_RE = /^[0-9a-f]{24}$/;
+const PROTECTED_CIPHER_ALGORITHM = 'AES-256-GCM';
+const TORRENTCHAIN_SCHEMA = 'web25-torrentchain-v1';
+const MAX_PROTECTED_CIPHERTEXT_BYTES = 8 * 1024 * 1024;
 
 /** NIP-44 v2 caps the plaintext at 65535 bytes. */
 const MAX_NIP44_PLAINTEXT_LENGTH = 65535;
@@ -145,6 +155,67 @@ function validatePayload(type, payload) {
             return { ciphertext };
         }
 
+        case WALLET_WORKER_OPS.PROTECTED_ASSET_DECRYPT: {
+            // Narrow by design: this is not "decrypt these bytes". Every field
+            // comes from an already verified `.torrentchain` manifest, and the
+            // worker rebuilds the AAD and re-checks both content digests
+            // itself, so the operation cannot be used as a decryption oracle
+            // for material the caller does not hold a grant for.
+            const schema = payload.schema;
+            if (schema !== TORRENTCHAIN_SCHEMA) {
+                throw new WalletWorkerProtocolError('PROTECTED_ASSET_DECRYPT requires the web25-torrentchain-v1 schema.');
+            }
+            if (payload.algorithm !== PROTECTED_CIPHER_ALGORITHM) {
+                throw new WalletWorkerProtocolError(`PROTECTED_ASSET_DECRYPT supports ${PROTECTED_CIPHER_ALGORITHM} only.`);
+            }
+
+            const siteId = requireUuid(payload.siteId, 'siteId');
+            const assetId = requireUuid(payload.assetId, 'assetId');
+            const contentHash = requireSha256Hex(payload.contentHash, 'contentHash');
+            const cipherHash = requireSha256Hex(payload.cipherHash, 'cipherHash');
+
+            const contentSalt = typeof payload.contentSalt === 'string' ? payload.contentSalt.toLowerCase() : '';
+            if (!CONTENT_SALT_RE.test(contentSalt)) {
+                throw new WalletWorkerProtocolError('PROTECTED_ASSET_DECRYPT requires a hex contentSalt.');
+            }
+
+            const iv = typeof payload.iv === 'string' ? payload.iv.toLowerCase() : '';
+            if (!GCM_IV_RE.test(iv)) {
+                throw new WalletWorkerProtocolError('PROTECTED_ASSET_DECRYPT requires a 12-byte hex IV.');
+            }
+
+            const wrappedKey = typeof payload.wrappedKey === 'string' ? payload.wrappedKey.toLowerCase() : '';
+            if (
+                wrappedKey.length < (65 + 12 + 16) * 2 ||
+                wrappedKey.length > MAX_CIPHERTEXT_LENGTH ||
+                wrappedKey.length % 2 !== 0 ||
+                !HEX_RE.test(wrappedKey)
+            ) {
+                throw new WalletWorkerProtocolError('PROTECTED_ASSET_DECRYPT wrappedKey is not a well-formed ECIES payload.');
+            }
+
+            const ciphertext = payload.ciphertext;
+            if (!(ciphertext instanceof Uint8Array) || ciphertext.length === 0) {
+                throw new WalletWorkerProtocolError('PROTECTED_ASSET_DECRYPT requires the ciphertext as bytes.');
+            }
+            if (ciphertext.length > MAX_PROTECTED_CIPHERTEXT_BYTES) {
+                throw new WalletWorkerProtocolError('PROTECTED_ASSET_DECRYPT ciphertext exceeds the maximum allowed size.');
+            }
+
+            return {
+                schema,
+                siteId,
+                assetId,
+                contentHash,
+                cipherHash,
+                contentSalt,
+                iv,
+                algorithm: PROTECTED_CIPHER_ALGORITHM,
+                wrappedKey,
+                ciphertext
+            };
+        }
+
         case WALLET_WORKER_OPS.NOSTR_SIGN_EVENT: {
             // Deliberately not a generic signer: only a well-formed Nostr event
             // template is accepted, and the worker computes the id itself so a
@@ -206,6 +277,32 @@ function validatePayload(type, payload) {
         default:
             throw new WalletWorkerProtocolError(`Unsupported wallet worker operation: ${type}`);
     }
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {string}
+ */
+function requireUuid(value, label) {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (!UUID_RE.test(normalized)) {
+        throw new WalletWorkerProtocolError(`PROTECTED_ASSET_DECRYPT requires a UUID ${label}.`);
+    }
+    return normalized;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {string}
+ */
+function requireSha256Hex(value, label) {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (!SHA256_HEX_RE.test(normalized)) {
+        throw new WalletWorkerProtocolError(`PROTECTED_ASSET_DECRYPT requires a 32-byte hex ${label}.`);
+    }
+    return normalized;
 }
 
 /**

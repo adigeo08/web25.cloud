@@ -66,13 +66,17 @@ function stepChip(text, { note = null } = {}) {
 
 const CHIP_LABELS = [
     '1. Select files',
-    '2. Build in-memory bundle',
-    '3. Review payload',
-    '4. Sign payload',
-    '5. Deploy signed memory torrent',
-    '6. Create GoFile mirror',
-    '7. Live + mirrored'
+    '2. Preview & protect',
+    '3. Build in-memory bundle',
+    '4. Review payload',
+    '5. Sign payload',
+    '6. Deploy signed memory torrent',
+    '7. Create GoFile mirror',
+    '8. Live + mirrored'
 ];
+
+/** The two optional steps are the ones that carry a note chip. */
+const CHIPS_WITH_NOTES = new Set([1, 6]);
 
 /** Install the fake deploy DOM as globals. Returns handles for assertions. */
 export function installDeployDom() {
@@ -83,7 +87,7 @@ export function installDeployDom() {
     };
 
     const elements = new Map();
-    const chips = CHIP_LABELS.map((label, index) => stepChip(label, { note: index === 5 ? 'Optional' : null }));
+    const chips = CHIP_LABELS.map((label, index) => stepChip(label, { note: CHIPS_WITH_NOTES.has(index) ? 'Optional' : null }));
     const opened = [];
     const copied = [];
 

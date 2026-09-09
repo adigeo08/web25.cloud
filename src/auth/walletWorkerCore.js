@@ -10,6 +10,7 @@
 
 import { validateWalletRequest, WALLET_WORKER_OPS, WALLET_SESSION_TTL_MS } from './walletWorkerProtocol.js';
 import { npubEncode } from '../nostr/nip19.js';
+import { unwrapAndDecryptProtectedAsset } from '../torrent/ProtectedAssetProtocol.js';
 
 /**
  * @param {{
@@ -158,6 +159,27 @@ export function createWalletWorkerCore({ ecies, nostr = null, ttlMs = WALLET_SES
                 const plaintext = await ecies.eciesDecrypt(payload.ciphertext, active.privateKey);
                 touchSession();
                 return { plaintext };
+            }
+
+            case WALLET_WORKER_OPS.PROTECTED_ASSET_DECRYPT: {
+                const active = requireSession();
+                // The CEK is unwrapped, used and dropped inside this call: it
+                // is never returned, never cached and never leaves the worker.
+                // Only the decrypted fragment goes back to the caller.
+                const { plaintext } = await unwrapAndDecryptProtectedAsset({
+                    siteId: payload.siteId,
+                    assetId: payload.assetId,
+                    contentHash: payload.contentHash,
+                    cipherHash: payload.cipherHash,
+                    contentSalt: payload.contentSalt,
+                    iv: payload.iv,
+                    algorithm: payload.algorithm,
+                    wrappedKey: payload.wrappedKey,
+                    ciphertext: payload.ciphertext,
+                    eciesDecrypt: (wrapped) => ecies.eciesDecrypt(wrapped, active.privateKey)
+                });
+                touchSession();
+                return { assetId: payload.assetId, plaintext };
             }
 
             case WALLET_WORKER_OPS.NOSTR_GET_PUBLIC_KEY: {

@@ -9,7 +9,8 @@
 /**
  * @typedef {'idle'|'disabled'|'pending'|'available'|'unavailable'} MirrorState
  * @typedef {{ hasFiles: boolean, hasSignature: boolean, hasDeployResult: boolean,
- *             isError?: boolean, mirrorState?: MirrorState }} DeployWizardState
+ *             isError?: boolean, mirrorState?: MirrorState,
+ *             inProtectStep?: boolean, protectedCount?: number }} DeployWizardState
  */
 
 /** @type {NodeListOf<HTMLElement> | null} */
@@ -21,8 +22,9 @@ let wizardNextEl = null;
 /** @type {HTMLDetailsElement | null} */
 let techDetails = null;
 
-const MIRROR_STEP = 6;
-const LIVE_STEP = 7;
+const PROTECT_STEP = 2;
+const MIRROR_STEP = 7;
+const LIVE_STEP = 8;
 
 /** The mirror step is optional, so it says what became of it in words. */
 const MIRROR_NOTES = {
@@ -50,7 +52,7 @@ function setChipText(chip, selector, text) {
 
 /**
  * Update the wizard UI based on current deploy state.
- * Maps state to one of seven step chips and updates visual affordances.
+ * Maps state to one of eight step chips and updates visual affordances.
  * @param {DeployWizardState} state
  */
 export function updateDeployWizard(state) {
@@ -59,18 +61,26 @@ export function updateDeployWizard(state) {
     const { hasFiles, hasSignature, hasDeployResult, isError = false, mirrorState = 'idle' } = state;
     const mirrored = mirrorState === 'available';
 
-    // Determine active step (1-based, matching the 7 step chips)
-    // 1 – Select  2 – Build  3 – Review  4 – Sign  5 – Deploy  6 – Mirror  7 – Live
-    // Step 6 is optional: the torrent deployment is already live and seeding by
-    // the time it runs, and it is skipped outright when the publisher did not
+    // Determine active step (1-based, matching the 8 step chips)
+    // 1 – Select  2 – Preview & Protect  3 – Build  4 – Review  5 – Sign
+    // 6 – Deploy  7 – Mirror  8 – Live
+    // Step 2 is optional in effect: a publisher who protects nothing passes
+    // straight through it, and steps 3 onward are exactly the flow that shipped
+    // before protected assets existed.
+    // Step 7 is optional too: the torrent deployment is already live and seeding
+    // by the time it runs, and it is skipped outright when the publisher did not
     // ask for a mirror.
+    const { inProtectStep = false } = state;
+
     let activeStep;
     if (hasDeployResult) {
         activeStep = mirrorState === 'pending' ? MIRROR_STEP : LIVE_STEP;
+    } else if (inProtectStep) {
+        activeStep = PROTECT_STEP;
     } else if (hasFiles && hasSignature) {
-        activeStep = 5;
+        activeStep = 6;
     } else if (hasFiles) {
-        activeStep = 4; // files staged → guide user to sign (covers bundle + review + sign)
+        activeStep = 5; // files staged → guide user to sign (covers bundle + review + sign)
     } else {
         activeStep = 1;
     }
@@ -101,9 +111,22 @@ export function updateDeployWizard(state) {
     const mirrorChip = stepChips[MIRROR_STEP - 1];
     setChipText(mirrorChip, '.step-chip-note', MIRROR_NOTES[mirrorState] || MIRROR_NOTES.idle);
 
+    // The protect step says what it actually did, so "nothing protected" reads
+    // as a deliberate choice rather than a step that failed.
+    const protectChip = stepChips[PROTECT_STEP - 1];
+    const protectedCount = Number(state.protectedCount || 0);
+    if (protectChip) {
+        let protectNote = 'Optional';
+        if (inProtectStep) protectNote = 'In progress';
+        else if (activeStep > PROTECT_STEP) {
+            protectNote = protectedCount > 0 ? `${protectedCount} protected` : 'Nothing protected';
+        }
+        setChipText(protectChip, '.step-chip-note', protectNote);
+    }
+
     // The last chip only claims a mirror when there actually is one.
     const liveChip = stepChips[LIVE_STEP - 1];
-    setChipText(liveChip, '.step-chip-text', mirrored ? '7. Live + mirrored' : '7. Live and seeding');
+    setChipText(liveChip, '.step-chip-text', mirrored ? '8. Live + mirrored' : '8. Live and seeding');
 
     // Update "Next suggested action" microcopy
     if (wizardNextEl) {
@@ -116,6 +139,8 @@ export function updateDeployWizard(state) {
             nextText = '🎉 Your site is live and seeding. The optional mirror was not created — share the link below!';
         } else if (hasDeployResult) {
             nextText = '🎉 Your site is live and seeding — share the link below!';
+        } else if (inProtectStep) {
+            nextText = '▶ Select any text you want to protect, then continue to Deploy.';
         } else if (hasFiles && hasSignature) {
             nextText = '▶ Next: Deploy your signed torrent to go live.';
         } else if (hasFiles) {

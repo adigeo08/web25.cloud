@@ -21,6 +21,11 @@ const BOOTSTRAP_SCRIPT = String.raw`(function () {
     var TOKEN = config.token;
     var PARENT_ORIGIN = config.parentOrigin;
     var PREFIX = config.prefix;
+    var AUTHORING = config.mode === 'authoring';
+    var PROTECTED_ENABLED = config.protectedEnabled === true;
+    var PREVIEW_ID_ATTRIBUTE = 'data-web25-node';
+    var SKIP_TEXT_TAGS = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, TITLE: 1 };
+    var LOCATOR_CONTEXT_LENGTH = 32;
 
     var port = null;
     var nextId = 0;
@@ -28,7 +33,9 @@ const BOOTSTRAP_SCRIPT = String.raw`(function () {
     var blobUrls = new Map();
     var inflight = new Map();
     var entryDir = '';
+    var entryPath = '';
     var shimsInstalled = false;
+    var selectionCaptureInstalled = false;
 
     function call(op, extra) {
         if (!port) return Promise.reject(new Error('Sandbox bridge is not connected.'));
@@ -350,11 +357,23 @@ const BOOTSTRAP_SCRIPT = String.raw`(function () {
 
     function renderHtml(html, sourcePath) {
         entryDir = dirOf(sourcePath || '');
+        entryPath = sourcePath || '';
         var doc = new DOMParser().parseFromString(html || '', 'text/html');
+        if (AUTHORING) {
+            // The publisher is choosing text out of their own staged source.
+            // Runtime scripts would move that text around, and content only a
+            // script produces cannot be mapped back to a staged file anyway, so
+            // the authoring preview is rendered as static markup.
+            Array.prototype.forEach.call(doc.querySelectorAll('script'), function (node) {
+                node.parentNode.removeChild(node);
+            });
+        }
         return rewriteDocument(doc, entryDir).then(function () {
             var title = doc.title || '';
             installShims();
             writeDocument('<!DOCTYPE html>' + doc.documentElement.outerHTML);
+            installProtectedUi();
+            if (AUTHORING) installSelectionCapture();
             if (title) call('site.title', { title: title }).catch(function () {});
         });
     }
@@ -370,6 +389,219 @@ const BOOTSTRAP_SCRIPT = String.raw`(function () {
             .catch(function (error) {
                 call('site.log', { message: 'navigation failed: ' + (error && error.message) }).catch(function () {});
             });
+    }
+
+    // ── protected fragments ──────────────────────────────────────────────
+
+    var PLACEHOLDER_STYLE =
+        'display:inline-flex;align-items:center;gap:.4em;padding:.15em .5em;border:1px dashed #8a8aa8;' +
+        'border-radius:.4em;background:rgba(138,138,168,.12);font:inherit;line-height:1.4;vertical-align:baseline;';
+    var BUTTON_STYLE =
+        'font:inherit;cursor:pointer;border:0;border-radius:.3em;padding:.1em .5em;background:#2f2f4a;color:#fff;';
+    var NOTE_STYLE = 'font-size:.85em;opacity:.85;';
+
+    function decorateProtectedPlaceholder(node) {
+        if (node.getAttribute('data-web25-state')) return;
+        node.setAttribute('data-web25-state', 'locked');
+        node.setAttribute('style', PLACEHOLDER_STYLE);
+        while (node.firstChild) node.removeChild(node.firstChild);
+
+        if (AUTHORING) {
+            var chip = document.createElement('span');
+            chip.textContent = '🔒 Protected';
+            chip.setAttribute('style', NOTE_STYLE);
+            node.appendChild(chip);
+            return;
+        }
+
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = '🔐 Decrypt';
+        button.setAttribute('style', BUTTON_STYLE);
+
+        var note = document.createElement('span');
+        note.setAttribute('style', NOTE_STYLE);
+
+        node.appendChild(button);
+        node.appendChild(note);
+        button.addEventListener('click', function () {
+            requestDecrypt(node, button, note);
+        });
+    }
+
+    /** Decryption is never automatic: it starts here, on an explicit click. */
+    function requestDecrypt(node, button, note) {
+        if (node.getAttribute('data-web25-state') === 'busy') return;
+        node.setAttribute('data-web25-state', 'busy');
+        button.disabled = true;
+        button.textContent = '🔐 Decrypting…';
+        note.textContent = '';
+
+        call('protected.decrypt', { assetId: node.getAttribute('data-asset-id') })
+            .then(function (result) {
+                if (result && result.status === 'ok' && typeof result.html === 'string') {
+                    revealFragment(node, result.html);
+                    return;
+                }
+                node.setAttribute('data-web25-state', 'locked');
+                button.disabled = false;
+                button.textContent = '🔐 Decrypt';
+                note.textContent = (result && result.message) || 'This content could not be decrypted.';
+            })
+            .catch(function () {
+                node.setAttribute('data-web25-state', 'locked');
+                button.disabled = false;
+                button.textContent = '🔐 Decrypt';
+                note.textContent = 'This content could not be decrypted.';
+            });
+    }
+
+    /**
+     * Put the fragment back exactly where it was taken from. It lives in this
+     * frame's DOM and nowhere else — nothing here writes it to storage.
+     */
+    function revealFragment(node, html) {
+        var template = document.createElement('template');
+        template.innerHTML = html;
+        var parent = node.parentNode;
+        if (!parent) return;
+        parent.replaceChild(template.content, node);
+    }
+
+    function installProtectedUi() {
+        if (!PROTECTED_ENABLED && !AUTHORING) return;
+        var nodes = document.querySelectorAll('web25-protected[data-asset-id]');
+        for (var index = 0; index < nodes.length; index += 1) decorateProtectedPlaceholder(nodes[index]);
+    }
+
+    // ── authoring selection ──────────────────────────────────────────────
+
+    function isSkippedForText(node) {
+        return node.nodeType === 1 && SKIP_TEXT_TAGS[node.tagName] === 1;
+    }
+
+    /**
+     * The text nodes of an element in document order, skipping the subtrees the
+     * staged-source side skips too, so both count the same characters.
+     */
+    function textNodesOf(element) {
+        var out = [];
+        (function walk(node) {
+            for (var child = node.firstChild; child; child = child.nextSibling) {
+                if (child.nodeType === 3) out.push(child);
+                else if (child.nodeType === 1 && !isSkippedForText(child)) walk(child);
+            }
+        })(element);
+        return out;
+    }
+
+    function textOf(element) {
+        var nodes = textNodesOf(element);
+        var text = '';
+        for (var index = 0; index < nodes.length; index += 1) text += nodes[index].data;
+        return text;
+    }
+
+    function firstTextNodeIn(node) {
+        if (node.nodeType === 3) return node;
+        if (node.nodeType !== 1 || isSkippedForText(node)) return null;
+        var found = textNodesOf(node);
+        return found.length > 0 ? found[0] : null;
+    }
+
+    function lastTextNodeIn(node) {
+        if (node.nodeType === 3) return node;
+        if (node.nodeType !== 1 || isSkippedForText(node)) return null;
+        var found = textNodesOf(node);
+        return found.length > 0 ? found[found.length - 1] : null;
+    }
+
+    /** Turn a Range boundary into a (text node, index) pair. */
+    function normalizeBoundary(node, offset, atStart) {
+        if (node.nodeType === 3) return { node: node, index: offset };
+        if (node.nodeType !== 1) return null;
+        var children = node.childNodes;
+        var index;
+        if (atStart) {
+            for (index = offset; index < children.length; index += 1) {
+                var head = firstTextNodeIn(children[index]);
+                if (head) return { node: head, index: 0 };
+            }
+            for (index = offset - 1; index >= 0; index -= 1) {
+                var back = lastTextNodeIn(children[index]);
+                if (back) return { node: back, index: back.data.length };
+            }
+        } else {
+            for (index = offset - 1; index >= 0; index -= 1) {
+                var tail = lastTextNodeIn(children[index]);
+                if (tail) return { node: tail, index: tail.data.length };
+            }
+            for (index = offset; index < children.length; index += 1) {
+                var forward = firstTextNodeIn(children[index]);
+                if (forward) return { node: forward, index: 0 };
+            }
+        }
+        return null;
+    }
+
+    function offsetWithin(element, boundary) {
+        var nodes = textNodesOf(element);
+        var total = 0;
+        for (var index = 0; index < nodes.length; index += 1) {
+            if (nodes[index] === boundary.node) return total + boundary.index;
+            total += nodes[index].data.length;
+        }
+        return -1;
+    }
+
+    function closestPreviewElement(node) {
+        var current = node && node.nodeType === 1 ? node : node && node.parentNode;
+        while (current && current.nodeType === 1) {
+            if (current.hasAttribute(PREVIEW_ID_ATTRIBUTE)) return current;
+            current = current.parentNode;
+        }
+        return null;
+    }
+
+    function reportSelection() {
+        var selection = window.getSelection();
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+        var range = selection.getRangeAt(0);
+
+        var container = closestPreviewElement(range.commonAncestorContainer);
+        if (!container) return;
+
+        var start = normalizeBoundary(range.startContainer, range.startOffset, true);
+        var end = normalizeBoundary(range.endContainer, range.endOffset, false);
+        if (!start || !end) return;
+
+        var startOffset = offsetWithin(container, start);
+        var endOffset = offsetWithin(container, end);
+        if (startOffset < 0 || endOffset < 0 || endOffset <= startOffset) return;
+
+        var text = textOf(container);
+        call('preview.select', {
+            selection: {
+                path: entryPath,
+                containerId: container.getAttribute(PREVIEW_ID_ATTRIBUTE),
+                startOffset: startOffset,
+                endOffset: endOffset,
+                exact: text.slice(startOffset, endOffset),
+                prefix: text.slice(Math.max(0, startOffset - LOCATOR_CONTEXT_LENGTH), startOffset),
+                suffix: text.slice(endOffset, endOffset + LOCATOR_CONTEXT_LENGTH)
+            }
+        }).catch(function () {});
+    }
+
+    function installSelectionCapture() {
+        if (selectionCaptureInstalled) return;
+        selectionCaptureInstalled = true;
+        window.addEventListener('mouseup', function () {
+            setTimeout(reportSelection, 0);
+        });
+        window.addEventListener('keyup', function (event) {
+            if (event.shiftKey || event.key === 'Shift') setTimeout(reportSelection, 0);
+        });
     }
 
     window.addEventListener('message', function (event) {
@@ -397,7 +629,8 @@ const BOOTSTRAP_SCRIPT = String.raw`(function () {
 `;
 
 /**
- * @param {{ token: string, parentOrigin: string, prefix: string }} config
+ * @param {{ token: string, parentOrigin: string, prefix: string,
+ *           mode?: 'view' | 'authoring', protectedEnabled?: boolean }} config
  * @returns {string} srcdoc for the sandboxed frame
  */
 export function buildSandboxBootstrapHtml(config) {

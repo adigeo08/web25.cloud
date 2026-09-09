@@ -326,7 +326,12 @@ export default class AuthController {
             address: this.state.address,
             chainId: this.state.chainId,
             status: this.state.status,
-            publicKey: this.state.publicKey
+            // All public material, all derived from the same secp256k1 key:
+            // the ECIES key that content is encrypted to, and the Nostr view of
+            // it that a viewer without access is pointed at.
+            publicKey: this.state.publicKey,
+            nostrPublicKey: this.state.nostrPublicKey,
+            npub: this.state.npub
         };
     }
 }

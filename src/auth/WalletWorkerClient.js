@@ -180,6 +180,34 @@ export async function workerEciesDecrypt(ciphertext) {
 }
 
 /**
+ * Decrypt one protected `.torrentchain` asset inside the worker.
+ *
+ * Deliberately not a generic decryption entry point: every field describes one
+ * asset of one already verified manifest, and the worker re-derives the AAD and
+ * both content digests before it returns anything. The content-encryption key
+ * is unwrapped and dropped inside the worker — only the fragment comes back.
+ *
+ * @param {{ schema: string, siteId: string, assetId: string, contentHash: string,
+ *           cipherHash: string, contentSalt: string, iv: string, algorithm: string,
+ *           wrappedKey: string, ciphertext: Uint8Array }} asset
+ * @returns {Promise<{ assetId: string, plaintext: string }>}
+ */
+export function workerProtectedAssetDecrypt(asset) {
+    return request(WALLET_WORKER_OPS.PROTECTED_ASSET_DECRYPT, {
+        schema: asset.schema,
+        siteId: asset.siteId,
+        assetId: asset.assetId,
+        contentHash: asset.contentHash,
+        cipherHash: asset.cipherHash,
+        contentSalt: asset.contentSalt,
+        iv: asset.iv,
+        algorithm: asset.algorithm,
+        wrappedKey: asset.wrappedKey,
+        ciphertext: asset.ciphertext
+    });
+}
+
+/**
  * @returns {Promise<{ publicKey: string, address: string }>}
  */
 export function workerGetPublicKey() {

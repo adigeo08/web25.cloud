@@ -53,6 +53,10 @@ test('the worker exposes exactly the agreed operations and no generic executor',
         'NOSTR_NIP44_DECRYPT',
         'NOSTR_NIP44_ENCRYPT',
         'NOSTR_SIGN_EVENT',
+        // One narrow protected-asset operation, not a generic decryptor: it
+        // takes one asset of one verified manifest and re-derives every
+        // binding itself before returning a fragment.
+        'PROTECTED_ASSET_DECRYPT',
         'SIGN_MESSAGE',
         'STATUS',
         'UNLOCK'

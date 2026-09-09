@@ -79,7 +79,12 @@ test('the service worker forces an opaque origin on every /peerweb-site/ respons
 // ─── the bridge allowlist ────────────────────────────────────────────────
 
 test('the bridge exposes no wallet, signing or auth operation', () => {
+    // `protected.decrypt` and `preview.select` are the whole of the
+    // protected-asset surface. Neither is a wallet handle: the frame passes an
+    // asset id or a text range, and the application decides everything else.
     assert.deepEqual(Object.values(SANDBOX_BRIDGE_OPS).sort(), [
+        'preview.select',
+        'protected.decrypt',
         'resource.get',
         'sandbox.ready',
         'site.log',

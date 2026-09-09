@@ -19,6 +19,7 @@ import {
     verifyGoFileMirror
 } from '../../gofile/GoFileMirrorCodec.js';
 import { attachTrackerConnectionGuard } from './TrackerConnectionGuard.js';
+import { verifyProtectedAssetsAgainstBundle } from '../renderer/ProtectedAssetRuntime.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -561,6 +562,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             torrentHash: hash
         });
         this.currentSiteSignatureStatus = signatureState;
+        this.currentProtectedSite = null;
         this.log('Missing .torrentchain in bundle.');
         if (PEERWEB_CONFIG.REQUIRE_TORRENTCHAIN) {
             this.log('Strict mode enabled: aborting load because .torrentchain is required.');
@@ -591,6 +593,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
                 bundleHash
             });
             this.currentSiteSignatureStatus = signatureState;
+            this.currentProtectedSite = null;
             this.log(`Invalid .torrentchain signature for hash ${hash}.`);
             this.notifySignatureAbort(
                 hash,
@@ -614,6 +617,14 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             bundleHash
         });
         this.currentSiteSignatureStatus = signatureState;
+        // Ownership and capability grants come only from a manifest that just
+        // verified: nothing downstream reads them off the raw payload.
+        this.currentProtectedSite = {
+            siteId: verification.siteId || null,
+            owner: verification.owner || null,
+            protectedAssets: verification.protectedAssets || [],
+            assets: new Map()
+        };
         this.log(`Verified .torrentchain signature for ${hash}.`);
         return { ok: true, manifest, legacy: false, signatureState };
     } catch (error) {
@@ -624,6 +635,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             torrentHash: hash
         });
         this.currentSiteSignatureStatus = signatureState;
+        this.currentProtectedSite = null;
         this.log(`Failed to verify .torrentchain: ${error.message}`);
         this.hideLoadingOverlay();
         this.reportVerificationIssue('Could not read .torrentchain signature manifest. Download stopped.');
@@ -857,10 +869,18 @@ export async function processTorrentEarly(torrent, hash) {
 
     this.log(`Successfully processed ${Object.keys(siteData).length} files with index.html present`);
 
+    if (!(await this.verifyProtectedAssetsForRender(siteData))) {
+        this.hideLoadingOverlay();
+        this.processingInProgress = false;
+        return;
+    }
+
     this.attachSignatureManifest(siteData, hash);
     this.validateReceivedManifest(siteData, hash);
 
-    // Cache the site (even if incomplete)
+    // Cache the site (even if incomplete). Only ciphertext is ever cached:
+    // protected fragments are decrypted in the sandboxed frame and never
+    // written back here.
     await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
 
     // Display the site
@@ -869,6 +889,38 @@ export async function processTorrentEarly(torrent, hash) {
 
     // Reset processing flag
     this.processingInProgress = false;
+}
+
+/**
+ * The last verification step before a site with protected fragments renders:
+ * every ciphertext in the bundle must match the hash the signed manifest gives
+ * for it. A mismatch means the bundle and the manifest disagree, so the site is
+ * not rendered at all rather than rendered with a fragment that can never open.
+ *
+ * @param {Record<string, any>} siteData
+ * @returns {Promise<boolean>} false when the render must be blocked
+ */
+export async function verifyProtectedAssetsForRender(siteData) {
+    const context = this.currentProtectedSite;
+    if (!context || !context.protectedAssets || context.protectedAssets.length === 0) {
+        if (context) context.assets = new Map();
+        return true;
+    }
+
+    const result = await verifyProtectedAssetsAgainstBundle({
+        protectedAssets: context.protectedAssets,
+        siteData
+    });
+    if (!result.ok) {
+        this.log(`Protected asset verification failed: ${result.reason}`);
+        this.reportVerificationIssue(`Render blocked: ${result.reason}`);
+        this.currentProtectedSite = null;
+        return false;
+    }
+
+    context.assets = result.assets;
+    this.log(`Verified ${result.assets.size} protected asset(s) against the bundle.`);
+    return true;
 }
 
 export function findFileInSiteData(requestedPath) {
@@ -953,10 +1005,17 @@ export async function processTorrent(torrent, hash) {
     this.log(`Successfully processed ${Object.keys(siteData).length} files`);
     this.log(`File list: ${Object.keys(siteData).join(', ')}`);
 
+    if (!(await this.verifyProtectedAssetsForRender(siteData))) {
+        this.hideLoadingOverlay();
+        this.processingInProgress = false;
+        return false;
+    }
+
     this.attachSignatureManifest(siteData, hash);
     this.validateReceivedManifest(siteData, hash);
 
-    // Cache the site
+    // Cache the site. Only ciphertext is ever cached: protected fragments are
+    // decrypted in the sandboxed frame and never written back here.
     await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
 
     // Display the site
@@ -1037,8 +1096,14 @@ export async function processTorrentGzipBundle(torrent, hash) {
             torrentHash: hash
         });
 
+        if (!(await this.verifyProtectedAssetsForRender(siteData))) {
+            this.hideLoadingOverlay();
+            return false;
+        }
+
         this.attachSignatureManifest(siteData, hash);
         this.validateReceivedManifest(siteData, hash);
+        // Ciphertext only: a decrypted fragment never reaches the cache.
         await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
         this.displaySite(siteData, hash);
         this.hideLoadingOverlay();

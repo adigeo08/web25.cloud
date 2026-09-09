@@ -286,6 +286,7 @@
                     </section>
 
                     <div id="deploy-panel" class="hidden">
+                        <div id="deploy-panel-main">
                         <section class="quick-upload card-base">
                             <h3>📤 Quick Upload</h3>
                             <div id="drop-zone" class="drop-zone">
@@ -358,24 +359,28 @@
                                 <span class="step-chip is-current" role="listitem"
                                     ><span class="step-chip-text">1. Select files</span></span
                                 >
-                                <span class="step-chip" role="listitem"
-                                    ><span class="step-chip-text">2. Build in-memory bundle</span></span
+                                <span class="step-chip" id="step-chip-protect" role="listitem"
+                                    ><span class="step-chip-text">2. Preview &amp; protect</span
+                                    ><span class="step-chip-note">Optional</span></span
                                 >
                                 <span class="step-chip" role="listitem"
-                                    ><span class="step-chip-text">3. Review payload</span></span
+                                    ><span class="step-chip-text">3. Build in-memory bundle</span></span
                                 >
                                 <span class="step-chip" role="listitem"
-                                    ><span class="step-chip-text">4. Sign payload</span></span
+                                    ><span class="step-chip-text">4. Review payload</span></span
                                 >
                                 <span class="step-chip" role="listitem"
-                                    ><span class="step-chip-text">5. Deploy signed memory torrent</span></span
+                                    ><span class="step-chip-text">5. Sign payload</span></span
+                                >
+                                <span class="step-chip" role="listitem"
+                                    ><span class="step-chip-text">6. Deploy signed memory torrent</span></span
                                 >
                                 <span class="step-chip" id="step-chip-mirror" role="listitem"
-                                    ><span class="step-chip-text">6. Create GoFile mirror</span
+                                    ><span class="step-chip-text">7. Create GoFile mirror</span
                                     ><span class="step-chip-note">Optional</span></span
                                 >
                                 <span class="step-chip" id="step-chip-live" role="listitem"
-                                    ><span class="step-chip-text">7. Live + mirrored</span></span
+                                    ><span class="step-chip-text">8. Live + mirrored</span></span
                                 >
                             </div>
                             <div class="deploy-stage-box" role="status" aria-live="polite">
@@ -433,6 +438,83 @@
                                 </div>
                             </section>
                         </details>
+                        </div>
+
+                        <!--
+                            Step 2 · Preview & protect. Takes over the Deploy tab between staging
+                            and bundling: the staged site is rendered in the same opaque-origin
+                            sandbox a published site gets, so the publisher previews and selects
+                            text without the site's own JavaScript reaching the wallet.
+                        -->
+                        <section id="protect-workspace" class="protect-workspace card-base hidden">
+                            <header class="protect-header">
+                                <h3>🔐 Preview &amp; protect</h3>
+                                <p id="protect-status" class="protect-status" role="status" aria-live="polite">
+                                    Step 2 of 8 · Select any text you want to encrypt, or continue with nothing protected.
+                                </p>
+                            </header>
+
+                            <div class="protect-toolbar">
+                                <label class="protect-file-label" for="protect-file-select">Page</label>
+                                <select id="protect-file-select" class="protect-file-select"></select>
+                                <p id="protect-selection-hint" class="protect-hint">
+                                    Select text in the preview below to protect it.
+                                </p>
+                                <button id="protect-add-btn" class="btn btn-primary" type="button" disabled>
+                                    🔐 Protect selection
+                                </button>
+                            </div>
+
+                            <div class="protect-preview-shell">
+                                <iframe
+                                    id="protect-preview-frame"
+                                    class="protect-preview-frame"
+                                    title="Preview of your staged site"
+                                    sandbox="allow-scripts allow-forms allow-modals allow-popups"
+                                    referrerpolicy="no-referrer"
+                                ></iframe>
+                            </div>
+
+                            <div class="protect-columns">
+                                <section class="protect-column">
+                                    <h4>Protected fragments</h4>
+                                    <p id="protect-fragment-empty" class="protect-empty">
+                                        Nothing is protected yet. The whole site will be published in the clear.
+                                    </p>
+                                    <ul id="protect-fragment-list" class="protect-fragment-list"></ul>
+                                </section>
+
+                                <section class="protect-column">
+                                    <h4>Recipients</h4>
+                                    <p id="protect-owner-row" class="protect-owner-row"></p>
+                                    <div class="protect-recipient-input-row">
+                                        <input
+                                            type="text"
+                                            id="protect-recipient-input"
+                                            class="protect-recipient-input"
+                                            placeholder="Recipient public key (04…)"
+                                            aria-describedby="protect-recipient-hint"
+                                            autocomplete="off"
+                                            spellcheck="false"
+                                        />
+                                        <button id="protect-recipient-add" class="btn btn-secondary" type="button">Add</button>
+                                    </div>
+                                    <p id="protect-recipient-hint" class="protect-hint">
+                                        Paste the recipient's full uncompressed secp256k1 public key. An Ethereum address
+                                        is not encryption material and will be rejected.
+                                    </p>
+                                    <p id="protect-recipient-error" class="protect-error hidden" role="alert"></p>
+                                    <ul id="protect-recipient-list" class="protect-recipient-list"></ul>
+                                </section>
+                            </div>
+
+                            <div class="button-group">
+                                <button id="protect-back-btn" class="btn btn-secondary" type="button">← Back</button>
+                                <button id="protect-next-btn" class="btn btn-primary" type="button">
+                                    Continue to Deploy →
+                                </button>
+                            </div>
+                        </section>
                     </div>
                 </div>
 
