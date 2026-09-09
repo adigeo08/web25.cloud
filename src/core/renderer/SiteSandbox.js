@@ -208,7 +208,9 @@ export default class SiteSandbox {
                     .then(() => this.onProtectedDecrypt(/** @type {string} */ (request.assetId)))
                     .then((result) => this._reply(request.id, true, result))
                     .catch((error) => {
-                        this.log('[Sandbox] protected.decrypt failed: ' + (error instanceof Error ? error.message : error));
+                        this.log(
+                            '[Sandbox] protected.decrypt failed: ' + (error instanceof Error ? error.message : error)
+                        );
                         this._reply(request.id, true, { status: 'error', assetId: request.assetId });
                     });
                 return;

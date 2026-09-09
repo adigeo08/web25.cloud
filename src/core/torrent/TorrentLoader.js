@@ -20,6 +20,7 @@ import {
 } from '../../gofile/GoFileMirrorCodec.js';
 import { attachTrackerConnectionGuard } from './TrackerConnectionGuard.js';
 import { verifyProtectedAssetsAgainstBundle } from '../renderer/ProtectedAssetRuntime.js';
+import { validateProtectedAssets } from '../../torrent/ProtectedAssetProtocol.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -109,7 +110,8 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     if (cachedEntry?.data) {
         this.log('Loading from cache...');
         this.applyCachedSignatureState(cachedEntry.signatureState, sanitizedHash);
-        this.displayCachedSite(cachedEntry.data, sanitizedHash);
+        await this.applyCachedProtectedSite(cachedEntry.protectedSite, sanitizedHash);
+        await this.displayCachedSite(cachedEntry.data, sanitizedHash);
         return;
     }
 
@@ -881,7 +883,10 @@ export async function processTorrentEarly(torrent, hash) {
     // Cache the site (even if incomplete). Only ciphertext is ever cached:
     // protected fragments are decrypted in the sandboxed frame and never
     // written back here.
-    await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+    await this.cache.set(hash, siteData, {
+        signatureState: this.currentSiteSignatureStatus,
+        protectedSite: this.cacheableProtectedSite()
+    });
 
     // Display the site
     this.displaySite(siteData, hash);
@@ -1016,7 +1021,10 @@ export async function processTorrent(torrent, hash) {
 
     // Cache the site. Only ciphertext is ever cached: protected fragments are
     // decrypted in the sandboxed frame and never written back here.
-    await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+    await this.cache.set(hash, siteData, {
+        signatureState: this.currentSiteSignatureStatus,
+        protectedSite: this.cacheableProtectedSite()
+    });
 
     // Display the site
     this.displaySite(siteData, hash);
@@ -1104,7 +1112,10 @@ export async function processTorrentGzipBundle(torrent, hash) {
         this.attachSignatureManifest(siteData, hash);
         this.validateReceivedManifest(siteData, hash);
         // Ciphertext only: a decrypted fragment never reaches the cache.
-        await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+        await this.cache.set(hash, siteData, {
+            signatureState: this.currentSiteSignatureStatus,
+            protectedSite: this.cacheableProtectedSite()
+        });
         this.displaySite(siteData, hash);
         this.hideLoadingOverlay();
         return true;
@@ -1246,6 +1257,52 @@ export function buildSignatureState(nextState = {}) {
     };
 }
 
+/**
+ * The protected-asset context in a form that can be cached: the manifest's own
+ * declaration, and nothing derived from a key. A decrypted fragment is never
+ * part of it, and neither is a content key.
+ */
+export function cacheableProtectedSite() {
+    const context = this.currentProtectedSite;
+    if (!context || !context.protectedAssets || context.protectedAssets.length === 0) return null;
+    return {
+        siteId: context.siteId,
+        owner: context.owner,
+        protectedAssets: context.protectedAssets,
+        verificationVersion: SIGNATURE_STATE_VERIFICATION_VERSION
+    };
+}
+
+/**
+ * Restore that context on a cache hit.
+ *
+ * The signature itself was verified when the site was first fetched — the same
+ * bargain the cached signature state already makes — but nothing else is taken
+ * on trust: `verifyProtectedAssetsForRender` re-hashes every ciphertext against
+ * the cached bundle, `validateProtectedAssets` recomputes every grant hash, and
+ * the wallet worker re-derives all of it again before it decrypts anything.
+ */
+export async function applyCachedProtectedSite(cached, hash) {
+    this.currentProtectedSite = null;
+    if (!cached) return;
+    if (cached.verificationVersion !== SIGNATURE_STATE_VERIFICATION_VERSION) {
+        this.log(`Ignoring stale cached protected-asset state for ${hash}.`);
+        return;
+    }
+
+    try {
+        const protectedAssets = await validateProtectedAssets(cached.protectedAssets, { siteId: cached.siteId });
+        this.currentProtectedSite = {
+            siteId: cached.siteId,
+            owner: cached.owner || null,
+            protectedAssets,
+            assets: new Map()
+        };
+    } catch (error) {
+        this.log(`Cached protected-asset state failed revalidation: ${error.message}`);
+    }
+}
+
 export function applyCachedSignatureState(signatureState, hash) {
     if (!signatureState) return;
     if (signatureState.verificationVersion !== SIGNATURE_STATE_VERIFICATION_VERSION) {
@@ -1264,6 +1321,13 @@ export function applyCachedSignatureState(signatureState, hash) {
 }
 
 export async function displayCachedSite(siteData, hash) {
+    // A cached protected site goes through the very same ciphertext gate a
+    // freshly downloaded one does; a cache that disagrees with the manifest is
+    // not rendered.
+    if (!(await this.verifyProtectedAssetsForRender(siteData))) {
+        this.hideLoadingOverlay();
+        return;
+    }
     this.displaySite(siteData, hash, true);
 }
 

@@ -14,8 +14,18 @@
  * UI to remember.
  */
 
-import { createProtectedAsset, newUuid, normalizeRecipientPublicKey, protectedAssetCipherPath } from './ProtectedAssetProtocol.js';
-import { applyProtectedSelections, prepareAuthoringDocument, serializeStagedDocument, TextLocatorError } from './ProtectedTextLocator.js';
+import {
+    createProtectedAsset,
+    newUuid,
+    normalizeRecipientPublicKey,
+    protectedAssetCipherPath
+} from './ProtectedAssetProtocol.js';
+import {
+    applyProtectedSelections,
+    prepareAuthoringDocument,
+    serializeStagedDocument,
+    TextLocatorError
+} from './ProtectedTextLocator.js';
 import { utf8Bytes, utf8Text } from './CanonicalJson.js';
 
 /**
@@ -96,10 +106,16 @@ export async function buildProtectedSite({ files, selections, owner, ecies, site
         const path = `${request?.locator?.path || ''}`;
         const file = stagedFiles.find((entry) => entry.path === path);
         if (!file) {
-            throw new ProtectedBuildError(`Protected selection refers to a file that is not staged: ${path}`, 'unknown-source-file');
+            throw new ProtectedBuildError(
+                `Protected selection refers to a file that is not staged: ${path}`,
+                'unknown-source-file'
+            );
         }
         if (!isProtectableDocument(path)) {
-            throw new ProtectedBuildError(`Only HTML documents can host protected fragments: ${path}`, 'unprotectable-source');
+            throw new ProtectedBuildError(
+                `Only HTML documents can host protected fragments: ${path}`,
+                'unprotectable-source'
+            );
         }
         const list = byPath.get(path) || [];
         list.push(request);

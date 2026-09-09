@@ -117,7 +117,10 @@ export function normalizeRecipientPublicKey(value, ecies = {}) {
         );
     }
     if (ecies.isValidUncompressedPublicKey && !ecies.isValidUncompressedPublicKey(normalized)) {
-        throw new ProtectedAssetError('Recipient key is not a valid point on the secp256k1 curve.', 'recipient-key-off-curve');
+        throw new ProtectedAssetError(
+            'Recipient key is not a valid point on the secp256k1 curve.',
+            'recipient-key-off-curve'
+        );
     }
     return normalized;
 }
@@ -144,7 +147,10 @@ function requireSha256Hex(value, label) {
 function requireHex(value, label, maxLength = 4096) {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
     ensure(
-        normalized.length > 0 && normalized.length % 2 === 0 && normalized.length <= maxLength && HEX_RE.test(normalized),
+        normalized.length > 0 &&
+            normalized.length % 2 === 0 &&
+            normalized.length <= maxLength &&
+            HEX_RE.test(normalized),
         `${label} must be a hex string.`,
         'malformed-hex'
     );
@@ -218,7 +224,11 @@ export function normalizeCapabilities(can) {
     const normalized = [...new Set(list.map((entry) => `${entry}`.trim().toLowerCase()))].sort();
     ensure(normalized.length > 0, 'A grant must carry at least one capability.', 'grant-no-capability');
     for (const capability of normalized) {
-        ensure(capability === PROTECTED_CAPABILITY_DECRYPT, `Unsupported capability: ${capability}`, 'grant-capability-unknown');
+        ensure(
+            capability === PROTECTED_CAPABILITY_DECRYPT,
+            `Unsupported capability: ${capability}`,
+            'grant-capability-unknown'
+        );
     }
     return normalized;
 }
@@ -325,7 +335,11 @@ export function newUuid() {
 export async function createProtectedAsset({ siteId, plaintext, source, recipientPublicKeys, ecies, assetId }) {
     const normalizedSiteId = requireUuid(siteId, 'siteId');
     const normalizedAssetId = assetId ? requireUuid(assetId, 'assetId') : newUuid();
-    ensure(typeof plaintext === 'string' && plaintext.length > 0, 'A protected fragment cannot be empty.', 'empty-fragment');
+    ensure(
+        typeof plaintext === 'string' && plaintext.length > 0,
+        'A protected fragment cannot be empty.',
+        'empty-fragment'
+    );
 
     const recipients = [];
     for (const key of recipientPublicKeys || []) {
@@ -434,7 +448,11 @@ export async function validateProtectedAssets(protectedAssets, { siteId }) {
             assetId: asset.assetId,
             contentHash: asset.contentHash
         });
-        ensure(asset.cipher.aad === expectedAad, `Protected asset ${asset.assetId} has a mismatched AAD.`, 'aad-mismatch');
+        ensure(
+            asset.cipher.aad === expectedAad,
+            `Protected asset ${asset.assetId} has a mismatched AAD.`,
+            'aad-mismatch'
+        );
 
         const seenRecipients = new Set();
         ensure(asset.grants.length > 0, `Protected asset ${asset.assetId} carries no grants.`, 'asset-no-grants');
@@ -475,7 +493,11 @@ export async function validateProtectedAssets(protectedAssets, { siteId }) {
  * @param {Uint8Array | null | undefined} ciphertext
  */
 export async function verifyProtectedAssetCiphertext(asset, ciphertext) {
-    ensure(ciphertext && ciphertext.length > 0, `Protected asset ${asset.assetId} is missing its ciphertext.`, 'ciphertext-missing');
+    ensure(
+        ciphertext && ciphertext.length > 0,
+        `Protected asset ${asset.assetId} is missing its ciphertext.`,
+        'ciphertext-missing'
+    );
     const actual = await computeCipherHash(/** @type {Uint8Array} */ (ciphertext));
     ensure(
         timingSafeEqualHex(actual, asset.cipherHash),
@@ -561,10 +583,15 @@ export async function unwrapAndDecryptProtectedAsset(input) {
     const cipherHash = requireSha256Hex(input.cipherHash, 'cipherHash');
     const contentSalt = requireHex(input.contentSalt, 'contentSalt', 256);
     const iv = hexToBytes(requireHex(input.iv, 'cipher.iv', 64));
-    ensure(input.algorithm === PROTECTED_CIPHER_ALGORITHM, `Unsupported cipher: ${input.algorithm}`, 'cipher-unsupported');
+    ensure(
+        input.algorithm === PROTECTED_CIPHER_ALGORITHM,
+        `Unsupported cipher: ${input.algorithm}`,
+        'cipher-unsupported'
+    );
     ensure(iv.length === IV_BYTES, 'Protected asset IV must be 12 bytes.', 'cipher-iv-length');
 
-    const ciphertext = input.ciphertext instanceof Uint8Array ? input.ciphertext : new Uint8Array(input.ciphertext || []);
+    const ciphertext =
+        input.ciphertext instanceof Uint8Array ? input.ciphertext : new Uint8Array(input.ciphertext || []);
     const actualCipherHash = await computeCipherHash(ciphertext);
     ensure(
         timingSafeEqualHex(actualCipherHash, cipherHash),
@@ -576,12 +603,19 @@ export async function unwrapAndDecryptProtectedAsset(input) {
     try {
         envelope = JSON.parse(await input.eciesDecrypt(requireHex(input.wrappedKey, 'wrappedKey', 1024 * 64)));
     } catch (_) {
-        throw new ProtectedAssetError('The wrapped key could not be opened with this wallet.', 'wrapped-key-unopenable');
+        throw new ProtectedAssetError(
+            'The wrapped key could not be opened with this wallet.',
+            'wrapped-key-unopenable'
+        );
     }
 
     ensure(envelope?.schema === PROTECTED_KEY_SCHEMA, 'Wrapped key envelope has an unknown schema.', 'envelope-schema');
     ensure(envelope.siteId === siteId, 'Wrapped key belongs to a different site.', 'envelope-site-mismatch');
-    ensure(envelope.assetId === assetId, 'Wrapped key belongs to a different protected asset.', 'envelope-asset-mismatch');
+    ensure(
+        envelope.assetId === assetId,
+        'Wrapped key belongs to a different protected asset.',
+        'envelope-asset-mismatch'
+    );
     ensure(
         timingSafeEqualHex(`${envelope.contentHash}`, contentHash),
         'Wrapped key names a different content hash.',

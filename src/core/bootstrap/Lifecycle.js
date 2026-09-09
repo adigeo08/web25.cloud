@@ -1521,8 +1521,14 @@ export function renderProtectPreview(path) {
         hash: this.protectPreviewHash || (this.protectPreviewHash = newUuid().replace(/-/g, '')),
         entryFile: path,
         entryHtml: document_.previewHtml,
-        // The preview reads from the staged bytes in memory, nothing else.
+        // The preview reads from the staged bytes in memory, nothing else. HTML
+        // pages are served in their authoring form, so a link followed inside
+        // the preview lands on a page whose text is still selectable.
         resolveFile: (requested) => {
+            const authored = this.protectDocuments?.get(requested);
+            if (authored) {
+                return { content: new TextEncoder().encode(authored.previewHtml), type: 'text/html' };
+            }
             const file = (this.protectStagedFiles || []).find((entry) => entry.path === requested);
             return file ? { content: file.bytes, type: file.contentType } : null;
         },

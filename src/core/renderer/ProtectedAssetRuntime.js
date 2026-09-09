@@ -84,7 +84,11 @@ export async function verifyProtectedAssetsAgainstBundle({ protectedAssets, site
         try {
             await verifyProtectedAssetCiphertext(asset, ciphertext);
         } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : 'protected asset verification failed', assets };
+            return {
+                ok: false,
+                reason: error instanceof Error ? error.message : 'protected asset verification failed',
+                assets
+            };
         }
         assets.set(asset.assetId, { asset, ciphertext });
     }

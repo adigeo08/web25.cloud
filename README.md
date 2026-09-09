@@ -101,25 +101,44 @@ Fields currently used:
 Publish flow:
 
 1. User selects site files.
-2. App normalizes content in memory.
-3. App creates torrent publish candidate (hash + metadata).
-4. App generates `.torrentchain` and requests signature.
-5. User signs with active local identity.
-6. `.torrentchain` is included at the torrent root.
+2. **Preview & protect** — the staged site renders in the sandbox and the
+   publisher may encrypt selected fragments (see section 3b).
+3. App normalizes content in memory.
+4. App creates torrent publish candidate (hash + metadata).
+5. App generates `.torrentchain` and requests signature.
+6. User signs with active local identity.
+7. `.torrentchain` is included at the torrent root.
+
+Signing happens only after step 2 has produced its final representation, so the
+torrent hash, the bundle hash and the signature always cover the site as
+published — encrypted fragments included.
 
 #### `.torrentchain` protocol (recommended verification path)
 
 Published sites include root file **`.torrentchain`** containing:
 
 - signed publisher payload (publisher address, chain ID, timestamps, etc.)
+- `siteId` and an `owner` block: EVM address, uncompressed ECIES public key,
+  Nostr public key and `npub` — four views of the same secp256k1 key
+- `filesHash`, the digest of the file list, so `manifest.files` cannot be edited
+  without breaking the signature
+- `protectedAssets`: the encrypted fragments and their decrypt grants (section 3b)
 - optional bundle metadata (`bundle.name`, `bundle.sha256`, `bundle.contentEncoding`, `bundle.schema`) in bundled mode
 - `filesSemantics` metadata to disambiguate hash semantics for torrent entries vs bundle contents
+
+Everything security-critical is *inside* the signed payload. Access control that
+sat beside a signature could be rewritten by anyone able to serve the file, so
+the owner block, the protected assets and every grant are covered by it, and
+verification recomputes the canonical signed message from the payload rather
+than trusting the `message` field that travels with it.
 
 At load time, the client:
 
 - reads `.torrentchain` first (when present)
 - verifies signature before render
 - applies integrity gate checks prior to rendering
+- verifies each protected asset's ciphertext hash and grant bindings, and blocks
+  the render if any of them disagree with the manifest
 
 #### Verification policy
 
@@ -138,15 +157,76 @@ site renders, never *what it may do*.
   application's auth/signing functions, or the Web25 DOM.
 - Bundle files reach the frame over one `MessagePort` whose operations are
   allowlisted in `src/core/renderer/SandboxBridgeProtocol.js`
-  (`sandbox.ready`, `resource.get`, `site.title`, `site.log`). Origin, source
+  (`sandbox.ready`, `resource.get`, `site.title`, `site.log`, plus
+  `protected.decrypt` and `preview.select` for protected assets). Origin, source
   window, session token, message type and payload shape are all checked. No
-  signing or wallet operation is exposed.
+  signing or wallet operation is exposed: `protected.decrypt` takes an asset id
+  of the already verified manifest and nothing else, and `preview.select` is
+  only accepted while the application is previewing its own staged files.
 - Inside the frame, files are materialised as blob URLs and static references,
   CSS `url()` / `@import`, `fetch` and `XHR` are remapped, so relative paths,
   stylesheets and scripts keep working.
 - `/peerweb-site/` responses from the service worker additionally carry
   `Content-Security-Policy: sandbox …`, so even a direct navigation to that path
   lands in an opaque origin.
+
+---
+
+### 3b) Protected content and decrypt grants
+
+A publisher can encrypt parts of a static site and name who may read them. The
+`.torrentchain` manifest is the signed source of truth for both.
+
+**Authoring (step 2 of Deploy).** The staged site renders in the same
+opaque-origin `SiteSandbox` a published site gets — never a plain iframe. The
+publisher selects text with normal browser selection; the selection is mapped
+back to the staged source by preview node id, character offsets and the text
+before and after it, all resolved against a retained authoring document
+(`src/torrent/AuthoringDom.js`) that keeps each node's raw source, so a file with
+no protected fragments round-trips byte for byte. A selection that cannot be
+resolved uniquely is rejected rather than guessed. Protecting nothing leaves the
+staged files untouched and the deploy flow unchanged.
+
+**Crypto model**, per fragment:
+
+```text
+contentHash = SHA256(contentSalt || plaintext)
+AAD         = canonical({ schema, siteId, assetId, contentHash })
+ciphertext  = AES-256-GCM(CEK, plaintext, AAD)     → .web25/protected/<assetId>.bin
+cipherHash  = SHA256(ciphertext)
+envelope    = { schema: web25-protected-key-v1, siteId, assetId,
+                contentHash, cipherHash, cek }
+wrappedKey  = ECIES(recipientPublicKey, canonical(envelope))
+grantHash   = SHA256(canonical(siteId, assetId, contentHash, cipherHash,
+                               recipientPublicKey, wrappedKey, ["decrypt"]))
+```
+
+Each fragment is encrypted **once**; recipients differ only in the ECIES envelope
+around the same content key. Because the envelope names its own asset and the
+AAD names it again, a wrapped key from one asset fails on another, and so does a
+substituted ciphertext. The protected fragment is replaced in the published HTML
+by `<web25-protected data-asset-id="…"></web25-protected>`.
+
+Recipients are addressed by their full uncompressed secp256k1 public key
+(`04…`). A bare `0x…` address is a hash of a key and nothing can be encrypted to
+it, so it is refused with an explanation; the derived EVM address is shown back
+as confirmation. The owner always receives a decrypt grant on every asset — a
+publisher who cannot read their own site back has silently lost content.
+
+**Viewing.** Protected fragments render as a `🔐 Decrypt` control and never open
+on their own. On an explicit click:
+
+- **wallet locked** → the viewer is told to unlock, never that they lack access;
+- **no matching grant** → no crypto is attempted, and the viewer is shown the
+  author's verified `npub` from the manifest's owner block;
+- **matching grant** → one narrow allowlisted wallet-worker operation,
+  `PROTECTED_ASSET_DECRYPT`, unwraps the key, re-derives the AAD, checks the
+  envelope's site/asset/content bindings, decrypts, and re-checks the plaintext
+  digest before returning the fragment.
+
+The private key and the content key never leave the worker, and no decrypted
+plaintext is written to IndexedDB, `localStorage`, the Service Worker cache or
+the PeerWeb cache — it exists only in memory and in the sandboxed frame's DOM.
 
 ---
 
@@ -421,6 +501,11 @@ src/
 ├── core/
 │   ├── cache/
 │   │   └── SignatureStateVersion.js
+│   ├── renderer/
+│   │   ├── ProtectedAssetRuntime.js
+│   │   ├── SandboxBootstrap.js
+│   │   ├── SandboxBridgeProtocol.js
+│   │   └── SiteSandbox.js
 │   └── torrent/
 │       └── TorrentLoader.js
 ├── ui/
@@ -428,6 +513,11 @@ src/
 │   ├── publish/
 │   └── channels/
 └── torrent/
+    ├── AuthoringDom.js
+    ├── CanonicalJson.js
+    ├── ProtectedAssetProtocol.js
+    ├── ProtectedSiteBuilder.js
+    ├── ProtectedTextLocator.js
     ├── RenderGate.js
     ├── SiteBundleCodec.js
     ├── TorrentChainProtocol.js

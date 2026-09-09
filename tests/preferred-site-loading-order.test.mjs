@@ -13,6 +13,7 @@ function baseContext(events) {
         signedTorrentMetadata: new Map(),
         buildSignatureState: (state) => state,
         applyCachedSignatureState() {},
+        async applyCachedProtectedSite() {},
         displayCachedSite() {
             events.push('render-cache');
         },

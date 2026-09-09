@@ -12,13 +12,22 @@
  */
 
 import { signPublishPayload, verifyPublishSignature } from '../auth/SigningService.js';
-import { bytesToHex, canonicalJson, hexToBytes, sha256Bytes, sha256Hex, timingSafeEqualHex, utf8Bytes } from './CanonicalJson.js';
+import {
+    bytesToHex,
+    canonicalJson,
+    hexToBytes,
+    sha256Bytes,
+    sha256Hex,
+    timingSafeEqualHex,
+    utf8Bytes
+} from './CanonicalJson.js';
 import {
     canonicalizeProtectedAssets,
     normalizeRecipientPublicKey,
     TORRENTCHAIN_SCHEMA,
     validateProtectedAssets
 } from './ProtectedAssetProtocol.js';
+import { isValidUncompressedPublicKey } from '../channels/ecies.js';
 
 export const TORRENTCHAIN_SIGNATURE_ALGORITHM = 'EVM_SECP256K1';
 
@@ -83,7 +92,11 @@ export function hashFileEntries(fileEntries) {
         utf8Bytes(
             canonicalJson(
                 [...(fileEntries || [])]
-                    .map((entry) => ({ path: `${entry.path}`, size: Number(entry.size), sha256: `${entry.sha256}`.toLowerCase() }))
+                    .map((entry) => ({
+                        path: `${entry.path}`,
+                        size: Number(entry.size),
+                        sha256: `${entry.sha256}`.toLowerCase()
+                    }))
                     .sort((left, right) => left.path.localeCompare(right.path))
             )
         )
@@ -105,8 +118,9 @@ export function canonicalizeOwner(owner) {
     if (!/^0x[0-9a-f]{40}$/.test(evmAddress)) {
         throw new Error('Owner evmAddress must be a 20-byte 0x-prefixed address.');
     }
-    // Throws for anything that is not a real uncompressed secp256k1 key.
-    const eciesPublicKey = normalizeRecipientPublicKey(owner?.eciesPublicKey);
+    // Throws for anything that is not a real uncompressed secp256k1 key —
+    // including a point that merely looks like one but is not on the curve.
+    const eciesPublicKey = normalizeRecipientPublicKey(owner?.eciesPublicKey, { isValidUncompressedPublicKey });
 
     const nostrPublicKey = `${owner?.nostrPublicKey || ''}`.trim().toLowerCase();
     if (nostrPublicKey && !NOSTR_PUBKEY_RE.test(nostrPublicKey)) {
@@ -154,7 +168,10 @@ export async function createTorrentChainArtifact({
     owner,
     bundle = null,
     filesSemantics = 'torrent-entries',
-    protectedAssets = []
+    protectedAssets = [],
+    // @internal — injectable for unit testing; production always signs through
+    // the wallet worker via signPublishPayload.
+    _signPayloadFn = null
 }) {
     const draft = await buildTorrentChainDraft(inMemoryFiles);
     const canonicalOwner = canonicalizeOwner(owner);
@@ -184,7 +201,7 @@ export async function createTorrentChainArtifact({
     };
 
     const message = canonicalTorrentChainMessage(payload);
-    const signed = await signPublishPayload(payload, identityType, message);
+    const signed = await (_signPayloadFn || signPublishPayload)(payload, identityType, message);
 
     const manifest = {
         schema: payload.schema,
@@ -216,10 +233,11 @@ export async function createTorrentChainArtifact({
  * are supposed to belong to.
  *
  * @param {any} manifest
+ * @param {{ _verifySignatureFn?: ((message: string, signature: string, publisher: string) => Promise<boolean>) | null }} [options]
  * @returns {Promise<{ verified: boolean, reason?: string, publisher?: string, payload?: any,
  *                     owner?: any, siteId?: string | null, protectedAssets?: any[] }>}
  */
-export async function verifyTorrentChainManifest(manifest) {
+export async function verifyTorrentChainManifest(manifest, { _verifySignatureFn = null } = {}) {
     if (!manifest?.payload || !manifest?.signature || !manifest?.payload?.publisher) {
         return { verified: false, reason: 'Missing payload/signature/publisher' };
     }
@@ -240,34 +258,70 @@ export async function verifyTorrentChainManifest(manifest) {
         return { verified: false, reason: 'Signed message does not match the manifest payload' };
     }
 
-    const verified = await verifyPublishSignature(message, manifest.signature, payload.publisher);
+    // @internal — the verifier is injectable for unit testing; production always
+    // recovers the EIP-191 signer.
+    const verified = await (_verifySignatureFn || verifyPublishSignature)(
+        message,
+        manifest.signature,
+        payload.publisher
+    );
     if (!verified) {
-        return { verified: false, reason: 'Signature does not recover to the publisher', publisher: payload.publisher, payload };
+        return {
+            verified: false,
+            reason: 'Signature does not recover to the publisher',
+            publisher: payload.publisher,
+            payload
+        };
     }
 
     let owner;
     try {
         owner = canonicalizeOwner(payload.owner);
     } catch (error) {
-        return { verified: false, reason: `Owner block is invalid: ${error.message}`, publisher: payload.publisher, payload };
+        return {
+            verified: false,
+            reason: `Owner block is invalid: ${error.message}`,
+            publisher: payload.publisher,
+            payload
+        };
     }
     if (owner.evmAddress !== `${payload.publisher}`.toLowerCase()) {
-        return { verified: false, reason: 'Owner does not match the signing publisher', publisher: payload.publisher, payload };
+        return {
+            verified: false,
+            reason: 'Owner does not match the signing publisher',
+            publisher: payload.publisher,
+            payload
+        };
     }
 
     if (Array.isArray(manifest.files)) {
         const filesHash = await hashFileEntries(manifest.files);
         if (!timingSafeEqualHex(filesHash, `${payload.filesHash || ''}`)) {
-            return { verified: false, reason: 'File list does not match the signed filesHash', publisher: payload.publisher, payload };
+            return {
+                verified: false,
+                reason: 'File list does not match the signed filesHash',
+                publisher: payload.publisher,
+                payload
+            };
         }
     } else if (payload.filesHash) {
-        return { verified: false, reason: 'Manifest is missing the file list its signature covers', publisher: payload.publisher, payload };
+        return {
+            verified: false,
+            reason: 'Manifest is missing the file list its signature covers',
+            publisher: payload.publisher,
+            payload
+        };
     }
 
     let protectedAssets = [];
     if (payload.protectedAssets && payload.protectedAssets.length > 0) {
         if (!payload.siteId) {
-            return { verified: false, reason: 'Protected assets require a siteId', publisher: payload.publisher, payload };
+            return {
+                verified: false,
+                reason: 'Protected assets require a siteId',
+                publisher: payload.publisher,
+                payload
+            };
         }
         try {
             protectedAssets = await validateProtectedAssets(payload.protectedAssets, { siteId: payload.siteId });

@@ -198,7 +198,10 @@ function boundaryAt(entries, offset, edge) {
 export function resolveSelectionLocator(document, locator) {
     const container = document.previewIndex.get(locator.containerId);
     if (!container) {
-        throw new TextLocatorError(`Preview node ${locator.containerId} is not part of this document.`, 'locator-no-container');
+        throw new TextLocatorError(
+            `Preview node ${locator.containerId} is not part of this document.`,
+            'locator-no-container'
+        );
     }
 
     const containerText = textContentOf(container);
@@ -208,18 +211,30 @@ export function resolveSelectionLocator(document, locator) {
 
     const resolvedText = containerText.slice(locator.startOffset, locator.endOffset);
     if (resolvedText !== locator.exact) {
-        throw new TextLocatorError('Selected text does not match the staged source at those offsets.', 'locator-text-mismatch');
+        throw new TextLocatorError(
+            'Selected text does not match the staged source at those offsets.',
+            'locator-text-mismatch'
+        );
     }
 
     // Prefix and suffix are the independent check: offsets alone could still be
     // pointing at a coincidentally identical run of text.
-    const expectedPrefix = containerText.slice(Math.max(0, locator.startOffset - LOCATOR_CONTEXT_LENGTH), locator.startOffset);
+    const expectedPrefix = containerText.slice(
+        Math.max(0, locator.startOffset - LOCATOR_CONTEXT_LENGTH),
+        locator.startOffset
+    );
     const expectedSuffix = containerText.slice(locator.endOffset, locator.endOffset + LOCATOR_CONTEXT_LENGTH);
     if (locator.prefix && locator.prefix !== expectedPrefix) {
-        throw new TextLocatorError('Text before the selection does not match the staged source.', 'locator-prefix-mismatch');
+        throw new TextLocatorError(
+            'Text before the selection does not match the staged source.',
+            'locator-prefix-mismatch'
+        );
     }
     if (locator.suffix && locator.suffix !== expectedSuffix) {
-        throw new TextLocatorError('Text after the selection does not match the staged source.', 'locator-suffix-mismatch');
+        throw new TextLocatorError(
+            'Text after the selection does not match the staged source.',
+            'locator-suffix-mismatch'
+        );
     }
 
     const entries = textNodesWithOffsets(container);
@@ -321,7 +336,9 @@ export function replaceRangeWithPlaceholder(resolved, assetId) {
         throw new TextLocatorError('Selection resolved to no content.', 'locator-empty');
     }
 
-    const fragmentHtml = result.taken.map((node) => serializeAuthoringHtml(node, { includePreviewIds: false })).join('');
+    const fragmentHtml = result.taken
+        .map((node) => serializeAuthoringHtml(node, { includePreviewIds: false }))
+        .join('');
     return { fragmentHtml, placeholder };
 }
 

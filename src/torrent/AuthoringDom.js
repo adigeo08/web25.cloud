@@ -38,8 +38,14 @@ const VOID_ELEMENTS = new Set([
     'wbr'
 ]);
 
-/** Elements whose content is text, not markup. */
-const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
+/**
+ * Elements whose content is text, not markup.
+ *
+ * These are also the subtrees excluded from selectable text: the preview frame
+ * skips exactly this set when it counts offsets, so both sides count the same
+ * characters. Keep the two in step — `SKIP_TEXT_TAGS` in `SandboxBootstrap.js`.
+ */
+export const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
 
 const NAMED_ENTITIES = {
     amp: '&',
@@ -73,7 +79,8 @@ export class AuthoringDomError extends Error {
 export function decodeEntities(text) {
     return `${text}`.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, body) => {
         if (body[0] === '#') {
-            const codePoint = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+            const codePoint =
+                body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
             if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
             try {
                 return String.fromCodePoint(codePoint);
@@ -104,7 +111,16 @@ export function encodeText(text) {
 export function parseAuthoringHtml(html) {
     const source = `${html}`.replace(/\r\n?/g, '\n');
     /** @type {AuthoringElement} */
-    const root = { type: 'element', tag: '#root', rawOpen: '', rawClose: '', children: [], parent: null, previewId: null, rawText: false };
+    const root = {
+        type: 'element',
+        tag: '#root',
+        rawOpen: '',
+        rawClose: '',
+        children: [],
+        parent: null,
+        previewId: null,
+        rawText: false
+    };
     /** @type {AuthoringElement[]} */
     const stack = [root];
     let index = 0;
@@ -147,7 +163,10 @@ export function parseAuthoringHtml(html) {
         if (source.startsWith('</', next)) {
             const end = source.indexOf('>', next);
             const stop = end === -1 ? source.length : end + 1;
-            const tag = source.slice(next + 2, end === -1 ? source.length : end).trim().toLowerCase();
+            const tag = source
+                .slice(next + 2, end === -1 ? source.length : end)
+                .trim()
+                .toLowerCase();
             const depth = findOpenIndex(stack, tag);
             if (depth > 0) {
                 stack[depth].rawClose = source.slice(next, stop);

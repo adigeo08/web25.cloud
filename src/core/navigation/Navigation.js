@@ -3,7 +3,11 @@
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import SiteSandbox from '../renderer/SiteSandbox.js';
 import { createProtectedAssetDecryptHandler } from '../renderer/ProtectedAssetRuntime.js';
-import { getLocalWalletPublicKey, isLocalWalletUnlocked, protectedAssetDecryptWithLocalWallet } from '../../auth/LocalWalletService.js';
+import {
+    getLocalWalletPublicKey,
+    isLocalWalletUnlocked,
+    protectedAssetDecryptWithLocalWallet
+} from '../../auth/LocalWalletService.js';
 import { parseWeb25Address } from '../../gofile/Web25Url.js';
 
 export function updateSiteSignatureBadge(status) {
