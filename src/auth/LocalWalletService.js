@@ -33,6 +33,7 @@ import {
     workerEciesSign,
     workerGetNostrPublicKey,
     workerGetPublicKey,
+    workerProtectedAssetDecrypt,
     workerNostrNip44Decrypt,
     workerNostrNip44Encrypt,
     workerNostrSignEvent,
@@ -219,6 +220,23 @@ export async function eciesDecryptWithLocalWallet(ciphertext) {
 }
 
 /**
+ * Decrypt one protected `.torrentchain` asset.
+ *
+ * The wrapped content key is opened inside the wallet worker, used there and
+ * discarded there; only the decrypted fragment crosses back. Callers must keep
+ * it that way — a decrypted fragment is never written to IndexedDB,
+ * localStorage, the Service Worker cache or the PeerWeb cache.
+ *
+ * @param {{ schema: string, siteId: string, assetId: string, contentHash: string,
+ *           cipherHash: string, contentSalt: string, iv: string, algorithm: string,
+ *           wrappedKey: string, ciphertext: Uint8Array }} asset
+ * @returns {Promise<{ assetId: string, plaintext: string }>}
+ */
+export async function protectedAssetDecryptWithLocalWallet(asset) {
+    return workerProtectedAssetDecrypt(asset);
+}
+
+/**
  * The wallet's uncompressed secp256k1 public key. Public material only — this
  * is not, and cannot be turned into, the private key.
  * @returns {Promise<string | null>}
@@ -288,6 +306,7 @@ export async function isLocalWalletUnlocked() {
  *   getPublicKey: () => Promise<string|null>,
  *   signMessage: (m: string) => Promise<string>,
  *   eciesDecrypt: (c: string) => Promise<string>,
+ *   protectedAssetDecrypt: (asset: any) => Promise<{ assetId: string, plaintext: string }>,
  *   getNostrIdentity: () => Promise<{ nostrPublicKey: string, npub: string } | null>,
  *   nostrSignEvent: (template: any) => Promise<any>,
  *   nostrEncrypt: (plaintext: string, peerPublicKey: string) => Promise<string>,
@@ -299,6 +318,7 @@ export function createLocalWalletSigner() {
         getPublicKey: getLocalWalletPublicKey,
         signMessage: eciesSignWithLocalWallet,
         eciesDecrypt: eciesDecryptWithLocalWallet,
+        protectedAssetDecrypt: protectedAssetDecryptWithLocalWallet,
         getNostrIdentity: getLocalWalletNostrIdentity,
         nostrSignEvent: nostrSignEventWithLocalWallet,
         nostrEncrypt: nostrNip44EncryptWithLocalWallet,

@@ -52,6 +52,24 @@ export function createEcies({ secp256k1, keccak_256 }) {
         return bytesToHex(secp256k1.getPublicKey(hexToBytes(privateKeyHex), false));
     }
 
+    /**
+     * True when `publicKeyHex` is a full uncompressed secp256k1 public key that
+     * actually lies on the curve. A well-formed-looking 130-char string is not
+     * enough: an off-curve point would make ECIES encryption meaningless, so
+     * the point itself is validated here.
+     * @param {string} publicKeyHex
+     */
+    function isValidUncompressedPublicKey(publicKeyHex) {
+        const clean = `${publicKeyHex || ''}`.startsWith('0x') ? `${publicKeyHex}`.slice(2) : `${publicKeyHex || ''}`;
+        if (!/^04[0-9a-fA-F]{128}$/.test(clean)) return false;
+        try {
+            secp256k1.ProjectivePoint.fromHex(clean.toLowerCase()).assertValidity();
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     function evmAddressFromPublicKey(publicKeyHex) {
         const pubKeyBytes = hexToBytes(publicKeyHex);
         // Drop the first byte (0x04 uncompressed marker or 0x02/0x03 compressed marker)
@@ -150,6 +168,7 @@ export function createEcies({ secp256k1, keccak_256 }) {
         hexToBytes,
         bytesToHex,
         getPublicKeyFromPrivateKey,
+        isValidUncompressedPublicKey,
         evmAddressFromPublicKey,
         eciesEncrypt,
         eciesDecrypt,

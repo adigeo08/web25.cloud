@@ -102,18 +102,20 @@ const stage = (dom) => ({ label: dom.text('deploy-stage-label'), detail: dom.tex
 
 // ── 1. Markup: the stepper the wizard drives ────────────────────────────────
 
-test('the deploy stepper ships all seven steps in order', () => {
+test('the deploy stepper ships all eight steps in order', () => {
     const chips = [...MARKUP.matchAll(/<span class="step-chip-text">([^<]+)<\/span\s*>/g)].map((match) => match[1]);
     assert.deepEqual(chips, [
         '1. Select files',
-        '2. Build in-memory bundle',
-        '3. Review payload',
-        '4. Sign payload',
-        '5. Deploy signed memory torrent',
-        '6. Create GoFile mirror',
-        '7. Live + mirrored'
+        '2. Preview &amp; protect',
+        '3. Build in-memory bundle',
+        '4. Review payload',
+        '5. Sign payload',
+        '6. Deploy signed memory torrent',
+        '7. Create GoFile mirror',
+        '8. Live + mirrored'
     ]);
     assert.match(MARKUP, /id="step-chip-mirror"/);
+    assert.match(MARKUP, /id="step-chip-protect"/);
     assert.match(MARKUP, /<span class="step-chip-note">Optional<\/span>/);
 });
 
@@ -154,34 +156,35 @@ test('the resolver input documents and accepts all three address forms', () => {
 
 // ── 2. Wizard state, before deployment ──────────────────────────────────────
 
-test('the wizard walks 1 → 4 → 5 and never presents the mirror step as required', async () => {
+test('the wizard walks 1 → 5 → 6 and never presents the mirror step as required', async () => {
     const { dom, context } = await deployHarness();
 
     context.pendingDeployFiles = [];
     context.lastSignature = null;
     context.lastSignedPublish = null;
     context.refreshDeployUiState();
-    assert.deepEqual(dom.chipStates(), ['active', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked']);
+    assert.deepEqual(dom.chipStates(), ['active', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked']);
     assert.equal(dom.get('sign-publish-btn').disabled, true);
     assert.equal(dom.get('publish-btn').disabled, true);
 
     context.pendingDeployFiles = [payloadFile('index.html', 'x')];
     context.refreshDeployUiState();
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'active', 'locked', 'locked', 'locked']);
+    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'active', 'locked', 'locked', 'locked']);
     assert.equal(dom.get('sign-publish-btn').disabled, false);
     assert.equal(dom.get('publish-btn').disabled, true);
 
     context.lastSignature = { signature: '0xsig' };
     context.lastSignedPublish = { torrentHash: HASH };
     context.refreshDeployUiState();
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'active', 'locked', 'locked']);
+    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'active', 'locked', 'locked']);
     assert.equal(dom.get('publish-btn').disabled, false);
-    assert.equal(dom.chipNote(6), 'Optional', 'the mirror step reads as optional before it is reached');
+    assert.equal(dom.chipNote(7), 'Optional', 'the mirror step reads as optional before it is reached');
+    assert.equal(dom.chipNote(2), 'Nothing protected', 'a publisher who protected nothing is not shown a failure');
 
     // The lit "current" marker follows the active step instead of staying on
     // step 1, which would render a completed step as the current one too.
     const current = dom.chips.map((chip, index) => (chip.classList.contains('is-current') ? index + 1 : null));
-    assert.deepEqual(current.filter(Boolean), [5]);
+    assert.deepEqual(current.filter(Boolean), [6]);
     assert.deepEqual(
         dom.chips.map((chip) => chip.getAttribute('aria-current')).filter(Boolean),
         ['step'],
@@ -206,9 +209,9 @@ test('a WebTorrent-only deployment skips the mirror step and finishes at 100%', 
     await context.deploySignedArtifact();
 
     assert.equal(contacted, 0, 'GoFile is never contacted');
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'skipped', 'active']);
-    assert.equal(dom.chipNote(6), 'Skipped');
-    assert.equal(dom.chipText(7), '7. Live and seeding', 'the final step does not claim a mirror that was never made');
+    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'done', 'skipped', 'active']);
+    assert.equal(dom.chipNote(7), 'Skipped');
+    assert.equal(dom.chipText(8), '8. Live and seeding', 'the final step does not claim a mirror that was never made');
     assert.deepEqual(progress(dom), {
         percent: 100,
         width: '100%',
@@ -230,7 +233,7 @@ test('a WebTorrent-only deployment skips the mirror step and finishes at 100%', 
 
 // ── 4. Mirrored deployment ──────────────────────────────────────────────────
 
-test('a mirrored deployment moves through step 6 and lands on Live + mirrored', async () => {
+test('a mirrored deployment moves through step 7 and lands on Live + mirrored', async () => {
     const seen = [];
     const { dom, context, toasts } = await deployHarness({
         mirrorEnabled: true,
@@ -253,7 +256,7 @@ test('a mirrored deployment moves through step 6 and lands on Live + mirrored', 
     await context.deploySignedArtifact();
 
     assert.equal(seen.length, 1);
-    assert.deepEqual(seen[0].chips, ['done', 'done', 'done', 'done', 'done', 'active', 'locked']);
+    assert.deepEqual(seen[0].chips, ['done', 'done', 'done', 'done', 'done', 'done', 'active', 'locked']);
     assert.equal(seen[0].progress.percent, 90);
     assert.equal(seen[0].progress.label, 'Site live. Creating optional GoFile fallback mirror…');
     assert.equal(seen[0].progress.state, 'progress-running');
@@ -265,9 +268,9 @@ test('a mirrored deployment moves through step 6 and lands on Live + mirrored', 
     assert.equal(seen[0].url, `https://web25.cloud/?orc=${HASH}`);
     assert.equal(seen[0].mirrorRow, 'Creating…');
 
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'done', 'active']);
-    assert.equal(dom.chipNote(6), 'Created');
-    assert.equal(dom.chipText(7), '7. Live + mirrored');
+    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'done', 'done', 'active']);
+    assert.equal(dom.chipNote(7), 'Created');
+    assert.equal(dom.chipText(8), '8. Live + mirrored');
     assert.deepEqual(progress(dom), {
         percent: 100,
         width: '100%',
@@ -323,8 +326,8 @@ test('a slow mirror never implies the deployment itself is still pending', async
     assert.match(dom.text('deploy-wizard-next'), /live and seeding/i);
     assert.match(dom.text('deploy-wizard-next'), /optional fallback mirror/i);
     assert.equal(dom.get('publish-btn').disabled, false, 'the interface stays usable');
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'active', 'locked']);
-    assert.equal(dom.chipNote(6), 'In progress');
+    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'done', 'active', 'locked']);
+    assert.equal(dom.chipNote(7), 'In progress');
 
     release();
     await deploying;
@@ -349,9 +352,9 @@ test('a mirror timeout leaves a successful, complete, torrent-only deployment', 
 
     await context.deploySignedArtifact();
 
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'failed', 'active']);
-    assert.equal(dom.chipNote(6), 'Not created');
-    assert.equal(dom.chipText(7), '7. Live and seeding');
+    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'done', 'failed', 'active']);
+    assert.equal(dom.chipNote(7), 'Not created');
+    assert.equal(dom.chipText(8), '8. Live and seeding');
     assert.deepEqual(progress(dom), {
         percent: 100,
         width: '100%',

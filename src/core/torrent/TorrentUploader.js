@@ -523,11 +523,13 @@ export async function handleFolderUpload(files) {
     this.lastSignature = null;
     this.lastDeployResult = null;
     this.clearDeploySession?.();
+    // A new artifact invalidates any protection chosen for the previous one.
+    this.resetProtectionState?.();
     this.invalidateSignedState?.('Artifact updated. Previous signature invalidated.');
 
     const output = document.getElementById('publish-output');
     if (output) {
-        output.textContent = `Artifact staged with ${files.length} files. Deploy uses an in-memory bundle (no direct local-directory seeding). Sign the payload to continue.`;
+        output.textContent = `Artifact staged with ${files.length} files. Deploy uses an in-memory bundle (no direct local-directory seeding). Preview and protect, then sign the payload to continue.`;
     }
 
     const resultEl = document.getElementById('upload-result');
@@ -535,7 +537,15 @@ export async function handleFolderUpload(files) {
         resultEl.classList.add('hidden');
     }
 
-    this.toast.success('Artifact staged in memory. Sign payload to continue deployment.', 'Stage 1 complete');
+    this.toast.success('Artifact staged in memory. Preview and protect before signing.', 'Stage 1 complete');
+
+    // Step 2 opens on the staged files. A publisher who protects nothing simply
+    // presses Continue and lands back in the deploy flow unchanged.
+    try {
+        await this.enterProtectStep?.();
+    } catch (error) {
+        this.log(`Could not open the protect step: ${error.message}`);
+    }
 }
 
 export async function prepareDeployArtifact(files, onProgress) {

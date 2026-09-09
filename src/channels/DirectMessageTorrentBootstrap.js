@@ -11,6 +11,7 @@
  */
 
 import { createTorrentChainArtifact, verifyTorrentChainManifest } from '../torrent/TorrentChainProtocol.js';
+import { newUuid } from '../torrent/ProtectedAssetProtocol.js';
 import {
     BOOTSTRAP_FILE_NAME,
     createEncryptedDMBootstrapArtifact,
@@ -92,7 +93,16 @@ export async function createDirectMessageBootstrapTorrent({
         publisher: identity.address,
         chainId: identity.chainId || 1,
         identityType: identity.identityType,
-        createdAt: envelope.createdAt
+        createdAt: envelope.createdAt,
+        // A bootstrap torrent protects nothing, but the manifest still records
+        // who published it, using the very key the envelope is addressed from.
+        siteId: newUuid(),
+        owner: {
+            evmAddress: identity.address,
+            eciesPublicKey,
+            nostrPublicKey: identity.nostrPublicKey || '',
+            npub: identity.npub || ''
+        }
     });
     const chainFile = makeVirtualFile('.torrentchain', chainArtifact.content);
 

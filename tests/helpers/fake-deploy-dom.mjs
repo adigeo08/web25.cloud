@@ -29,16 +29,23 @@ function classList(node) {
 
 function element(extra = {}) {
     const node = {
+        tagName: 'DIV',
         textContent: '',
+        value: '',
         href: '',
         download: '',
+        type: '',
+        className: '',
         disabled: false,
         checked: false,
         open: false,
+        selected: false,
         style: {},
         attributes: {},
         listeners: {},
         children: {},
+        /** Child nodes appended by the UI modules, in order. */
+        childNodes: [],
         ...extra
     };
     node.classList = classList(node);
@@ -54,6 +61,15 @@ function element(extra = {}) {
     };
     node.dispatch = (type, event = {}) => (node.listeners[type] || []).forEach((handler) => handler(event));
     node.querySelector = (selector) => node.children[selector] || null;
+    node.appendChild = (child) => {
+        node.childNodes.push(child);
+        return child;
+    };
+    node.append = (...nodes) => nodes.forEach((child) => node.appendChild(child));
+    node.removeChild = (child) => {
+        node.childNodes = node.childNodes.filter((entry) => entry !== child);
+        return child;
+    };
     return node;
 }
 
@@ -66,13 +82,17 @@ function stepChip(text, { note = null } = {}) {
 
 const CHIP_LABELS = [
     '1. Select files',
-    '2. Build in-memory bundle',
-    '3. Review payload',
-    '4. Sign payload',
-    '5. Deploy signed memory torrent',
-    '6. Create GoFile mirror',
-    '7. Live + mirrored'
+    '2. Preview & protect',
+    '3. Build in-memory bundle',
+    '4. Review payload',
+    '5. Sign payload',
+    '6. Deploy signed memory torrent',
+    '7. Create GoFile mirror',
+    '8. Live + mirrored'
 ];
+
+/** The two optional steps are the ones that carry a note chip. */
+const CHIPS_WITH_NOTES = new Set([1, 6]);
 
 /** Install the fake deploy DOM as globals. Returns handles for assertions. */
 export function installDeployDom() {
@@ -83,7 +103,7 @@ export function installDeployDom() {
     };
 
     const elements = new Map();
-    const chips = CHIP_LABELS.map((label, index) => stepChip(label, { note: index === 5 ? 'Optional' : null }));
+    const chips = CHIP_LABELS.map((label, index) => stepChip(label, { note: CHIPS_WITH_NOTES.has(index) ? 'Optional' : null }));
     const opened = [];
     const copied = [];
 
@@ -109,10 +129,16 @@ export function installDeployDom() {
         configurable: true,
         writable: true
     });
+    const created = [];
     globalThis.document = {
         getElementById(id) {
             if (!elements.has(id)) elements.set(id, element());
             return elements.get(id);
+        },
+        createElement(tagName) {
+            const node = element({ tagName: `${tagName}`.toUpperCase() });
+            created.push(node);
+            return node;
         },
         querySelectorAll(selector) {
             return selector === '#tab-publish .step-chip' ? chips : [];
@@ -126,6 +152,7 @@ export function installDeployDom() {
         chips,
         opened,
         copied,
+        created,
         get: (id) => globalThis.document.getElementById(id),
         text: (id) => globalThis.document.getElementById(id).textContent,
         /** The chip states, 1-based, as a readable array for assertions. */

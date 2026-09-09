@@ -5,7 +5,14 @@
  * The frame runs in an opaque origin and talks to the application through one
  * MessagePort. Every inbound message is validated against the allowlist in
  * `SandboxBridgeProtocol.js` before it reaches any application code, and the
- * only data that ever flows back is the site's own bundle.
+ * only data that ever flows back is the site's own bundle — or, for a site with
+ * protected fragments, one fragment the viewer holds a decrypt grant for.
+ *
+ * The same class serves the publisher's Preview & Protect workspace. The two
+ * roles differ only in which handlers the caller supplies: a published site is
+ * constructed without `onProtectedDecrypt`/`onPreviewSelect`, and both ops are
+ * then refused. Neither handler is a wallet handle — the frame passes an asset
+ * id or a text range, and the application decides everything else.
  */
 
 import { buildSandboxBootstrapHtml } from './SandboxBootstrap.js';
@@ -48,10 +55,24 @@ export default class SiteSandbox {
      *   entryHtml: string,
      *   resolveFile: (path: string) => ({ content: any, type?: string } | null),
      *   onTitle?: (title: string) => void,
-     *   log?: (message: string) => void
+     *   log?: (message: string) => void,
+     *   mode?: 'view' | 'authoring',
+     *   onProtectedDecrypt?: ((assetId: string) => Promise<any>) | null,
+     *   onPreviewSelect?: ((selection: any) => Promise<any> | any) | null
      * }} options
      */
-    constructor({ iframe, hash, entryFile, entryHtml, resolveFile, onTitle = null, log = null }) {
+    constructor({
+        iframe,
+        hash,
+        entryFile,
+        entryHtml,
+        resolveFile,
+        onTitle = null,
+        log = null,
+        mode = 'view',
+        onProtectedDecrypt = null,
+        onPreviewSelect = null
+    }) {
         this.iframe = iframe;
         this.hash = hash;
         this.entryFile = entryFile;
@@ -59,6 +80,9 @@ export default class SiteSandbox {
         this.resolveFile = resolveFile;
         this.onTitle = onTitle;
         this.log = log || (() => {});
+        this.mode = mode === 'authoring' ? 'authoring' : 'view';
+        this.onProtectedDecrypt = onProtectedDecrypt;
+        this.onPreviewSelect = onPreviewSelect;
         this.prefix = `/peerweb-site/${hash}/`;
         this.token = randomToken();
         /** @type {MessagePort | null} */
@@ -78,7 +102,9 @@ export default class SiteSandbox {
         this.iframe.srcdoc = buildSandboxBootstrapHtml({
             token: this.token,
             parentOrigin: window.location.origin,
-            prefix: this.prefix
+            prefix: this.prefix,
+            mode: this.mode,
+            protectedEnabled: Boolean(this.onProtectedDecrypt)
         });
     }
 
@@ -131,7 +157,7 @@ export default class SiteSandbox {
         }
     }
 
-    /** @param {{ id: string, op: string, path?: string, title?: string, message?: string }} request */
+    /** @param {{ id: string, op: string, path?: string, title?: string, message?: string, assetId?: string, selection?: any }} request */
     _handle(request) {
         switch (request.op) {
             case SANDBOX_BRIDGE_OPS.READY:
@@ -169,6 +195,43 @@ export default class SiteSandbox {
                 this.log('[Sandboxed site] ' + request.message);
                 this._reply(request.id, true, { ok: true });
                 return;
+
+            case SANDBOX_BRIDGE_OPS.PROTECTED_DECRYPT: {
+                if (!this.onProtectedDecrypt) {
+                    this._reply(request.id, false, null, 'operation-not-allowed');
+                    return;
+                }
+                // The frame gets a status, never an exception trace: whether a
+                // viewer is locked out, unauthorised or looking at a bad asset
+                // id is the application's answer to give, in its own words.
+                Promise.resolve()
+                    .then(() => this.onProtectedDecrypt(/** @type {string} */ (request.assetId)))
+                    .then((result) => this._reply(request.id, true, result))
+                    .catch((error) => {
+                        this.log(
+                            '[Sandbox] protected.decrypt failed: ' + (error instanceof Error ? error.message : error)
+                        );
+                        this._reply(request.id, true, { status: 'error', assetId: request.assetId });
+                    });
+                return;
+            }
+
+            case SANDBOX_BRIDGE_OPS.PREVIEW_SELECT: {
+                if (this.mode !== 'authoring' || !this.onPreviewSelect) {
+                    this._reply(request.id, false, null, 'operation-not-allowed');
+                    return;
+                }
+                Promise.resolve()
+                    .then(() => this.onPreviewSelect(request.selection))
+                    .then((result) => this._reply(request.id, true, result || { status: 'ok' }))
+                    .catch((error) => {
+                        this._reply(request.id, true, {
+                            status: 'rejected',
+                            reason: error instanceof Error ? error.message : 'Selection could not be resolved.'
+                        });
+                    });
+                return;
+            }
 
             default:
                 // Unreachable: validateBridgeRequest rejects unknown ops first.

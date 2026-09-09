@@ -136,7 +136,8 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     if (cachedEntry?.data) {
         this.log('Loading from cache...');
         this.applyCachedSignatureState(cachedEntry.signatureState, sanitizedHash);
-        this.displayCachedSite(cachedEntry.data, sanitizedHash);
+        await this.applyCachedProtectedSite(cachedEntry.protectedSite, sanitizedHash);
+        await this.displayCachedSite(cachedEntry.data, sanitizedHash);
         return;
     }
 

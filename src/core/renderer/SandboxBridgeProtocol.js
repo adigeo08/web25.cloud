@@ -19,7 +19,26 @@ export const SANDBOX_BRIDGE_OPS = Object.freeze({
     /** Propagate the site's document title to the viewer chrome. */
     SITE_TITLE: 'site.title',
     /** Forward a diagnostic line to the debug panel. */
-    SITE_LOG: 'site.log'
+    SITE_LOG: 'site.log',
+    /**
+     * Ask the application to decrypt one protected asset of *this* site.
+     *
+     * The frame supplies nothing but an asset id. Every other input — site id,
+     * ciphertext, wrapped key, both content digests — comes from the verified
+     * `.torrentchain` manifest on the application side, and the wallet worker
+     * re-derives the bindings again before it decrypts. This is the whole of
+     * the protected-asset surface: there is still no wallet operation, no
+     * signing operation and no generic crypto call on the bridge.
+     */
+    PROTECTED_DECRYPT: 'protected.decrypt',
+    /**
+     * Authoring only. Report a text selection the publisher made in the
+     * Preview & Protect step. The application only ever accepts it while it is
+     * previewing its own staged files, and it carries no privilege: the
+     * selection is resolved against that staged copy and rejected outright if
+     * it does not match.
+     */
+    PREVIEW_SELECT: 'preview.select'
 });
 
 const ALLOWED_OPS = /** @type {Set<string>} */ (new Set(Object.values(SANDBOX_BRIDGE_OPS)));
@@ -49,6 +68,10 @@ const MAX_ID_LENGTH = 128;
 const MAX_PATH_LENGTH = 1024;
 const MAX_TITLE_LENGTH = 300;
 const MAX_LOG_LENGTH = 2048;
+const MAX_SELECTION_LENGTH = 64 * 1024;
+const MAX_SELECTION_CONTEXT_LENGTH = 256;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PREVIEW_NODE_ID_RE = /^w\d+$/;
 
 export class SandboxBridgeError extends Error {
     constructor(message) {
@@ -123,9 +146,57 @@ export function validateBridgeRequest(raw) {
             return { id: data.id, op: data.op, message: data.message.slice(0, MAX_LOG_LENGTH) };
         }
 
+        case SANDBOX_BRIDGE_OPS.PROTECTED_DECRYPT: {
+            const assetId = typeof data.assetId === 'string' ? data.assetId.trim().toLowerCase() : '';
+            if (!UUID_RE.test(assetId)) {
+                throw new SandboxBridgeError('protected.decrypt requires the asset id of a protected fragment.');
+            }
+            return { id: data.id, op: data.op, assetId };
+        }
+
+        case SANDBOX_BRIDGE_OPS.PREVIEW_SELECT:
+            return { id: data.id, op: data.op, selection: normalizeAuthoringSelection(data.selection) };
+
         default:
             throw new SandboxBridgeError(`Sandbox bridge operation is not allowed: ${data.op}`);
     }
+}
+
+/**
+ * Bound and type a selection reported by the preview frame. The frame is still
+ * untrusted code: this only makes the message safe to look at, and the staged
+ * document is what decides whether the selection is real.
+ *
+ * @param {unknown} raw
+ */
+export function normalizeAuthoringSelection(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new SandboxBridgeError('preview.select requires a selection object.');
+    }
+    const data = /** @type {Record<string, any>} */ (raw);
+
+    const path = typeof data.path === 'string' ? data.path : '';
+    if (!path || path.length > MAX_PATH_LENGTH) {
+        throw new SandboxBridgeError('preview.select requires the source path of the selection.');
+    }
+    const containerId = typeof data.containerId === 'string' ? data.containerId : '';
+    if (!PREVIEW_NODE_ID_RE.test(containerId)) {
+        throw new SandboxBridgeError('preview.select requires a preview node id.');
+    }
+    const exact = typeof data.exact === 'string' ? data.exact : '';
+    if (exact.length === 0 || exact.length > MAX_SELECTION_LENGTH) {
+        throw new SandboxBridgeError('preview.select requires a non-empty selection within the size limit.');
+    }
+    const startOffset = Number(data.startOffset);
+    const endOffset = Number(data.endOffset);
+    if (!Number.isInteger(startOffset) || !Number.isInteger(endOffset) || startOffset < 0 || endOffset <= startOffset) {
+        throw new SandboxBridgeError('preview.select requires an ordered pair of text offsets.');
+    }
+
+    const prefix = typeof data.prefix === 'string' ? data.prefix.slice(-MAX_SELECTION_CONTEXT_LENGTH) : '';
+    const suffix = typeof data.suffix === 'string' ? data.suffix.slice(0, MAX_SELECTION_CONTEXT_LENGTH) : '';
+
+    return { path: normalizeBundlePath(path), containerId, startOffset, endOffset, exact, prefix, suffix };
 }
 
 /**

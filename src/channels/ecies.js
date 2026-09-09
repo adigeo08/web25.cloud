@@ -27,6 +27,14 @@ const ecies = createEcies({ secp256k1, keccak_256 });
 export const getPublicKeyFromPrivateKey = ecies.getPublicKeyFromPrivateKey;
 
 /**
+ * True when the string is a full uncompressed secp256k1 public key ("04..."),
+ * on the curve. Used before anything is encrypted to a recipient key.
+ * @param {string} publicKeyHex
+ * @returns {boolean}
+ */
+export const isValidUncompressedPublicKey = ecies.isValidUncompressedPublicKey;
+
+/**
  * Derive the EVM address from a secp256k1 uncompressed public key.
  * Implements: keccak256(pubKey[1:])[-20:]
  * @param {string} publicKeyHex  — "04..." 130-char hex (with or without "0x")

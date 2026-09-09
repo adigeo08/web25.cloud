@@ -15,6 +15,28 @@ import {
 } from '../../torrent/SiteBundleCodec.js';
 import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/DeployProgress.js';
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
+import {
+    bindProtectWorkspace,
+    clearRecipientInput,
+    readRecipientInput,
+    renderProtectedFragments,
+    renderProtectFileList,
+    renderProtectRecipients,
+    renderProtectSelectionHint,
+    renderProtectStatus,
+    renderRecipientError,
+    setProtectBusy,
+    setProtectWorkspaceVisible
+} from '../../ui/publish/ProtectPreviewPanel.js';
+import SiteSandbox from '../renderer/SiteSandbox.js';
+import { buildProtectedSite, isProtectableDocument } from '../../torrent/ProtectedSiteBuilder.js';
+import {
+    normalizeSelectionLocator,
+    prepareAuthoringDocument,
+    resolveSelectionLocator
+} from '../../torrent/ProtectedTextLocator.js';
+import { newUuid, normalizeRecipientPublicKey } from '../../torrent/ProtectedAssetProtocol.js';
+import { evmAddressFromPublicKey, isValidUncompressedPublicKey, eciesEncrypt } from '../../channels/ecies.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
@@ -1163,7 +1185,9 @@ export function refreshDeployUiState() {
         hasFiles,
         hasSignature,
         hasDeployResult: Boolean(this.lastDeployResult),
-        mirrorState: this.lastDeployResult?.mirrorState || 'idle'
+        mirrorState: this.lastDeployResult?.mirrorState || 'idle',
+        inProtectStep: Boolean(this.inProtectStep),
+        protectedCount: this.protectedSiteContext?.protectedAssets?.length || 0
     });
 }
 
@@ -1223,8 +1247,17 @@ export async function signStagedPayload() {
         } catch (_) {}
     }
 
-    const inMemoryFiles = await this.buildInMemoryDeployBundle(this.pendingDeployFiles, ({ label, percent }) =>
-        updateDeployProgress({ label, percent, state: 'running' })
+    // The protected build when the publisher protected something, the plain
+    // staged files otherwise. Either way this is the *final* representation:
+    // the torrent hash, the bundle hash and the signature below all cover it,
+    // and never the plaintext version it may have been derived from.
+    const stagedFiles =
+        this.protectedStagedFiles ||
+        (await this.readStagedDeployFiles(({ label, percent }) =>
+            updateDeployProgress({ label, percent, state: 'running' })
+        ));
+    const inMemoryFiles = stagedFiles.map((file) =>
+        this.createVirtualBundleFile(file.path, file.bytes, file.contentType || this.getContentType(file.path))
     );
 
     const usingGzipBundle = PEERWEB_CONFIG.SITE_BUNDLE_MODE === 'gzip' && supportsNativeGzipStreams;
@@ -1243,16 +1276,11 @@ export async function signStagedPayload() {
 
     if (usingGzipBundle) {
         updateDeployProgress({ label: 'Encoding site.bundle.json.gz payload', percent: 45, state: 'running' });
-        const bundleInputFiles = [];
-        for (const file of inMemoryFiles) {
-            const path = this.getNormalizedDeployPath(file);
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            bundleInputFiles.push({
-                path,
-                contentType: file.type || this.getContentType(path),
-                bytes
-            });
-        }
+        const bundleInputFiles = stagedFiles.map((file) => ({
+            path: file.path,
+            contentType: file.contentType || this.getContentType(file.path),
+            bytes: file.bytes
+        }));
 
         const entryPath = bundleInputFiles
             .map((entry) => entry.path)
@@ -1271,12 +1299,27 @@ export async function signStagedPayload() {
 
     updateDeployProgress({ label: 'Generating .torrentchain signature manifest', percent: 55, state: 'running' });
 
+    if (!identity.publicKey) {
+        throw new Error('Unlock your wallet before signing: the manifest records your public key as the site owner.');
+    }
+
+    const protectedContext = this.protectedSiteContext;
     const chainArtifact = await createTorrentChainArtifact({
         inMemoryFiles,
         publisher: identity.address,
         chainId: identity.chainId || 1,
         identityType: identity.identityType,
         createdAt,
+        // The signed manifest is the source of truth for ownership and for who
+        // may decrypt: both live inside the payload, never beside it.
+        siteId: protectedContext?.siteId || newUuid(),
+        owner: {
+            evmAddress: identity.address,
+            eciesPublicKey: identity.publicKey,
+            nostrPublicKey: identity.nostrPublicKey || '',
+            npub: identity.npub || ''
+        },
+        protectedAssets: protectedContext?.protectedAssets || [],
         bundle: bundleMetadata,
         filesSemantics: usingGzipBundle ? 'bundle-contents' : 'torrent-entries'
     });
@@ -1335,6 +1378,377 @@ export async function signStagedPayload() {
     updateDeployProgress({ label: 'Signature confirmed', percent: 100, state: 'success' });
     renderDeployStage('Signature ready', 'Signed in-memory bundle ready for deployment');
     this.refreshDeployUiState();
+}
+
+// ─── Step 2 · Preview & protect ──────────────────────────────────────────
+
+/**
+ * The staged site as bytes: the protected build when the publisher protected
+ * something, and the plain staged files otherwise. Everything downstream —
+ * bundle, torrent, `.torrentchain` — is derived from exactly this list, so the
+ * signature always covers the representation that actually ships.
+ *
+ * @returns {Promise<{ path: string, contentType: string, bytes: Uint8Array }[]>}
+ */
+export async function collectStagedDeployFiles() {
+    if (this.protectedStagedFiles) return this.protectedStagedFiles;
+    return this.readStagedDeployFiles();
+}
+
+/** Read the publisher's selected files into memory, paths normalised. */
+export async function readStagedDeployFiles(onProgress = null) {
+    const sources = this.pendingDeployFiles || [];
+    const files = [];
+    for (let index = 0; index < sources.length; index += 1) {
+        const source = sources[index];
+        const path = this.getNormalizedDeployPath(source);
+        const bytes = new Uint8Array(await source.arrayBuffer());
+        files.push({ path, contentType: source.type || this.getContentType(path), bytes });
+        onProgress?.({
+            label: `Reading files into memory (${index + 1}/${sources.length})`,
+            percent: 35 + Math.round(((index + 1) / sources.length) * 15)
+        });
+    }
+    return files;
+}
+
+/** Forget everything the protect step produced. */
+export function resetProtectionState() {
+    this.protectSelections = [];
+    this.protectRecipients = [];
+    this.protectPendingSelection = null;
+    this.protectDocuments = null;
+    this.protectStagedFiles = null;
+    this.protectActivePath = null;
+    this.protectedStagedFiles = null;
+    this.protectedSiteContext = null;
+    this.inProtectStep = false;
+    this.teardownProtectPreview();
+}
+
+export function teardownProtectPreview() {
+    if (this.protectSandbox) {
+        this.protectSandbox.destroy();
+        this.protectSandbox = null;
+    }
+}
+
+/**
+ * Enter the Preview & Protect step.
+ *
+ * The normal deploy controls are hidden and the staged site is rendered in the
+ * same opaque-origin sandbox a published site gets — never a plain iframe, and
+ * never with a wallet capability on the bridge.
+ */
+export async function enterProtectStep() {
+    if (!this.pendingDeployFiles || this.pendingDeployFiles.length === 0) {
+        throw new Error('Select files before previewing.');
+    }
+
+    this.protectSelections = this.protectSelections || [];
+    this.protectRecipients = this.protectRecipients || [];
+    this.protectPendingSelection = null;
+    this.protectedStagedFiles = null;
+    this.protectedSiteContext = null;
+    this.inProtectStep = true;
+
+    this.protectStagedFiles = await this.readStagedDeployFiles();
+    // One authoring document per HTML file, retained for the whole step: every
+    // selection is resolved against these, not against what the frame reports.
+    this.protectDocuments = new Map();
+    for (const file of this.protectStagedFiles) {
+        if (!isProtectableDocument(file.path)) continue;
+        this.protectDocuments.set(file.path, prepareAuthoringDocument(new TextDecoder().decode(file.bytes), file.path));
+    }
+
+    const paths = [...this.protectDocuments.keys()].sort((left, right) => {
+        const leftIsIndex = /(^|\/)index\.html$/i.test(left) ? 0 : 1;
+        const rightIsIndex = /(^|\/)index\.html$/i.test(right) ? 0 : 1;
+        return leftIsIndex - rightIsIndex || left.localeCompare(right);
+    });
+    this.protectActivePath = paths[0] || null;
+
+    setProtectWorkspaceVisible(true);
+    this.bindProtectWorkspaceOnce();
+    renderProtectFileList(paths, this.protectActivePath || '');
+    this.renderProtectState();
+    renderProtectStatus(
+        paths.length === 0
+            ? 'No HTML pages were staged, so there is nothing to protect. Continue to Deploy.'
+            : 'Step 2 of 8 · Select any text you want to encrypt, or continue with nothing protected.'
+    );
+    renderProtectSelectionHint('Select text in the preview below to protect it.', false);
+
+    if (this.protectActivePath) this.renderProtectPreview(this.protectActivePath);
+    this.refreshDeployUiState();
+}
+
+/** Wire the workspace controls exactly once. */
+export function bindProtectWorkspaceOnce() {
+    if (this.protectWorkspaceBound) return;
+    this.protectWorkspaceBound = true;
+
+    bindProtectWorkspace({
+        onBack: () => this.exitProtectStep({ discard: true }),
+        onNext: () => {
+            this.finishProtectStep().catch((error) => {
+                setProtectBusy(false);
+                renderProtectStatus(`Could not finish protection: ${error.message}`);
+                this.toast?.error?.(error.message, 'Protection failed');
+            });
+        },
+        onAddRecipient: () => this.addProtectRecipient(),
+        onFileChange: (path) => {
+            if (!this.protectDocuments?.has(path)) return;
+            this.protectActivePath = path;
+            this.protectPendingSelection = null;
+            renderProtectSelectionHint('Select text in the preview below to protect it.', false);
+            this.renderProtectPreview(path);
+        },
+        onProtectSelection: () => this.commitPendingProtectSelection()
+    });
+}
+
+/** Render one staged page into the authoring sandbox. */
+export function renderProtectPreview(path) {
+    const iframe = /** @type {HTMLIFrameElement | null} */ (document.getElementById('protect-preview-frame'));
+    const document_ = this.protectDocuments?.get(path);
+    if (!iframe || !document_) return;
+
+    this.teardownProtectPreview();
+    this.protectSandbox = new SiteSandbox({
+        iframe,
+        hash: this.protectPreviewHash || (this.protectPreviewHash = newUuid().replace(/-/g, '')),
+        entryFile: path,
+        entryHtml: document_.previewHtml,
+        // The preview reads from the staged bytes in memory, nothing else. HTML
+        // pages are served in their authoring form, so a link followed inside
+        // the preview lands on a page whose text is still selectable.
+        resolveFile: (requested) => {
+            const authored = this.protectDocuments?.get(requested);
+            if (authored) {
+                return { content: new TextEncoder().encode(authored.previewHtml), type: 'text/html' };
+            }
+            const file = (this.protectStagedFiles || []).find((entry) => entry.path === requested);
+            return file ? { content: file.bytes, type: file.contentType } : null;
+        },
+        mode: 'authoring',
+        log: (message) => this.log(message),
+        onPreviewSelect: (selection) => this.handleProtectSelection(selection)
+    });
+    this.protectSandbox.start();
+}
+
+/**
+ * A selection reported by the preview frame.
+ *
+ * It is resolved against the retained authoring document before it is offered
+ * to the publisher, so a selection that cannot be mapped back to the staged
+ * source is refused here rather than encrypted on a guess.
+ */
+export function handleProtectSelection(selection) {
+    const document_ = this.protectDocuments?.get(selection.path);
+    if (!document_) {
+        return { status: 'rejected', reason: 'That page is not part of the staged site.' };
+    }
+
+    try {
+        const locator = normalizeSelectionLocator(selection);
+        const resolved = resolveSelectionLocator(document_, locator);
+
+        if (this.selectionOverlapsExisting(locator)) {
+            this.protectPendingSelection = null;
+            renderProtectSelectionHint('That selection overlaps a fragment you already protected.', false);
+            return { status: 'rejected', reason: 'overlaps an existing protected fragment' };
+        }
+
+        this.protectPendingSelection = { locator, containerPath: resolved.containerPath };
+        renderProtectSelectionHint(`Selected: “${previewText(locator.exact)}” — protect it?`, true);
+        return { status: 'ok' };
+    } catch (error) {
+        this.protectPendingSelection = null;
+        renderProtectSelectionHint(
+            `That selection could not be mapped back to your source file: ${error.message}`,
+            false
+        );
+        return { status: 'rejected', reason: error.message };
+    }
+}
+
+/** @param {{ path: string, containerId: string, startOffset: number, endOffset: number }} locator */
+export function selectionOverlapsExisting(locator) {
+    return (this.protectSelections || []).some(
+        (existing) =>
+            existing.locator.path === locator.path &&
+            existing.locator.containerId === locator.containerId &&
+            locator.startOffset < existing.locator.endOffset &&
+            existing.locator.startOffset < locator.endOffset
+    );
+}
+
+/** Turn the pending selection into a protected fragment. */
+export function commitPendingProtectSelection() {
+    const pending = this.protectPendingSelection;
+    if (!pending) return;
+
+    this.protectSelections.push({
+        id: newUuid(),
+        locator: pending.locator,
+        containerPath: pending.containerPath,
+        recipientPublicKeys: this.protectRecipients.map((recipient) => recipient.publicKey)
+    });
+    this.protectPendingSelection = null;
+
+    renderProtectSelectionHint('Protected. Select more text, or continue to Deploy.', false);
+    this.renderProtectState();
+    this.refreshDeployUiState();
+}
+
+/** @param {string} id */
+export function removeProtectSelection(id) {
+    this.protectSelections = (this.protectSelections || []).filter((selection) => selection.id !== id);
+    this.renderProtectState();
+    this.refreshDeployUiState();
+}
+
+/**
+ * Add a recipient by public key.
+ *
+ * Only a full uncompressed secp256k1 key is accepted: a `0x…` address is a
+ * hash of a key and nothing can be encrypted to it, so it is rejected with an
+ * explanation rather than silently ignored.
+ */
+export function addProtectRecipient() {
+    const raw = readRecipientInput();
+    if (!raw) return;
+
+    let publicKey;
+    try {
+        publicKey = normalizeRecipientPublicKey(raw, { isValidUncompressedPublicKey });
+    } catch (error) {
+        renderRecipientError(error.message);
+        return;
+    }
+
+    if ((this.protectRecipients || []).some((recipient) => recipient.publicKey === publicKey)) {
+        renderRecipientError('That recipient is already on the list.');
+        return;
+    }
+
+    const address = `${evmAddressFromPublicKey(publicKey)}`.toLowerCase();
+    this.protectRecipients.push({ publicKey, address });
+    // Recipients added later apply to fragments already chosen, so the list the
+    // publisher sees is the list every fragment actually gets.
+    for (const selection of this.protectSelections || []) {
+        if (!selection.recipientPublicKeys.includes(publicKey)) selection.recipientPublicKeys.push(publicKey);
+    }
+
+    clearRecipientInput();
+    renderRecipientError('');
+    this.renderProtectState();
+}
+
+/** @param {string} publicKey */
+export function removeProtectRecipient(publicKey) {
+    this.protectRecipients = (this.protectRecipients || []).filter((recipient) => recipient.publicKey !== publicKey);
+    for (const selection of this.protectSelections || []) {
+        selection.recipientPublicKeys = selection.recipientPublicKeys.filter((key) => key !== publicKey);
+    }
+    this.renderProtectState();
+}
+
+export function renderProtectState() {
+    const identity = this.authController?.getActiveIdentity?.() || {};
+    renderProtectRecipients(
+        { publicKey: identity.publicKey || '', address: `${identity.address || ''}`.toLowerCase() },
+        this.protectRecipients || [],
+        (publicKey) => this.removeProtectRecipient(publicKey)
+    );
+    renderProtectedFragments(
+        (this.protectSelections || []).map((selection) => ({
+            assetId: selection.id,
+            path: selection.locator.path,
+            preview: previewText(selection.locator.exact),
+            // The owner's own grant is always added on top of this list.
+            recipientCount: selection.recipientPublicKeys.length + 1
+        })),
+        (id) => this.removeProtectSelection(id)
+    );
+}
+
+/** Leave the workspace and restore the normal deploy UI. */
+export function exitProtectStep({ discard = false } = {}) {
+    if (discard) {
+        this.protectSelections = [];
+        this.protectPendingSelection = null;
+        this.protectedStagedFiles = null;
+        this.protectedSiteContext = null;
+    }
+    this.inProtectStep = false;
+    this.teardownProtectPreview();
+    setProtectWorkspaceVisible(false);
+    this.refreshDeployUiState();
+}
+
+/**
+ * Finish the step: resolve every selection, encrypt the fragments, replace them
+ * with placeholders and hand the resulting files to the ordinary deploy flow.
+ *
+ * A publisher who protected nothing takes the same path as before this feature
+ * existed: the staged files are untouched and no protected-asset metadata is
+ * produced at all.
+ */
+export async function finishProtectStep() {
+    setProtectBusy(true);
+    try {
+        const selections = this.protectSelections || [];
+        if (selections.length === 0) {
+            this.protectedStagedFiles = null;
+            this.protectedSiteContext = null;
+            this.exitProtectStep();
+            renderDeployStage('Artifact staged', 'Nothing protected — continue to sign the payload.');
+            return;
+        }
+
+        const identity = this.authController.getActiveIdentity();
+        if (!identity.publicKey) {
+            throw new Error('Unlock your wallet before protecting content: encryption needs your public key.');
+        }
+
+        renderProtectStatus('Encrypting protected fragments…');
+        const built = await buildProtectedSite({
+            files: this.protectStagedFiles || (await this.readStagedDeployFiles()),
+            selections: selections.map((selection) => ({
+                locator: selection.locator,
+                recipientPublicKeys: selection.recipientPublicKeys
+            })),
+            owner: { eciesPublicKey: identity.publicKey },
+            ecies: { eciesEncrypt, evmAddressFromPublicKey, isValidUncompressedPublicKey }
+        });
+
+        this.protectedStagedFiles = built.files;
+        this.protectedSiteContext = { siteId: built.siteId, protectedAssets: built.protectedAssets };
+
+        // Anything signed before this point described the plaintext site.
+        this.invalidateSignedState('Protected content added');
+        this.exitProtectStep();
+        renderDeployStage(
+            'Artifact staged',
+            `${built.protectedAssets.length} fragment(s) encrypted — sign the payload to continue.`
+        );
+        this.toast?.success?.(
+            `${built.protectedAssets.length} fragment(s) encrypted. Sign the payload to deploy.`,
+            'Protection complete'
+        );
+    } finally {
+        setProtectBusy(false);
+    }
+}
+
+/** @param {string} text */
+function previewText(text) {
+    const collapsed = `${text}`.replace(/\s+/g, ' ').trim();
+    return collapsed.length > 60 ? `${collapsed.slice(0, 57)}…` : collapsed;
 }
 
 /** What the mirror row says, per state. An absent mirror is never rendered as an empty value. */
@@ -2248,6 +2662,10 @@ export function clearInMemoryStreamingState({ resetDeploySession = false } = {})
     this.lastDeployResult = null;
     this.signedTorrentMetadata.clear();
     this.currentSiteSignatureStatus = { label: 'Publisher: unverified', verified: false };
+    // The verified protected-asset context belongs to one site; it never
+    // survives that site being unloaded.
+    this.currentProtectedSite = null;
+    this.resetProtectionState?.();
     this.revokeAllObjectURLs();
     this.channelsService?.leaveChannel?.();
 

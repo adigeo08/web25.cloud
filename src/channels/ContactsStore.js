@@ -33,6 +33,7 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { evmAddressFromPublicKey } from './ecies.js';
+import { npubEncode } from '../nostr/nip19.js';
 
 const DB_NAME = 'web25-contacts';
 /**
@@ -183,13 +184,14 @@ function safeName(value) {
  * strings are never trusted. If the relationship no longer validates, the
  * record is rejected however well it matches an existing contact.
  *
- * @param {{ nostrPublicKey?: string, eciesPublicKey?: string, evmAddress?: string|null }} identity
+ * @param {{ nostrPublicKey?: string, npub?: string, eciesPublicKey?: string, evmAddress?: string|null }} identity
  * @returns {{ ok: boolean, reason: string|null }}
  */
 export function verifyIdentityTuple(identity) {
     const nostrPublicKey = `${identity?.nostrPublicKey || ''}`.trim().toLowerCase();
     const eciesPublicKey = `${identity?.eciesPublicKey || ''}`.trim().toLowerCase();
     const evmAddress = `${identity?.evmAddress || ''}`.trim().toLowerCase();
+    const npub = `${identity?.npub || ''}`.trim();
 
     if (!HEX32_RE.test(nostrPublicKey)) return { ok: false, reason: 'Nostr public key is malformed.' };
     if (!ECIES_PUBKEY_RE.test(eciesPublicKey)) return { ok: false, reason: 'ECIES public key is malformed.' };
@@ -210,6 +212,15 @@ export function verifyIdentityTuple(identity) {
     }
     if (derived !== evmAddress) {
         return { ok: false, reason: 'EVM address is not derived from the ECIES key.' };
+    }
+    if (npub) {
+        try {
+            if (npubEncode(nostrPublicKey) !== npub.toLowerCase()) {
+                return { ok: false, reason: 'npub is not encoded from the Nostr public key.' };
+            }
+        } catch (_) {
+            return { ok: false, reason: 'npub is malformed.' };
+        }
     }
 
     return { ok: true, reason: null };

@@ -37,6 +37,32 @@ class PeerWeb {
         /** @type {{ torrent: any, guard: { stop: () => void } } | null} the torrent the current load owns */
         this._activeLoadTorrent = null;
         this.signedTorrentMetadata = new Map();
+        /**
+         * Ownership, protected assets and decrypt grants for the site being
+         * viewed — populated only from a `.torrentchain` manifest that verified,
+         * and dropped as soon as the site is unloaded.
+         * @type {{ siteId: string | null, owner: any, protectedAssets: any[], assets: Map<string, any> } | null}
+         */
+        this.currentProtectedSite = null;
+        // ── Step 2 · Preview & protect (publisher side) ──────────────────
+        /** @type {{ id: string, locator: any, containerPath: string, recipientPublicKeys: string[] }[]} */
+        this.protectSelections = [];
+        /** @type {{ publicKey: string, address: string }[]} */
+        this.protectRecipients = [];
+        /** Staged files as chosen, and their authoring documents. */
+        this.protectStagedFiles = null;
+        this.protectDocuments = null;
+        this.protectActivePath = null;
+        this.protectPendingSelection = null;
+        this.protectWorkspaceBound = false;
+        this.protectPreviewHash = null;
+        /** @type {import('./renderer/SiteSandbox.js').default | null} */
+        this.protectSandbox = null;
+        this.inProtectStep = false;
+        /** The encrypted build that signing and seeding actually use. */
+        this.protectedStagedFiles = null;
+        /** @type {{ siteId: string, protectedAssets: any[] } | null} */
+        this.protectedSiteContext = null;
         this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
         const overrideTrackers =
             Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0

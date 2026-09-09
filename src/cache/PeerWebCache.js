@@ -89,6 +89,10 @@ class PeerWebCache {
                 hash,
                 data: siteData,
                 signatureState: metadata.signatureState || null,
+                // Ownership and decrypt grants from the manifest that verified.
+                // Ciphertext only: a decrypted fragment is never cached, and
+                // every binding here is re-checked before it is used again.
+                protectedSite: metadata.protectedSite || null,
                 timestamp: Date.now()
             };
 

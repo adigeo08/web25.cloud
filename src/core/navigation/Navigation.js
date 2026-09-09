@@ -2,6 +2,12 @@
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
 import SiteSandbox from '../renderer/SiteSandbox.js';
+import { createProtectedAssetDecryptHandler } from '../renderer/ProtectedAssetRuntime.js';
+import {
+    getLocalWalletPublicKey,
+    isLocalWalletUnlocked,
+    protectedAssetDecryptWithLocalWallet
+} from '../../auth/LocalWalletService.js';
 import { parseWeb25Address } from '../../gofile/Web25Url.js';
 
 export function updateSiteSignatureBadge(status) {
@@ -175,12 +181,38 @@ export function showSiteViewer(site, hash, fromCache) {
             entryHtml: site.entryHtml,
             resolveFile: (path) => this.findFileInSiteData(path),
             onTitle: (title) => this.log(`Sandboxed site title: ${title}`),
-            log: (message) => this.log(message)
+            log: (message) => this.log(message),
+            // Only a site whose manifest verified *and* whose protected assets
+            // matched the bundle gets a decrypt handler at all. The site's own
+            // JavaScript still never touches the wallet: it can name an asset
+            // id of this site, and nothing else.
+            onProtectedDecrypt: this.buildProtectedDecryptHandler()
         });
         this.siteSandbox.start();
     }
 
     this.log(`Site rendered in sandboxed frame (opaque origin) for hash ${hash}`);
+}
+
+/**
+ * The decrypt handler for the site currently being viewed, or `null` when the
+ * site has no protected assets — in which case the bridge refuses
+ * `protected.decrypt` outright.
+ */
+export function buildProtectedDecryptHandler() {
+    const context = this.currentProtectedSite;
+    if (!context || !context.assets || context.assets.size === 0) return null;
+
+    return createProtectedAssetDecryptHandler({
+        siteId: context.siteId,
+        owner: context.owner || {},
+        assets: context.assets,
+        isWalletUnlocked: () => isLocalWalletUnlocked(),
+        getViewerPublicKey: () => getLocalWalletPublicKey(),
+        decryptProtectedAsset: (request) =>
+            protectedAssetDecryptWithLocalWallet(request).then((result) => ({ plaintext: result.plaintext })),
+        log: (message) => this.log(message)
+    });
 }
 
 /** Tear down any active site sandbox and its bridge. */
@@ -215,6 +247,9 @@ export function showMainContent() {
     // Clear current site data
     this.currentSiteData = null;
     this.currentHash = null;
+    // Drop the verified protected-asset context with the site it belongs to,
+    // so a later site can never be decrypted against an earlier manifest.
+    this.currentProtectedSite = null;
 
     // Notify service worker
     this.sendToServiceWorker('SITE_UNLOADED', {});
