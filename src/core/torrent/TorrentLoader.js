@@ -21,6 +21,18 @@ import {
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
+
+/**
+ * Retries exist because there is nothing else to try. A mirrored address has
+ * something else — a Worker that answers in one request — and each WebTorrent
+ * attempt costs 20-30s waiting for a tracker to say there are no peers, so the
+ * full budget spends minutes to reach a fallback that is already there.
+ *
+ * With a locator: one attempt, then the mirror. Without one: the budget stands,
+ * because giving up early would just fail the load faster.
+ */
+const MIRRORED_LOAD_RETRY_MAX = 0;
+const retryBudget = (gofileLocator) => (gofileLocator ? MIRRORED_LOAD_RETRY_MAX : LOAD_RETRY_MAX);
 /** Base delay (ms) for exponential-backoff retry of site loads. */
 const LOAD_RETRY_BASE_MS = 2000;
 
@@ -46,6 +58,7 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     }
     const sanitizedHash = this.sanitizeHash(address.torrentHash);
     const gofileLocator = address.gofileLocator || retryLocator || null;
+    const retryMax = retryBudget(gofileLocator);
     this._loadGeneration = (this._loadGeneration || 0) + 1;
     const loadGeneration = this._loadGeneration;
     this._gofileFallbackController?.abort();
@@ -224,14 +237,10 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
                     magnetURI,
                     expectedSize: torrent.length || null
                 });
-                if (
-                    !this.processingInProgress &&
-                    this.currentHash === sanitizedHash &&
-                    _retryAttempt < LOAD_RETRY_MAX
-                ) {
+                if (!this.processingInProgress && this.currentHash === sanitizedHash && _retryAttempt < retryMax) {
                     const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
                     this.log(
-                        `Torrent error, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+                        `Torrent error, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${retryMax})`
                     );
                     if (this.processingTimeout) {
                         clearTimeout(this.processingTimeout);
@@ -249,12 +258,14 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
             torrent.on('noPeers', () => {
                 if (this.processingInProgress) return;
                 if (this.currentHash !== sanitizedHash) return;
-                if (_retryAttempt >= LOAD_RETRY_MAX) {
-                    this.log(`No peers found after ${LOAD_RETRY_MAX} retries, giving up`);
+                if (_retryAttempt >= retryMax) {
+                    this.log(
+                        `No torrent peers after ${_retryAttempt + 1} attempt(s); ${gofileLocator ? 'trying the mirror' : 'giving up'}`
+                    );
                     void this.handleTerminalP2PFailure(
                         sanitizedHash,
                         gofileLocator,
-                        new Error(`No torrent peers found after ${LOAD_RETRY_MAX} retries.`),
+                        new Error(`No torrent peers found after ${_retryAttempt + 1} attempt(s).`),
                         torrent,
                         loadGeneration
                     );
@@ -262,7 +273,7 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
                 }
                 const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
                 this.log(
-                    `No peers found, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+                    `No peers found, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${retryMax})`
                 );
                 if (this.processingTimeout) {
                     clearTimeout(this.processingTimeout);
@@ -369,10 +380,10 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
         // WebRTC over the trackers is the transport; GoFile is what is left
         // once that has genuinely been tried.
         this.log(`Error adding torrent: ${error.message}`);
-        if (_retryAttempt < LOAD_RETRY_MAX) {
+        if (_retryAttempt < retryMax) {
             const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
             this.log(
-                `Torrent transport unavailable, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+                `Torrent transport unavailable, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${retryMax})`
             );
             setTimeout(() => {
                 if (!isActiveLoad()) return;
