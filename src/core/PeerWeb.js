@@ -6,6 +6,7 @@ import * as lifecycle from './bootstrap/Lifecycle.js';
 import * as navigation from './navigation/Navigation.js';
 import * as serviceWorker from './serviceworker/ServiceWorkerBridge.js';
 import * as torrentLoader from './torrent/TorrentLoader.js';
+import * as preferredSiteLoader from './torrent/PreferredSiteLoader.js';
 import * as torrentUploader from './torrent/TorrentUploader.js';
 import * as torrentCreator from './torrent/TorrentCreator.js';
 import * as siteRenderer from './renderer/SiteRenderer.js';
@@ -53,6 +54,9 @@ Object.assign(
     navigation,
     serviceWorker,
     torrentLoader,
+    // Override TorrentLoader.loadSite only; the rest of the torrent helpers stay
+    // on the prototype and are reused by the preferred cache → GoFile → P2P flow.
+    preferredSiteLoader,
     torrentUploader,
     torrentCreator,
     siteRenderer,
