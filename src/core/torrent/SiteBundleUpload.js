@@ -54,10 +54,14 @@ function decodePlainBundle(bytes) {
             if (file?.encoding !== 'base64') {
                 throw new Error(`Unsupported bundle file encoding: ${file?.encoding || '(missing)'}`);
             }
+            const bytesBase64 = typeof file.bytesBase64 === 'string' ? file.bytesBase64 : '';
+            if (!bytesBase64) {
+                throw new Error(`Missing base64 payload for bundle file: ${file?.path || '(unknown)'}`);
+            }
             return {
                 path: normalizeBundlePath(file.path),
                 contentType: `${file.contentType || 'application/octet-stream'}`,
-                bytes: base64ToBytes(file.bytesBase64)
+                bytes: base64ToBytes(bytesBase64)
             };
         })
     };
