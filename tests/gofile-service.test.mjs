@@ -8,6 +8,8 @@ import {
     GoFileService,
     GOFILE_ACCOUNTS_ENDPOINT,
     GOFILE_STORAGE_URL,
+    GOFILE_READ_PROXY,
+    proxiedRawUrl,
     GOFILE_UPLOAD_ENDPOINT,
     GOFILE_UPLOAD_TIMEOUT_MS,
     GOFILE_DOWNLOAD_TIMEOUT_MS,
@@ -282,9 +284,31 @@ test('the global fetch is never invoked as a method of the service', async () =>
     }
 });
 
+test('nothing carrying a credential is ever routed through the proxy', async () => {
+    // The proxy is a third party. A bearer token sent through it would hand
+    // over the whole GoFile account, and neither call needs it to reach GoFile.
+    const seen = [];
+    const service = new GoFileService({
+        fetchImpl: async (url, init) => {
+            seen.push({ url, authorization: init?.headers?.Authorization ?? null });
+            return reply({ id: UUID_ONE, servers: ['store6'], token: 'eyJa.b.c' });
+        }
+    });
+
+    await service.upload(new Blob(['mirror']), { filename: NAME_ONE, token: 'account-secret' });
+    await service.createGuestAccount();
+
+    for (const request of seen) {
+        assert.doesNotMatch(request.url, /allorigins|\/raw\?url=|\/get\?url=/, `${request.url} went through a proxy`);
+    }
+    assert.equal(seen[0].url, GOFILE_UPLOAD_ENDPOINT);
+    assert.equal(seen[0].authorization, 'Bearer account-secret');
+    assert.equal(seen[1].url, GOFILE_ACCOUNTS_ENDPOINT);
+});
+
 // ── Reading a mirror back ───────────────────────────────────────────────────
 
-test('a mirror is fetched straight from its storage server, with no credential', async () => {
+test('a mirror is fetched through the CORS proxy, with no credential', async () => {
     const seen = [];
     const service = new GoFileService({
         fetchImpl: async (url, init) => {
@@ -296,10 +320,69 @@ test('a mirror is fetched straight from its storage server, with no credential',
     const bytes = await service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE });
 
     assert.deepEqual(bytes, new Uint8Array([7, 8, 9]));
-    assert.equal(seen.length, 1, 'one request: no lookup step to authenticate');
-    assert.equal(seen[0].url, `https://store6.gofile.io/download/web/${UUID_ONE}/${NAME_ONE}`);
-    assert.equal(seen[0].url, GOFILE_STORAGE_URL('store6', UUID_ONE, NAME_ONE));
-    assert.equal(seen[0].authorization, null, 'the storage host is never handed an account credential');
+    assert.equal(seen.length, 1, 'one request when the proxy answers directly');
+    assert.equal(seen[0].url, proxiedRawUrl(GOFILE_READ_PROXY, GOFILE_STORAGE_URL('store6', UUID_ONE, NAME_ONE)));
+    assert.match(seen[0].url, /^https:\/\/api\.allorigins\.win\/raw\?url=/);
+    assert.match(decodeURIComponent(seen[0].url), /store6\.gofile\.io\/download\/web\//);
+    assert.equal(seen[0].authorization, null, 'the proxy is never handed an account credential');
+});
+
+test('the proxy endpoint is configurable, so it need not be a public one', async () => {
+    const seen = [];
+    const service = new GoFileService({
+        readProxy: 'https://proxy.example/',
+        fetchImpl: async (url) => {
+            seen.push(url);
+            return new Response(new Uint8Array([1]));
+        }
+    });
+    await service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE });
+    assert.match(seen[0], /^https:\/\/proxy\.example\/raw\?url=/, 'the trailing slash is not doubled');
+});
+
+test('the envelope route is used only when the raw route is unavailable', async () => {
+    const seen = [];
+    const payload = '{"schema":"web25-gofile-mirror-v1"}';
+    const service = new GoFileService({
+        fetchImpl: async (url) => {
+            seen.push(url);
+            if (url.includes('/raw?')) return new Response('no such route', { status: 404 });
+            return new Response(JSON.stringify({ contents: payload, status: { http_code: 200 } }));
+        }
+    });
+
+    const bytes = await service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE });
+
+    assert.equal(new TextDecoder().decode(bytes), payload);
+    assert.equal(seen.length, 2);
+    assert.match(seen[0], /\/raw\?url=/);
+    assert.match(seen[1], /\/get\?url=/);
+});
+
+test('an envelope with no contents is refused rather than rendered as empty', async () => {
+    for (const body of ['not json at all', JSON.stringify({ status: { http_code: 404 } })]) {
+        const service = new GoFileService({
+            fetchImpl: async (url) =>
+                url.includes('/raw?') ? new Response('nope', { status: 404 }) : new Response(body)
+        });
+        await assert.rejects(
+            () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+            (error) => error.code === 'invalid_response'
+        );
+    }
+});
+
+test("GoFile's download page coming back instead of the mirror is named as such", async () => {
+    // The storage route redirects an unauthenticated request to the download
+    // page, and a proxy follows redirects — so this is the likeliest wrong
+    // answer, and it must not surface as "invalid JSON" three layers later.
+    for (const page of ['<!DOCTYPE html><html><head>', '  <html lang="en"><body>Gofile']) {
+        const service = new GoFileService({ fetchImpl: async () => new Response(page) });
+        await assert.rejects(
+            () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
+            (error) => error.code === 'mirror_not_found' && /download page/i.test(error.message)
+        );
+    }
 });
 
 test('a later deployment cannot shadow or break an earlier one', async () => {
@@ -324,11 +407,11 @@ test('a later deployment cannot shadow or break an earlier one', async () => {
     assert.notEqual(served[0], served[1]);
 });
 
-test('a mirror missing from its server is reported as missing, not as a transport fault', async () => {
-    const service = new GoFileService({ fetchImpl: async () => new Response('not found', { status: 404 }) });
+test('a proxy failure that is not a missing route is reported as a transport fault', async () => {
+    const service = new GoFileService({ fetchImpl: async () => new Response('upstream is down', { status: 502 }) });
     await assert.rejects(
         () => service.downloadPublicMirror(`store6~${UUID_ONE}`, { expectedFilename: NAME_ONE }),
-        (error) => error.code === 'mirror_not_found'
+        (error) => error.code === 'http' && /HTTP 502/.test(error.message)
     );
 });
 
