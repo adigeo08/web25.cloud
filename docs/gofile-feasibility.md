@@ -32,6 +32,84 @@ cancellation stays distinguishable from a deadline (`aborted` vs `timeout`).
 Mirror bytes are read as a bounded stream and refused past 64 MiB, whether the
 size is declared in `Content-Length` or only discovered while reading.
 
+A credential is provisioned at sign-in, not at upload time. `POST
+https://api.gofile.io/accounts` is documented as unauthenticated with an empty
+body: GoFile mints a guest account and returns its token, and that token is the
+same kind of credential a dashboard API key is. WEB25 mints one the moment the
+wallet unlocks — the only moment it can be encrypted to the identity — so a
+mirror never has to mint one mid-deploy, and someone who has signed in can
+authenticate a mirror read without ever having deployed. The call is
+best-effort: a GoFile outage at sign-in is logged and nothing else.
+
+Neither path ever replaces a credential the identity already holds. Sign-in
+mints only when the store is empty, and a deployment persists the token an
+upload issues only when it had none to authenticate with — otherwise the
+account underneath a published locator could be swapped out from under it. The
+one case that does replace is a credential GoFile refused, which has already
+been cleared by then. The read-back uses whichever token actually owns the
+upload.
+
+Uploading is an **authenticated** call once an account exists, and GoFile draws
+no distinction between a token created from the dashboard and the `guestToken`
+an upload hands back: both go in as `Authorization: Bearer`. The upload sends
+the stored credential when this identity has one, and otherwise lets GoFile mint
+a guest account and keeps what comes back. Reading is a separate matter and
+carries no credential at all — see below.
+
+The bearer reaches only the upload endpoint and `api.gofile.io`, whose hosts are
+constants in the client. It never reaches a storage server: reading is a public
+route and needs no credential, so there is nothing to leak there.
+
+## Reading: the storage route, not the content API
+
+`GET /contents/{contentId}` is badged **Premium** in GoFile's reference — _"Direct
+API access to listings is Premium-only: other tiers receive
+`error-notPremium`"_ — and `error-notPremium` answers 401, the same code as
+`error-token`, which is why a tier refusal first looked like a credential
+problem. Creating a direct link is Premium too. There is no documented,
+non-Premium API route for a program to read public content back.
+
+WEB25 therefore reads the way GoFile's own web client does, straight from the
+storage server holding the file:
+
+```
+https://<server>.gofile.io/download/web/<content uuid>/<filename>
+```
+
+Nothing is looked up to build it. The upload response already names the server
+(`servers[0]`) and the content id (`id`), and the filename is derived from the
+torrent hash, so the whole URL is determined before the first request. That is
+also what selects the deployment: a wrong name is a 404 rather than the wrong
+bytes. A mirror locator is consequently `<server>~<content uuid>` — `~` is
+unreserved, so it survives a WEB25 link unencoded. Locators from earlier builds
+were bare UUIDs, which name no server; they are refused with `invalid_locator`
+rather than guessed at.
+
+Two consequences worth stating plainly. The route is **not in the API
+reference**: it is the web client's, so it can change without notice, and the
+client validates its shape strictly for that reason. And it is **public**, so no
+credential is sent to the storage host at all — a visitor resolves a mirror
+exactly as the publisher verified it, with no account, no wallet, and nothing to
+unlock. The credential is now only ever used for the upload.
+
+Per the conventions in the reference: content ids are UUIDs and that is what a
+locator carries; share codes address the same content but grant no extra access,
+so they are not used here; and all of this is independent of folder listings,
+which is the paginated, Premium-gated surface we no longer touch.
+
+## The credential lives in a browser
+
+The reference is explicit: _"The token authenticates as the account itself —
+anyone holding it has full access. Keep it server-side: never embed it in public
+client-side code."_ WEB25 has no server, so its credential is necessarily
+client-side. It is never embedded in source or shipped in a build: it is minted
+per identity at sign-in and encrypted to that identity's Nostr key before it
+touches IndexedDB, so a locked wallet cannot read it and a second identity in
+the same browser cannot decrypt it. That is meaningfully stronger than what the
+warning is aimed at, and still weaker than server-side custody. It is a
+deliberate trade for a feature that is optional and best-effort by design, and
+it is another reason not to put a paid Premium token here.
+
 A mirror is only published as a locator once it has been **read back
 publicly**: after uploading, the client resolves its own locator by the same
 route a receiver would and byte-compares the result. Uploading proves nothing
@@ -76,6 +154,13 @@ cross-guest reads require Premium or unsupported authorization. The result is
 Because of that, the mirror is opt-in per deployment: the deploy wizard ships
 the checkbox off, and a fresh deployment is WebTorrent-only unless the publisher
 asks for a mirror. Nothing remembers the choice between deployments.
+
+WebTorrent is tried first, always. Every route to the mirror runs behind the
+same retry budget — five attempts with exponential backoff, over WebRTC through
+the trackers in the magnet — including a synchronous failure to add the torrent
+at all, which used to reach for the mirror on the first attempt. GoFile is what
+is left when peer discovery has genuinely been given its chance, never a
+shortcut around it.
 
 Runtime failures remain best-effort in the strict sense. The successful torrent
 deployment is rendered and persisted _before_ any GoFile request begins, so a

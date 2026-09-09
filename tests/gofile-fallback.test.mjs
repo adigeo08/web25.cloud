@@ -8,6 +8,7 @@ globalThis.window = globalThis.window || { location: { hostname: 'localhost' } }
 const loader = () => import('../src/core/torrent/TorrentLoader.js');
 
 const HASH = '0123456789abcdef0123456789abcdef01234567';
+const LOCATOR = 'store6~9632c967-30e5-4123-856a-8b2c425d1c74';
 
 test('legacy terminal torrent failure never contacts GoFile', async () => {
     const { handleTerminalP2PFailure } = await loader();
@@ -47,7 +48,7 @@ test('terminal torrent failure with locator enters GoFile path but never renders
     const previousAlert = globalThis.alert;
     globalThis.alert = () => {};
     try {
-        await handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('retry exhausted'));
+        await handleTerminalP2PFailure.call(context, HASH, LOCATOR, new Error('retry exhausted'));
         assert.equal(contacted, 1);
         assert.equal(rendered, false);
     } finally {
@@ -97,7 +98,7 @@ test('a valid bound mirror converges on the existing verification and processing
         log() {},
         toast: { info() {} }
     };
-    await handleTerminalP2PFailure.call(context, hash, 'Mirror123', new Error('retry exhausted'));
+    await handleTerminalP2PFailure.call(context, hash, LOCATOR, new Error('retry exhausted'));
     assert.equal(chainChecks, 1);
     assert.equal(processed, 1);
 });
@@ -119,11 +120,11 @@ test("the resolver asks for this deployment's own locator and mirror filename", 
     const previousAlert = globalThis.alert;
     globalThis.alert = () => {};
     try {
-        await handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('retry exhausted'));
+        await handleTerminalP2PFailure.call(context, HASH, LOCATOR, new Error('retry exhausted'));
     } finally {
         globalThis.alert = previousAlert;
     }
-    assert.deepEqual(asked, [{ locator: 'Mirror123', expectedFilename: gofileMirrorFilename(HASH) }]);
+    assert.deepEqual(asked, [{ locator: LOCATOR, expectedFilename: gofileMirrorFilename(HASH) }]);
 });
 
 test('a stalled mirror ends the load instead of hanging the overlay', async () => {
@@ -140,7 +141,7 @@ test('a stalled mirror ends the load instead of hanging the overlay', async () =
                         reject(init.signal.reason);
                     });
                 }),
-            metadataTimeoutMs: 25
+            downloadTimeoutMs: 25
         }),
         hideLoadingOverlay() {
             overlayHidden += 1;
@@ -157,7 +158,7 @@ test('a stalled mirror ends the load instead of hanging the overlay', async () =
     };
     const started = Date.now();
     try {
-        await handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('retry exhausted'));
+        await handleTerminalP2PFailure.call(context, HASH, LOCATOR, new Error('retry exhausted'));
     } finally {
         globalThis.alert = previousAlert;
     }
@@ -211,7 +212,7 @@ test('a mirror bound to a different torrent is refused before any render', async
     try {
         // The mirror is internally consistent, but it is not the deployment the
         // WEB25 address asked for.
-        await handleTerminalP2PFailure.call(context, HASH, 'Mirror123', new Error('retry exhausted'));
+        await handleTerminalP2PFailure.call(context, HASH, LOCATOR, new Error('retry exhausted'));
     } finally {
         globalThis.alert = previousAlert;
     }
@@ -219,4 +220,143 @@ test('a mirror bound to a different torrent is refused before any render', async
     assert.equal(rendered, 0, 'verification runs before anything reaches the renderer');
     assert.equal(chainChecks, 0, 'the hash mismatch is caught before TorrentChain verification');
     assert.match(alerted, /info hash mismatch/i);
+});
+
+test('a visitor resolves the mirror without any credential', async () => {
+    const { handleTerminalP2PFailure } = await loader();
+    const asked = [];
+    const context = {
+        gofileCredentialStore: { read: async () => ({ token: 'visitor-token' }) },
+        gofileService: {
+            downloadPublicMirror: async (locator, options) => {
+                asked.push({ locator, token: options?.token ?? null, filename: options?.expectedFilename });
+                throw new Error('mirror offline');
+            }
+        },
+        hideLoadingOverlay() {},
+        log() {},
+        toast: { info() {} }
+    };
+    const previousAlert = globalThis.alert;
+    globalThis.alert = () => {};
+    try {
+        await handleTerminalP2PFailure.call(context, HASH, LOCATOR, new Error('retry exhausted'));
+    } finally {
+        globalThis.alert = previousAlert;
+    }
+    // The storage route is public, so nothing about the visitor's wallet or
+    // stored credential can change whether a mirror resolves.
+    assert.deepEqual(asked, [{ locator: LOCATOR, token: null, filename: gofileMirrorFilename(HASH) }]);
+});
+
+test('a locked wallet or missing credential still attempts the mirror', async () => {
+    const { handleTerminalP2PFailure } = await loader();
+    // The common case: someone opening a WEB25 link who has never deployed.
+    for (const store of [
+        undefined,
+        { read: async () => null },
+        {
+            read: async () => {
+                throw new Error('Unlock your wallet to use the GoFile guest credential.');
+            }
+        }
+    ]) {
+        const asked = [];
+        const context = {
+            gofileCredentialStore: store,
+            gofileService: {
+                downloadPublicMirror: async (locator, options) => {
+                    asked.push(options?.token ?? null);
+                    throw new Error('mirror offline');
+                }
+            },
+            hideLoadingOverlay() {},
+            log() {},
+            toast: { info() {} }
+        };
+        const previousAlert = globalThis.alert;
+        globalThis.alert = () => {};
+        try {
+            await handleTerminalP2PFailure.call(context, HASH, LOCATOR, new Error('retry exhausted'));
+        } finally {
+            globalThis.alert = previousAlert;
+        }
+        assert.deepEqual(asked, [null], 'the mirror is attempted, unauthenticated, without a wallet error');
+    }
+});
+
+/** A loader context whose only failing part is the torrent transport. */
+function loaderContext({ onAdd, contacted, handleTerminalP2PFailure }) {
+    return {
+        handleTerminalP2PFailure,
+        sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
+        isValidTorrentHash: () => true,
+        buildSignatureState: (state) => state,
+        signedTorrentMetadata: new Map(),
+        cache: { getEntry: async () => null },
+        showLoadingOverlay() {},
+        hideLoadingOverlay() {},
+        isBrowserSupportedTracker: () => true,
+        trackers: ['wss://tracker.openwebtorrent.com/'],
+        sendToServiceWorker() {},
+        serviceWorkerReady: true,
+        clientReady: true,
+        client: { add: onAdd },
+        log() {},
+        toast: { info() {} },
+        gofileService: {
+            downloadPublicMirror: async () => {
+                contacted.push('gofile');
+                throw new Error('mirror offline');
+            }
+        },
+        gofileCredentialStore: { read: async () => null }
+    };
+}
+
+test('the mirror is only reached after the WebRTC tracker budget is spent', async () => {
+    const { loadSite, handleTerminalP2PFailure } = await loader();
+    const previousAlert = globalThis.alert;
+    const previousTimeout = globalThis.setTimeout;
+    globalThis.alert = () => {};
+
+    let firstFallbackAttempt = null;
+    const scheduledRetries = [];
+    try {
+        for (let attempt = 0; attempt < 10 && firstFallbackAttempt === null; attempt += 1) {
+            const contacted = [];
+            const magnets = [];
+            let scheduled = 0;
+            globalThis.setTimeout = (fn, delay) => {
+                scheduled += 1;
+                return previousTimeout(() => {}, 0);
+            };
+            const context = loaderContext({
+                contacted,
+                handleTerminalP2PFailure,
+                onAdd: (magnetURI) => {
+                    magnets.push(magnetURI);
+                    throw new Error('WebTorrent could not add the torrent');
+                }
+            });
+
+            await loadSite.call(context, `${HASH}&Mirror123`, attempt);
+
+            assert.equal(magnets.length, 1, 'every attempt really tries the torrent transport first');
+            assert.match(magnets[0], /^magnet:\?xt=urn:btih:/);
+            assert.match(magnets[0], /tr=wss%3A%2F%2Ftracker/, 'the WebRTC tracker is in the magnet');
+            if (contacted.length > 0) firstFallbackAttempt = attempt;
+            else scheduledRetries.push(scheduled);
+        }
+    } finally {
+        globalThis.alert = previousAlert;
+        globalThis.setTimeout = previousTimeout;
+    }
+
+    assert.notEqual(firstFallbackAttempt, null, 'the mirror is eventually reached');
+    assert.ok(firstFallbackAttempt >= 5, `the mirror waited for the retry budget, not attempt ${firstFallbackAttempt}`);
+    assert.ok(
+        scheduledRetries.every((count) => count >= 1),
+        'each earlier attempt schedules another torrent attempt instead of falling back'
+    );
 });

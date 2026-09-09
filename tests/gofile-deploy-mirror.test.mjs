@@ -88,6 +88,7 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
         createGoFileMirror: lifecycle.createGoFileMirror,
         isGoFileMirrorRequested: lifecycle.isGoFileMirrorRequested,
         renderDeploymentSummary: lifecycle.renderDeploymentSummary,
+        ensureGoFileCredential: lifecycle.ensureGoFileCredential,
         refreshDeployUiState: lifecycle.refreshDeployUiState,
         showUploadResult: uploader.showUploadResult,
         sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
@@ -274,6 +275,68 @@ test('a mirror whose read-back fails outright leaves the deployment successful',
     assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
 });
 
+test('the upload authenticates with the freshly issued guest token', async () => {
+    // The credential belongs to the upload. The read-back is the public route
+    // a visitor uses, so it deliberately carries none.
+    const reads = [];
+    const { context } = await deployContext({
+        mirrorEnabled: true,
+        gofileService: {
+            upload: async (_blob, options) => {
+                const result = { mirrorLocator: 'file_fresh', filename: options.filename };
+                Object.defineProperty(result, 'guestToken', { value: 'brand-new-token', enumerable: false });
+                return result;
+            }
+        }
+    });
+    const uploadedBlob = [];
+    const inner = context.gofileService;
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploadedBlob.push(blob);
+            return inner.upload(blob, options);
+        },
+        downloadPublicMirror: async (locator, options) => {
+            reads.push({ locator, token: options?.token ?? null });
+            return new Uint8Array(await uploadedBlob[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(reads, [{ locator: 'file_fresh', token: null }], 'the public read needs no credential');
+    assert.equal(context.lastDeployResult.mirror.locator, 'file_fresh');
+});
+
+test('the upload falls back to the stored credential when no new one is issued', async () => {
+    const uploads = [];
+    const reads = [];
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => ({ token: 'stored-token' }),
+        write: async () => {},
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploads.push(options.token ?? null);
+            uploaded.push(blob);
+            return { mirrorLocator: 'file_stored', filename: options.filename };
+        },
+        downloadPublicMirror: async (locator, options) => {
+            reads.push(options?.token ?? null);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(uploads, ['stored-token']);
+    assert.deepEqual(reads, [null]);
+    assert.equal(context.lastDeployResult.mirrorState, 'available');
+});
+
 test('a second mirrored deployment cannot change the first one', async () => {
     let counter = 0;
     const service = {
@@ -331,4 +394,173 @@ test('an expired guest token is reset once and the retry keeps the same filename
     assert.equal(attempts[1].token, null);
     assert.equal(attempts[0].filename, attempts[1].filename);
     assert.equal(context.lastDeployResult.mirror.locator, 'file_retry');
+});
+
+test('signing in provisions a GoFile credential when the identity has none', async () => {
+    const { context } = await deployContext();
+    const written = [];
+    let stored = null;
+    context.gofileCredentialStore = {
+        read: async () => stored,
+        write: async ({ token }) => {
+            written.push(token);
+            stored = { token };
+        },
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        createGuestAccount: async () => {
+            const account = { id: 'acc', rootFolder: 'root', tier: 'guest' };
+            Object.defineProperty(account, 'token', { value: 'minted-at-login', enumerable: false });
+            return account;
+        }
+    };
+
+    assert.equal(await context.ensureGoFileCredential(), 'created');
+    assert.deepEqual(written, ['minted-at-login']);
+
+    // Signing in again must not mint a second credential.
+    assert.equal(await context.ensureGoFileCredential(), 'present');
+    assert.deepEqual(written, ['minted-at-login']);
+});
+
+test('a GoFile outage at sign-in is absorbed, never surfaced as a login failure', async () => {
+    const { context } = await deployContext();
+    context.gofileCredentialStore = {
+        read: async () => null,
+        write: async () => {
+            throw new Error('should not be reached');
+        },
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        createGuestAccount: async () => {
+            throw new Error('GoFile guest account timed out after 20s.');
+        }
+    };
+
+    assert.equal(await context.ensureGoFileCredential(), 'unavailable');
+});
+
+test('a locked wallet at sign-in leaves the credential alone', async () => {
+    const { context } = await deployContext();
+    let minted = 0;
+    context.gofileCredentialStore = {
+        read: async () => {
+            throw new Error('Unlock your wallet to use the GoFile guest credential.');
+        },
+        write: async () => {},
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        createGuestAccount: async () => {
+            minted += 1;
+            return {};
+        }
+    };
+
+    assert.equal(await context.ensureGoFileCredential(), 'unavailable');
+    assert.equal(minted, 0, 'nothing is minted that could not be stored');
+});
+
+test('a deployment never replaces a credential that already works', async () => {
+    // The identity was given a token at sign-in. An upload that echoes or
+    // reissues one must not silently swap the account underneath it.
+    const writes = [];
+    const reads = [];
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => ({ token: 'token-from-login' }),
+        write: async ({ token }) => writes.push(token),
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            const result = { mirrorLocator: 'file_1', filename: options.filename, usedToken: options.token };
+            Object.defineProperty(result, 'guestToken', { value: 'token-from-upload', enumerable: false });
+            return result;
+        },
+        downloadPublicMirror: async (_locator, options) => {
+            reads.push(options?.token ?? null);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(writes, [], 'the login credential is left exactly as it was');
+    assert.deepEqual(
+        uploaded.map(() => 'uploaded'),
+        ['uploaded']
+    );
+    assert.deepEqual(reads, [null], 'the public read-back carries no credential');
+    assert.equal(context.lastDeployResult.mirrorState, 'available');
+});
+
+test('a deployment does persist a credential when the identity holds none', async () => {
+    const writes = [];
+    const reads = [];
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => null,
+        write: async ({ token }) => writes.push(token),
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            const result = { mirrorLocator: 'file_1', filename: options.filename };
+            Object.defineProperty(result, 'guestToken', { value: 'token-from-upload', enumerable: false });
+            return result;
+        },
+        downloadPublicMirror: async (_locator, options) => {
+            reads.push(options?.token ?? null);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(writes, ['token-from-upload']);
+    assert.deepEqual(reads, [null]);
+});
+
+test('a refused credential is replaced, not kept', async () => {
+    const writes = [];
+    const uploaded = [];
+    let cleared = 0;
+    let stored = { token: 'expired-token' };
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => stored,
+        write: async ({ token }) => writes.push(token),
+        clearInvalidToken: async () => {
+            cleared += 1;
+            stored = null;
+        }
+    };
+    let attempt = 0;
+    context.gofileService = {
+        upload: async (blob, options) => {
+            attempt += 1;
+            uploaded.push(blob);
+            if (attempt === 1) {
+                const error = new Error('GoFile upload failed (HTTP 401).');
+                error.code = 'invalid_token';
+                throw error;
+            }
+            const result = { mirrorLocator: 'file_1', filename: options.filename };
+            Object.defineProperty(result, 'guestToken', { value: 'replacement-token', enumerable: false });
+            return result;
+        },
+        downloadPublicMirror: async () => new Uint8Array(await uploaded.at(-1).arrayBuffer())
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.equal(cleared, 1);
+    assert.deepEqual(writes, ['replacement-token']);
 });

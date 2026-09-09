@@ -1475,16 +1475,19 @@ export async function createGoFileMirror(hash) {
     });
     const payload = () => new Blob([mirrorBytes], { type: 'application/json' });
 
-    const credential = await this.gofileCredentialStore.read();
+    let credential = await this.gofileCredentialStore.read();
     let upload;
     try {
         upload = await this.gofileService.upload(payload(), { filename, token: credential?.token || null });
     } catch (error) {
         if (error?.code !== 'invalid_token' || !credential) throw error;
+        // The stored credential was refused, so this identity no longer holds
+        // one and whatever the retry issues is worth keeping.
         await this.gofileCredentialStore.clearInvalidToken();
+        credential = null;
         upload = await this.gofileService.upload(payload(), { filename });
     }
-    if (upload.guestToken) {
+    if (upload.guestToken && !credential) {
         try {
             await this.gofileCredentialStore.write({ token: upload.guestToken });
         } catch (error) {
@@ -1492,6 +1495,9 @@ export async function createGoFileMirror(hash) {
         }
     }
     if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
+    // Read back over the public storage route, which takes no credential: the
+    // proof a mirror is resolvable has to be made the way a visitor will make
+    // it, and a visitor has no account.
     const readBack = await this.gofileService.downloadPublicMirror(upload.mirrorLocator, {
         expectedFilename: filename
     });
@@ -1690,6 +1696,37 @@ export function setupAuthAwareUi(state) {
         if (identityTab instanceof HTMLElement) {
             identityTab.click();
         }
+        // The wallet is unlocked exactly here, which is the only moment the
+        // credential can be encrypted or read. Provisioning now means a mirror
+        // never has to mint a credential mid-deploy, and a visitor who has
+        // signed in can authenticate a mirror read without ever deploying.
+        void this.ensureGoFileCredential();
+    }
+}
+
+/**
+ * Make sure this identity holds a GoFile credential, minting a guest one if it
+ * does not. Best-effort by design: GoFile is optional fallback transport, so
+ * nothing here may interrupt signing in.
+ * @returns {Promise<'present'|'created'|'unavailable'>}
+ */
+export async function ensureGoFileCredential() {
+    try {
+        const existing = await this.gofileCredentialStore.read();
+        if (existing?.token) return 'present';
+    } catch (error) {
+        this.log(`GoFile credential could not be read: ${error.message}`);
+        return 'unavailable';
+    }
+
+    try {
+        const account = await this.gofileService.createGuestAccount();
+        await this.gofileCredentialStore.write({ token: account.token });
+        this.log(`GoFile guest credential provisioned${account.tier ? ` (tier: ${account.tier})` : ''}.`);
+        return 'created';
+    } catch (error) {
+        this.log(`GoFile guest credential unavailable: ${error.message}`);
+        return 'unavailable';
     }
 }
 
