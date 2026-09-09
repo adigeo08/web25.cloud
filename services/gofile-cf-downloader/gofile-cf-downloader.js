@@ -25,12 +25,17 @@
  * and it refuses to stream from any host outside gofile.io. Widening either of
  * those turns this into free bandwidth for anyone who finds the hostname.
  *
- * CONFIGURATION (Worker environment variables / secrets)
+ * WHOSE TOKEN
  *
- *   GF_TOKEN          Account token. Strongly recommended: GoFile's own advice
- *                     is to create one account and reuse it rather than mint
- *                     one per operation. Without it, this mints a guest account
- *                     per isolate. Set it as a SECRET, never a plain var.
+ * The Worker holds no GoFile credential of its own and creates no accounts.
+ * Every caller already has one, and sends it per request as
+ * `Authorization: Bearer <token>`; that token — and only that token — is used
+ * for the listing, for the website-token derivation, and for the storage
+ * cookie, then discarded when the request ends. Nothing is cached across
+ * requests, so one caller's token can never serve another's.
+ *
+ * CONFIGURATION (Worker environment variables)
+ *
  *   GF_WT_SALT        Salt for the website-token derivation. Defaults below;
  *                     kept configurable because it is not part of GoFile's
  *                     documented API and can change without notice.
@@ -48,12 +53,19 @@
  *   GET /contents/:uuid            → the listing JSON, verbatim from GoFile
  *   GET /file/:uuid/:filename      → the file's bytes, streamed
  *
- * `/file` accepts and forwards `Range`, so resumable and partial reads work.
+ * `/file` accepts and forwards `Range`, so resumable and partial reads work,
+ * and a HEAD reaches GoFile as a HEAD rather than a discarded GET.
  */
 
 const GOFILE_API = 'https://api.gofile.io';
 const DEFAULT_WT_SALT = '12af056dacea0b';
 const DEFAULT_USER_AGENT = 'Mozilla/5.0';
+
+/** Sent as X-BL and folded into the website token; the two must agree. */
+const LANGUAGE = 'en-US';
+
+/** GoFile bounces between storage hosts; a couple of hops is plenty. */
+const MAX_REDIRECTS = 3;
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 
 /** The website token is bucketed into four-hour slots. */
@@ -62,12 +74,16 @@ const WT_SLOT_SECONDS = 14400;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FILENAME = /^[A-Za-z0-9_.-]{1,255}$/;
 
-/**
- * One account token per isolate. GoFile asks that a token be reused rather
- * than an account minted per operation, and an isolate is the longest-lived
- * thing a Worker has. Set GF_TOKEN and this is never used.
- */
-let mintedToken = null;
+/** The caller's GoFile token, sent the way the app already sends it. */
+function bearerToken(request) {
+    const header = request.headers.get('Authorization') || '';
+    const match = /^Bearer\s+(\S+)$/i.exec(header.trim());
+    return match ? match[1] : null;
+}
+
+function missingToken(cors) {
+    return problem(401, 'missing_token', 'Send your GoFile token as Authorization: Bearer <token>.', cors);
+}
 
 export default {
     /**
@@ -84,18 +100,32 @@ export default {
             return problem(405, 'method_not_allowed', 'Only GET and HEAD are served.', cors);
         }
 
-        const { pathname } = new URL(request.url);
-        const segments = pathname.split('/').filter(Boolean).map(decodeURIComponent);
-
         try {
-            if (segments.length === 1 && segments[0] === 'health') {
-                return json({ status: 'ok', tokenSource: env.GF_TOKEN ? 'configured' : 'guest' }, 200, cors);
+            // Decoding lives inside the handler: a malformed percent-escape
+            // throws, and that has to become a 400 rather than escape as an
+            // opaque runtime error.
+            const { pathname } = new URL(request.url);
+            let segments;
+            try {
+                segments = pathname.split('/').filter(Boolean).map(decodeURIComponent);
+            } catch (_) {
+                return problem(400, 'invalid_path', 'That path is not valid percent-encoding.', cors);
             }
+
+            if (segments.length === 1 && segments[0] === 'health') {
+                return json({ status: 'ok' }, 200, cors);
+            }
+
+            // Every GoFile call is made with the caller's own token, taken from
+            // this request and never kept afterwards.
+            const token = bearerToken(request);
             if (segments.length === 2 && segments[0] === 'contents') {
-                return await serveListing(segments[1], env, cors);
+                if (!token) return missingToken(cors);
+                return await serveListing(segments[1], env, token, cors);
             }
             if (segments.length === 3 && segments[0] === 'file') {
-                return await serveFile(segments[1], segments[2], request, env, cors);
+                if (!token) return missingToken(cors);
+                return await serveFile(segments[1], segments[2], request, env, token, cors);
             }
             return problem(404, 'not_found', 'Try /health, /contents/:uuid or /file/:uuid/:filename.', cors);
         } catch (error) {
@@ -117,39 +147,17 @@ export default {
  */
 async function websiteToken(userAgent, accountToken, salt) {
     const slot = Math.floor(Date.now() / 1000 / WT_SLOT_SECONDS);
-    const raw = `${userAgent}::en-US::${accountToken}::${slot}::${salt}`;
+    const raw = `${userAgent}::${LANGUAGE}::${accountToken}::${slot}::${salt}`;
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** The configured account token, or a guest one minted once per isolate. */
-async function accountToken(env) {
-    if (env.GF_TOKEN) return env.GF_TOKEN;
-    if (mintedToken) return mintedToken;
-
-    const userAgent = env.GF_USER_AGENT || DEFAULT_USER_AGENT;
-    const response = await fetch(`${GOFILE_API}/accounts`, {
-        method: 'POST',
-        headers: {
-            'User-Agent': userAgent,
-            'X-Website-Token': await websiteToken(userAgent, '', env.GF_WT_SALT || DEFAULT_WT_SALT)
-        }
-    });
-    const body = await readJson(response, 'Creating a GoFile guest account');
-    const token = body?.data?.token;
-    if (body?.status !== 'ok' || typeof token !== 'string' || token.length === 0) {
-        throw upstream(502, 'account_failed', `GoFile refused to create a guest account (${apiStatus(body)}).`);
-    }
-    mintedToken = token;
-    return token;
-}
-
 /** Headers every authenticated GoFile API call needs. */
-async function apiHeaders(env) {
+async function apiHeaders(env, token) {
     const userAgent = env.GF_USER_AGENT || DEFAULT_USER_AGENT;
-    const token = await accountToken(env);
     return {
         'User-Agent': userAgent,
+        'X-BL': LANGUAGE,
         Authorization: `Bearer ${token}`,
         'X-Website-Token': await websiteToken(userAgent, token, env.GF_WT_SALT || DEFAULT_WT_SALT),
         // The storage servers authenticate by cookie rather than by header.
@@ -157,9 +165,9 @@ async function apiHeaders(env) {
     };
 }
 
-async function listContents(contentId, env) {
+async function listContents(contentId, env, token) {
     const url = `${GOFILE_API}/contents/${encodeURIComponent(contentId)}?cache=true&sortField=createTime&sortDirection=1`;
-    const response = await fetch(url, { headers: await apiHeaders(env) });
+    const response = await fetch(url, { headers: await apiHeaders(env, token) });
     const body = await readJson(response, 'Listing GoFile content');
     if (body?.status !== 'ok') {
         // error-notPremium and error-token both answer 401, so the status
@@ -172,15 +180,15 @@ async function listContents(contentId, env) {
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-async function serveListing(contentId, env, cors) {
+async function serveListing(contentId, env, token, cors) {
     if (!UUID.test(contentId)) {
         return problem(400, 'invalid_content_id', 'A GoFile content UUID is required.', cors);
     }
-    const body = await listContents(contentId, env);
+    const body = await listContents(contentId, env, token);
     return json(body, 200, cors);
 }
 
-async function serveFile(contentId, filename, request, env, cors) {
+async function serveFile(contentId, filename, request, env, token, cors) {
     if (!UUID.test(contentId)) {
         return problem(400, 'invalid_content_id', 'A GoFile content UUID is required.', cors);
     }
@@ -188,7 +196,7 @@ async function serveFile(contentId, filename, request, env, cors) {
         return problem(400, 'invalid_filename', 'That filename is not one this Worker will fetch.', cors);
     }
 
-    const listing = await listContents(contentId, env);
+    const listing = await listContents(contentId, env, token);
     const file = findFile(listing.data, filename);
     if (!file) {
         return problem(404, 'file_not_found', 'That content holds no file by that name.', cors);
@@ -212,15 +220,31 @@ async function serveFile(contentId, filename, request, env, cors) {
         return problem(413, 'too_large', `That file is larger than this Worker will serve (${maxBytes} bytes).`, cors);
     }
 
-    const headers = await apiHeaders(env);
+    const headers = await apiHeaders(env, token);
     const range = request.headers.get('Range');
     if (range) headers.Range = range;
 
-    const upstreamResponse = await fetch(link.href, { headers, redirect: 'follow' });
+    // A HEAD reaches GoFile as a HEAD, rather than a GET whose body is fetched
+    // and thrown away.
+    const method = request.method === 'HEAD' ? 'HEAD' : 'GET';
+    const upstreamResponse = await followWithinGoFile(link.href, { method, headers });
     if (!upstreamResponse.ok && upstreamResponse.status !== 206) {
-        // A redirect to the download page means the storage server did not
-        // accept the session — the usual cause is a stale or missing token.
+        // The storage server not accepting the session is the usual cause —
+        // typically a stale token.
         return problem(502, 'download_refused', `GoFile refused the download (HTTP ${upstreamResponse.status}).`, cors);
+    }
+    // The listing's size is metadata; this is what the server is about to
+    // actually send, and it is checked before any of it is streamed.
+    if (upstreamResponse.status !== 206) {
+        const declared = Number(upstreamResponse.headers.get('Content-Length'));
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            return problem(
+                413,
+                'too_large',
+                `That file is larger than this Worker will serve (${maxBytes} bytes).`,
+                cors
+            );
+        }
     }
     if (looksLikeHtml(upstreamResponse.headers.get('Content-Type'))) {
         return problem(
@@ -250,6 +274,36 @@ async function serveFile(contentId, filename, request, env, cors) {
         status: upstreamResponse.status,
         headers: passthrough
     });
+}
+
+/**
+ * Follow GoFile's redirects by hand, checking each hop before trusting it.
+ *
+ * The request carries the caller's token in both a header and a cookie, so an
+ * automatic follow would hand that token to wherever GoFile pointed. Each
+ * destination is validated first, and a hop that leaves HTTPS or leaves GoFile
+ * is refused rather than followed — so nothing sensitive is ever sent to it.
+ */
+async function followWithinGoFile(url, { method, headers }) {
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+        const response = await fetch(current, { method, headers, redirect: 'manual' });
+        if (response.status < 300 || response.status > 399) return response;
+
+        const location = response.headers.get('Location');
+        if (!location) throw upstream(502, 'invalid_redirect', 'GoFile redirected without a destination.');
+        let next;
+        try {
+            next = new URL(location, current);
+        } catch (_) {
+            throw upstream(502, 'invalid_redirect', 'GoFile redirected to an unusable destination.');
+        }
+        if (next.protocol !== 'https:' || !isGoFileHost(next.hostname)) {
+            throw upstream(502, 'untrusted_redirect', 'GoFile redirected to a host this Worker will not follow.');
+        }
+        current = next.href;
+    }
+    throw upstream(502, 'too_many_redirects', 'GoFile redirected more times than this Worker will follow.');
 }
 
 /** Walk a listing for one file by exact name. */
@@ -285,7 +339,10 @@ function corsHeaders(request, env) {
     const origin = request.headers.get('Origin');
     const headers = new Headers({
         'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-        'Access-Control-Allow-Headers': 'Range',
+        // Authorization is what carries the caller's GoFile token, so the
+        // preflight has to permit it. It is deliberately absent from
+        // Expose-Headers: nothing sends a credential back to the page.
+        'Access-Control-Allow-Headers': 'Authorization, Range',
         'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified',
         'Access-Control-Max-Age': '86400',
         Vary: 'Origin'
