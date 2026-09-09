@@ -440,14 +440,35 @@ export function applyProtectedSelections(document, selections) {
         assetId: selection.assetId,
         locator: normalizeSelectionLocator(selection.locator)
     }));
-    assertNoOverlappingSelections(normalized.map((entry) => entry.locator));
-
     const documentOrder = new Map(elementsInDocumentOrder(document.root).map((element, index) => [element, index]));
     const resolved = normalized.map((entry) => ({
         assetId: entry.assetId,
         locator: entry.locator,
         resolution: resolveSelectionLocator(document, entry.locator)
     }));
+    const textOrder = new Map();
+    let textOffset = 0;
+    const collectText = (node) => {
+        if (node.type === 'text') {
+            textOrder.set(node, textOffset);
+            textOffset += node.value.length;
+            return;
+        }
+        if (node.type === 'element' && !node.rawText) {
+            for (const child of node.children) collectText(child);
+        }
+    };
+    collectText(document.root);
+    const ranges = resolved.map((entry) => ({
+        start: (textOrder.get(entry.resolution.startNode) || 0) + entry.resolution.startIndex,
+        end: (textOrder.get(entry.resolution.endNode) || 0) + entry.resolution.endIndex
+    }));
+    const sortedRanges = [...ranges].sort((left, right) => left.start - right.start);
+    for (let index = 1; index < sortedRanges.length; index += 1) {
+        if (sortedRanges[index].start < sortedRanges[index - 1].end) {
+            throw new TextLocatorError('Two protected selections overlap in the staged source.', 'locator-overlap');
+        }
+    }
 
     const applyOrder = [...resolved].sort((left, right) => {
         const leftIndex = documentOrder.get(left.resolution.container) ?? 0;

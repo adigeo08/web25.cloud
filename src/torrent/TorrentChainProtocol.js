@@ -28,11 +28,13 @@ import {
     validateProtectedAssets
 } from './ProtectedAssetProtocol.js';
 import { isValidUncompressedPublicKey } from '../channels/ecies.js';
+import { evmAddressFromPublicKey } from '../channels/ecies.js';
+import { verifyIdentityTuple } from '../channels/ContactsStore.js';
+import { npubEncode } from '../nostr/nip19.js';
 
 export const TORRENTCHAIN_SIGNATURE_ALGORITHM = 'EVM_SECP256K1';
 
 const NOSTR_PUBKEY_RE = /^[0-9a-f]{64}$/;
-const NPUB_RE = /^npub1[023456789acdefghjklmnpqrstuvwxyz]{20,}$/;
 
 export async function buildTorrentChainDraft(inMemoryFiles) {
     const fileEntries = [];
@@ -123,12 +125,23 @@ export function canonicalizeOwner(owner) {
     const eciesPublicKey = normalizeRecipientPublicKey(owner?.eciesPublicKey, { isValidUncompressedPublicKey });
 
     const nostrPublicKey = `${owner?.nostrPublicKey || ''}`.trim().toLowerCase();
-    if (nostrPublicKey && !NOSTR_PUBKEY_RE.test(nostrPublicKey)) {
+    if (!NOSTR_PUBKEY_RE.test(nostrPublicKey)) {
         throw new Error('Owner nostrPublicKey must be a 32-byte hex key.');
     }
     const npub = `${owner?.npub || ''}`.trim();
-    if (npub && !NPUB_RE.test(npub)) {
+    if (!npub) {
         throw new Error('Owner npub must be a NIP-19 npub string.');
+    }
+    try {
+        if (npubEncode(nostrPublicKey) !== npub.toLowerCase()) {
+            throw new Error('Owner npub is not encoded from owner nostrPublicKey.');
+        }
+    } catch (error) {
+        throw new Error(`Owner npub is invalid: ${error.message}`);
+    }
+    const tuple = verifyIdentityTuple({ evmAddress, eciesPublicKey, nostrPublicKey, npub });
+    if (!tuple.ok) {
+        throw new Error(tuple.reason);
     }
 
     return { evmAddress, eciesPublicKey, nostrPublicKey, npub };
@@ -182,7 +195,11 @@ export async function createTorrentChainArtifact({
 
     // Validated before signing: a manifest that would fail its own verification
     // must never be produced, let alone deployed.
-    const canonicalAssets = await validateProtectedAssets(canonicalizeProtectedAssets(protectedAssets), { siteId });
+    const canonicalAssets = await validateProtectedAssets(canonicalizeProtectedAssets(protectedAssets, { evmAddressFromPublicKey }), {
+        siteId,
+        ownerPublicKey: canonicalOwner.eciesPublicKey,
+        evmAddressFromPublicKey
+    });
 
     const payload = {
         schema: TORRENTCHAIN_SCHEMA,
@@ -324,7 +341,11 @@ export async function verifyTorrentChainManifest(manifest, { _verifySignatureFn 
             };
         }
         try {
-            protectedAssets = await validateProtectedAssets(payload.protectedAssets, { siteId: payload.siteId });
+            protectedAssets = await validateProtectedAssets(payload.protectedAssets, {
+                siteId: payload.siteId,
+                ownerPublicKey: owner.eciesPublicKey,
+                evmAddressFromPublicKey
+            });
         } catch (error) {
             return {
                 verified: false,

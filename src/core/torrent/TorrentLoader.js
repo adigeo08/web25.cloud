@@ -21,6 +21,7 @@ import {
 import { attachTrackerConnectionGuard } from './TrackerConnectionGuard.js';
 import { verifyProtectedAssetsAgainstBundle } from '../renderer/ProtectedAssetRuntime.js';
 import { validateProtectedAssets } from '../../torrent/ProtectedAssetProtocol.js';
+import { evmAddressFromPublicKey } from '../../channels/ecies.js';
 
 /** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
 const LOAD_RETRY_MAX = 5;
@@ -1291,7 +1292,11 @@ export async function applyCachedProtectedSite(cached, hash) {
     }
 
     try {
-        const protectedAssets = await validateProtectedAssets(cached.protectedAssets, { siteId: cached.siteId });
+        const protectedAssets = await validateProtectedAssets(cached.protectedAssets, {
+            siteId: cached.siteId,
+            ownerPublicKey: cached.owner?.eciesPublicKey,
+            evmAddressFromPublicKey
+        });
         this.currentProtectedSite = {
             siteId: cached.siteId,
             owner: cached.owner || null,

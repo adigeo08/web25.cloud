@@ -266,8 +266,9 @@ export function sortProtectedAssets(assets) {
  * was covered.
  *
  * @param {any[]} assets
+ * @param {{ evmAddressFromPublicKey?: (publicKey: string) => string }} [context]
  */
-export function canonicalizeProtectedAssets(assets) {
+export function canonicalizeProtectedAssets(assets, { evmAddressFromPublicKey } = {}) {
     return sortProtectedAssets(assets).map((asset) => ({
         assetId: requireUuid(asset.assetId, 'assetId'),
         source: {
@@ -289,7 +290,22 @@ export function canonicalizeProtectedAssets(assets) {
             can: normalizeCapabilities(grant.can),
             wrappedKey: requireHex(grant.wrappedKey, 'wrappedKey', 1024 * 64),
             grantHash: requireSha256Hex(grant.grantHash, 'grantHash')
-        }))
+        })).map((grant) => {
+            if (evmAddressFromPublicKey) {
+                let derivedAddress;
+                try {
+                    derivedAddress = `${evmAddressFromPublicKey(grant.recipientPublicKey)}`.toLowerCase();
+                } catch (_) {
+                    derivedAddress = '';
+                }
+                ensure(
+                    derivedAddress === grant.recipientAddress,
+                    `Recipient address does not match its public key.`,
+                    'recipient-address-mismatch'
+                );
+            }
+            return grant;
+        })
     }));
 }
 
@@ -419,12 +435,12 @@ export async function createProtectedAsset({ siteId, plaintext, source, recipien
  * @param {{ siteId: string }} context
  * @returns {Promise<Record<string, any>[]>} the canonical asset list
  */
-export async function validateProtectedAssets(protectedAssets, { siteId }) {
+export async function validateProtectedAssets(protectedAssets, { siteId, ownerPublicKey = null, evmAddressFromPublicKey } = {}) {
     if (protectedAssets === undefined || protectedAssets === null) return [];
     ensure(Array.isArray(protectedAssets), 'protectedAssets must be an array.', 'protected-assets-malformed');
     const normalizedSiteId = requireUuid(siteId, 'siteId');
 
-    const canonical = canonicalizeProtectedAssets(protectedAssets);
+    const canonical = canonicalizeProtectedAssets(protectedAssets, { evmAddressFromPublicKey });
     const seenAssetIds = new Set();
 
     for (const asset of canonical) {
@@ -456,6 +472,7 @@ export async function validateProtectedAssets(protectedAssets, { siteId }) {
 
         const seenRecipients = new Set();
         ensure(asset.grants.length > 0, `Protected asset ${asset.assetId} carries no grants.`, 'asset-no-grants');
+        let ownerGrant = false;
         for (const grant of asset.grants) {
             ensure(
                 !seenRecipients.has(grant.recipientPublicKey),
@@ -463,6 +480,22 @@ export async function validateProtectedAssets(protectedAssets, { siteId }) {
                 'duplicate-grant'
             );
             seenRecipients.add(grant.recipientPublicKey);
+            if (ownerPublicKey && grant.recipientPublicKey === normalizeRecipientPublicKey(ownerPublicKey)) {
+                ownerGrant = true;
+            }
+            if (evmAddressFromPublicKey) {
+                let derivedAddress;
+                try {
+                    derivedAddress = `${evmAddressFromPublicKey(grant.recipientPublicKey)}`.toLowerCase();
+                } catch (_) {
+                    derivedAddress = '';
+                }
+                ensure(
+                    derivedAddress === grant.recipientAddress,
+                    `Recipient address does not match its public key on asset ${asset.assetId}.`,
+                    'recipient-address-mismatch'
+                );
+            }
 
             const expectedHash = await computeGrantHash({
                 siteId: normalizedSiteId,
@@ -478,6 +511,9 @@ export async function validateProtectedAssets(protectedAssets, { siteId }) {
                 `Grant hash mismatch on asset ${asset.assetId}.`,
                 'grant-hash-mismatch'
             );
+        }
+        if (ownerPublicKey) {
+            ensure(ownerGrant, `Protected asset ${asset.assetId} is missing the owner's decrypt grant.`, 'owner-grant-missing');
         }
     }
 

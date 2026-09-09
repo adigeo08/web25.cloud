@@ -109,7 +109,7 @@ export function encodeText(text) {
  * @returns {AuthoringElement} a synthetic root whose children are the document
  */
 export function parseAuthoringHtml(html) {
-    const source = `${html}`.replace(/\r\n?/g, '\n');
+    const source = `${html}`;
     /** @type {AuthoringElement} */
     const root = {
         type: 'element',

@@ -749,6 +749,25 @@ test('overlapping selections are refused rather than merged', () => {
     );
 });
 
+test('nested selections are rejected even when their preview containers differ', () => {
+    const document_ = prepareAuthoringDocument('<p>public <b>secret text</b> more</p>', 'index.html');
+    const parent = selectionFor(document_, 'p', 'secret text');
+    const child = selectionFor(document_, 'b', 'secret text');
+    assert.throws(
+        () => applyProtectedSelections(document_, [{ assetId: newUuid(), locator: parent }, { assetId: newUuid(), locator: child }]),
+        /overlap/
+    );
+    assert.throws(
+        () => applyProtectedSelections(document_, [{ assetId: newUuid(), locator: child }, { assetId: newUuid(), locator: parent }]),
+        /overlap/
+    );
+});
+
+test('CRLF authoring sources round-trip without normalising unprotected content', () => {
+    const source = '<html>\r\n<body>\r\n<p>unchanged</p>\r\n</body>\r\n</html>\r\n';
+    assert.equal(serializeAuthoringHtml(parseAuthoringHtml(source)), source);
+});
+
 test('a selection naming a file that is not staged is refused', async () => {
     const files = stagedSite();
     const document_ = prepareProtectionWorkspace(files).get('index.html');

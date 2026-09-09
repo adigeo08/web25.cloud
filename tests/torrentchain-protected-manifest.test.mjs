@@ -170,14 +170,50 @@ test('an owner block with unusable key material is refused', () => {
     assert.throws(() => canonicalizeOwner({ ...OWNER, nostrPublicKey: 'zz' }), /nostrPublicKey/);
     assert.throws(() => canonicalizeOwner({ ...OWNER, npub: 'npub-not-bech32' }), /npub/);
 
-    // A publisher with no Nostr identity yet is allowed: the fields are empty,
-    // not invented.
-    assert.deepEqual(canonicalizeOwner({ evmAddress: OWNER_ADDRESS, eciesPublicKey: OWNER_PUB }), {
-        evmAddress: OWNER_ADDRESS.toLowerCase(),
-        eciesPublicKey: OWNER_PUB.toLowerCase(),
-        nostrPublicKey: '',
-        npub: ''
-    });
+    assert.throws(
+        () => canonicalizeOwner({ evmAddress: OWNER_ADDRESS, eciesPublicKey: OWNER_PUB }),
+        /nostrPublicKey/
+    );
+});
+
+test('the owner identity tuple is cryptographically bound to the ECIES key', async () => {
+    const { artifact } = await signedProtectedSite();
+    const cases = [
+        ['foreign ECIES key', { eciesPublicKey: GUEST_PUB }],
+        ['foreign EVM address', { evmAddress: ecies.evmAddressFromPublicKey(GUEST_PUB) }],
+        ['foreign Nostr key', { nostrPublicKey: nostrCore.getNostrPublicKey(GUEST_KEY) }],
+        ['foreign npub', { npub: npubEncode(nostrCore.getNostrPublicKey(GUEST_KEY)) }]
+    ];
+    for (const [label, edit] of cases) {
+        const manifest = JSON.parse(JSON.stringify(artifact.manifest));
+        Object.assign(manifest.payload.owner, edit);
+        delete manifest.message;
+        const result = await verifyTorrentChainManifest(manifest, { _verifySignatureFn: async () => true });
+        assert.equal(result.verified, false, label);
+    }
+});
+
+test('protected manifest validation requires the owner decrypt grant and derived grant addresses', async () => {
+    const { artifact } = await signedProtectedSite();
+    const withoutOwner = JSON.parse(JSON.stringify(artifact.manifest));
+    withoutOwner.payload.protectedAssets[0].grants = withoutOwner.payload.protectedAssets[0].grants.filter(
+        (grant) => grant.recipientPublicKey !== OWNER_PUB.toLowerCase()
+    );
+    delete withoutOwner.message;
+    assert.equal(
+        (await verifyTorrentChainManifest(withoutOwner, { _verifySignatureFn: async () => true })).verified,
+        false
+    );
+
+    const wrongAddress = JSON.parse(JSON.stringify(artifact.manifest));
+    const firstGrant = wrongAddress.payload.protectedAssets[0].grants[0];
+    firstGrant.recipientAddress =
+        firstGrant.recipientPublicKey === OWNER_PUB.toLowerCase() ? ecies.evmAddressFromPublicKey(GUEST_PUB) : OWNER_ADDRESS;
+    delete wrongAddress.message;
+    assert.equal(
+        (await verifyTorrentChainManifest(wrongAddress, { _verifySignatureFn: async () => true })).verified,
+        false
+    );
 });
 
 // ─── what the signature covers ───────────────────────────────────────────
