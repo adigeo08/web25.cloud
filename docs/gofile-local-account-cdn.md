@@ -183,7 +183,14 @@ uses **disposable guest accounts**, not a valuable Premium account.
 
 ## 5. Uploading a mirror
 
-A GoFile mirror is optional per deployment.
+A GoFile mirror is optional per deployment, but the deploy UI **preselects the
+mirror option by default** so a normal deployment gets the HTTP acceleration
+path without requiring an extra click. The publisher can uncheck the option
+before deploying.
+
+This is a UX default only. GoFile remains optional at the protocol level:
+mirror creation failure does not fail the deployment, and a publisher who
+explicitly opts out still gets the normal WebTorrent/P2P deployment.
 
 When requested, WEB25 packages the exact deployment into
 `web25-gofile-mirror-v1` and uploads it using a deterministic filename:
@@ -411,6 +418,7 @@ The implementation should continue to preserve these invariants:
 | Property | GoFile mirror in WEB25 |
 | --- | --- |
 | Fast HTTP delivery | Yes |
+| Preselected by default for new deploys | Yes; user can uncheck it |
 | Used immediately after local cache | Yes |
 | Used before P2P when locator exists | Yes |
 | Durable source of truth | No |
