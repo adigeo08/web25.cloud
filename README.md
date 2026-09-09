@@ -25,7 +25,7 @@ The UI is organized into:
   - Preview signing payload
   - Sign payload with local EVM identity
   - Seed signed output
-  - Optionally create an ephemeral GoFile mirror for faster HTTP delivery
+  - Create an ephemeral GoFile HTTP mirror by default; the option is preselected but can be unchecked before deploy
 - **Browse / Load**
   - Load by torrent hash or complete WEB25 URL
   - Resolution order: local cache → GoFile mirror, when present → WebTorrent/P2P
@@ -210,6 +210,8 @@ To avoid regressions from verified → pending after refresh:
 ### 6b) Ephemeral GoFile mirrors — cache → HTTP → P2P
 
 GoFile is used as an optional **CDN-like acceleration layer**, not as the source of truth for a WEB25 deployment.
+
+For new deploys, the GoFile mirror option is **preselected by default** because a working HTTP mirror improves first-load latency after a local cache miss. Publishers can explicitly uncheck it before deployment. This is a UX default, not a protocol requirement: deployment still succeeds without GoFile and WebTorrent/P2P remains the resilient fallback.
 
 Preferred load order:
 
@@ -562,7 +564,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - STUN: `stun:stun.l.google.com:19302`
 - Nostr rendezvous relay (configurable in `src/config/nostr.config.js`): `wss://nos.lol`
   — one relay on purpose, so two Web25 browsers always share one; see §8c
-- GoFile: optional ephemeral HTTP mirror for static deployments
+- GoFile: optional ephemeral HTTP mirror for static deployments; preselected by default in the deploy UI and user-disableable
 - WEB25 GoFile transport Worker: `https://gofile-cf-downloader.carlgray.workers.dev`
   — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
 
