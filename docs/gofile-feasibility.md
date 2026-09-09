@@ -41,6 +41,14 @@ mirror never has to mint one mid-deploy, and someone who has signed in can
 authenticate a mirror read without ever having deployed. The call is
 best-effort: a GoFile outage at sign-in is logged and nothing else.
 
+Neither path ever replaces a credential the identity already holds. Sign-in
+mints only when the store is empty, and a deployment persists the token an
+upload issues only when it had none to authenticate with — otherwise the
+account underneath a published locator could be swapped out from under it. The
+one case that does replace is a credential GoFile refused, which has already
+been cleared by then. The read-back uses whichever token actually owns the
+upload.
+
 Resolving content is an **authenticated** call. `GET /contents/<id>` answers
 401 without a credential — observed live on 2026-09-07 against a real upload —
 and GoFile draws no distinction between a token created from the dashboard and
@@ -111,6 +119,13 @@ cross-guest reads require Premium or unsupported authorization. The result is
 Because of that, the mirror is opt-in per deployment: the deploy wizard ships
 the checkbox off, and a fresh deployment is WebTorrent-only unless the publisher
 asks for a mirror. Nothing remembers the choice between deployments.
+
+WebTorrent is tried first, always. Every route to the mirror runs behind the
+same retry budget — five attempts with exponential backoff, over WebRTC through
+the trackers in the magnet — including a synchronous failure to add the torrent
+at all, which used to reach for the mirror on the first attempt. GoFile is what
+is left when peer discovery has genuinely been given its chance, never a
+shortcut around it.
 
 Runtime failures remain best-effort in the strict sense. The successful torrent
 deployment is rendered and persisted _before_ any GoFile request begins, so a

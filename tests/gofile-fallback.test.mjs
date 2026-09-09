@@ -281,3 +281,79 @@ test('a locked wallet or missing credential still attempts the mirror', async ()
         assert.deepEqual(asked, [null], 'the mirror is attempted, unauthenticated, without a wallet error');
     }
 });
+
+/** A loader context whose only failing part is the torrent transport. */
+function loaderContext({ onAdd, contacted, handleTerminalP2PFailure }) {
+    return {
+        handleTerminalP2PFailure,
+        sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
+        isValidTorrentHash: () => true,
+        buildSignatureState: (state) => state,
+        signedTorrentMetadata: new Map(),
+        cache: { getEntry: async () => null },
+        showLoadingOverlay() {},
+        hideLoadingOverlay() {},
+        isBrowserSupportedTracker: () => true,
+        trackers: ['wss://tracker.openwebtorrent.com/'],
+        sendToServiceWorker() {},
+        serviceWorkerReady: true,
+        clientReady: true,
+        client: { add: onAdd },
+        log() {},
+        toast: { info() {} },
+        gofileService: {
+            downloadPublicMirror: async () => {
+                contacted.push('gofile');
+                throw new Error('mirror offline');
+            }
+        },
+        gofileCredentialStore: { read: async () => null }
+    };
+}
+
+test('the mirror is only reached after the WebRTC tracker budget is spent', async () => {
+    const { loadSite, handleTerminalP2PFailure } = await loader();
+    const previousAlert = globalThis.alert;
+    const previousTimeout = globalThis.setTimeout;
+    globalThis.alert = () => {};
+
+    let firstFallbackAttempt = null;
+    const scheduledRetries = [];
+    try {
+        for (let attempt = 0; attempt < 10 && firstFallbackAttempt === null; attempt += 1) {
+            const contacted = [];
+            const magnets = [];
+            let scheduled = 0;
+            globalThis.setTimeout = (fn, delay) => {
+                scheduled += 1;
+                return previousTimeout(() => {}, 0);
+            };
+            const context = loaderContext({
+                contacted,
+                handleTerminalP2PFailure,
+                onAdd: (magnetURI) => {
+                    magnets.push(magnetURI);
+                    throw new Error('WebTorrent could not add the torrent');
+                }
+            });
+
+            await loadSite.call(context, `${HASH}&Mirror123`, attempt);
+
+            assert.equal(magnets.length, 1, 'every attempt really tries the torrent transport first');
+            assert.match(magnets[0], /^magnet:\?xt=urn:btih:/);
+            assert.match(magnets[0], /tr=wss%3A%2F%2Ftracker/, 'the WebRTC tracker is in the magnet');
+            if (contacted.length > 0) firstFallbackAttempt = attempt;
+            else scheduledRetries.push(scheduled);
+        }
+    } finally {
+        globalThis.alert = previousAlert;
+        globalThis.setTimeout = previousTimeout;
+    }
+
+    assert.notEqual(firstFallbackAttempt, null, 'the mirror is eventually reached');
+    assert.ok(firstFallbackAttempt >= 5, `the mirror waited for the retry budget, not attempt ${firstFallbackAttempt}`);
+    assert.ok(
+        scheduledRetries.every((count) => count >= 1),
+        'each earlier attempt schedules another torrent attempt instead of falling back'
+    );
+});

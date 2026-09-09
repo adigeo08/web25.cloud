@@ -459,3 +459,101 @@ test('a locked wallet at sign-in leaves the credential alone', async () => {
     assert.equal(await context.ensureGoFileCredential(), 'unavailable');
     assert.equal(minted, 0, 'nothing is minted that could not be stored');
 });
+
+test('a deployment never replaces a credential that already works', async () => {
+    // The identity was given a token at sign-in. An upload that echoes or
+    // reissues one must not silently swap the account underneath it.
+    const writes = [];
+    const reads = [];
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => ({ token: 'token-from-login' }),
+        write: async ({ token }) => writes.push(token),
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            const result = { mirrorLocator: 'file_1', filename: options.filename, usedToken: options.token };
+            Object.defineProperty(result, 'guestToken', { value: 'token-from-upload', enumerable: false });
+            return result;
+        },
+        downloadPublicMirror: async (_locator, options) => {
+            reads.push(options?.token ?? null);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(writes, [], 'the login credential is left exactly as it was');
+    assert.deepEqual(reads, ['token-from-login'], 'the read uses the credential that owns the upload');
+    assert.equal(context.lastDeployResult.mirrorState, 'available');
+});
+
+test('a deployment does persist a credential when the identity holds none', async () => {
+    const writes = [];
+    const reads = [];
+    const uploaded = [];
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => null,
+        write: async ({ token }) => writes.push(token),
+        clearInvalidToken: async () => {}
+    };
+    context.gofileService = {
+        upload: async (blob, options) => {
+            uploaded.push(blob);
+            const result = { mirrorLocator: 'file_1', filename: options.filename };
+            Object.defineProperty(result, 'guestToken', { value: 'token-from-upload', enumerable: false });
+            return result;
+        },
+        downloadPublicMirror: async (_locator, options) => {
+            reads.push(options?.token ?? null);
+            return new Uint8Array(await uploaded[0].arrayBuffer());
+        }
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(writes, ['token-from-upload']);
+    assert.deepEqual(reads, ['token-from-upload']);
+});
+
+test('a refused credential is replaced, not kept', async () => {
+    const writes = [];
+    const uploaded = [];
+    let cleared = 0;
+    let stored = { token: 'expired-token' };
+    const { context } = await deployContext({ mirrorEnabled: true });
+    context.gofileCredentialStore = {
+        read: async () => stored,
+        write: async ({ token }) => writes.push(token),
+        clearInvalidToken: async () => {
+            cleared += 1;
+            stored = null;
+        }
+    };
+    let attempt = 0;
+    context.gofileService = {
+        upload: async (blob, options) => {
+            attempt += 1;
+            uploaded.push(blob);
+            if (attempt === 1) {
+                const error = new Error('GoFile upload failed (HTTP 401).');
+                error.code = 'invalid_token';
+                throw error;
+            }
+            const result = { mirrorLocator: 'file_1', filename: options.filename };
+            Object.defineProperty(result, 'guestToken', { value: 'replacement-token', enumerable: false });
+            return result;
+        },
+        downloadPublicMirror: async () => new Uint8Array(await uploaded.at(-1).arrayBuffer())
+    };
+
+    await context.deploySignedArtifact();
+
+    assert.equal(cleared, 1);
+    assert.deepEqual(writes, ['replacement-token']);
+});

@@ -1475,16 +1475,19 @@ export async function createGoFileMirror(hash) {
     });
     const payload = () => new Blob([mirrorBytes], { type: 'application/json' });
 
-    const credential = await this.gofileCredentialStore.read();
+    let credential = await this.gofileCredentialStore.read();
     let upload;
     try {
         upload = await this.gofileService.upload(payload(), { filename, token: credential?.token || null });
     } catch (error) {
         if (error?.code !== 'invalid_token' || !credential) throw error;
+        // The stored credential was refused, so this identity no longer holds
+        // one and whatever the retry issues is worth keeping.
         await this.gofileCredentialStore.clearInvalidToken();
+        credential = null;
         upload = await this.gofileService.upload(payload(), { filename });
     }
-    if (upload.guestToken) {
+    if (upload.guestToken && !credential) {
         try {
             await this.gofileCredentialStore.write({ token: upload.guestToken });
         } catch (error) {
@@ -1492,10 +1495,10 @@ export async function createGoFileMirror(hash) {
         }
     }
     if (!upload.mirrorLocator) throw new Error('GoFile upload returned no mirror locator.');
-    // Resolving content is an authenticated call. A freshly issued guest token
-    // supersedes the stored one, which the upload may just have replaced.
+    // Read with the credential that owns the upload: the stored one when it
+    // authenticated the upload, otherwise the one GoFile issued for it.
     const readBack = await this.gofileService.downloadPublicMirror(upload.mirrorLocator, {
-        token: upload.guestToken || credential?.token || null,
+        token: credential?.token || upload.guestToken || null,
         expectedFilename: filename
     });
     if (!sameBytes(readBack, mirrorBytes)) {

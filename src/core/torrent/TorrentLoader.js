@@ -364,7 +364,22 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
             }, dynamicTimeout);
         });
     } catch (error) {
+        // A synchronous add failure is still a P2P failure, and it must spend
+        // the same retry budget as any other before the mirror is considered.
+        // WebRTC over the trackers is the transport; GoFile is what is left
+        // once that has genuinely been tried.
         this.log(`Error adding torrent: ${error.message}`);
+        if (_retryAttempt < LOAD_RETRY_MAX) {
+            const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
+            this.log(
+                `Torrent transport unavailable, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+            );
+            setTimeout(() => {
+                if (!isActiveLoad()) return;
+                this.loadSite(sanitizedHash, _retryAttempt + 1, gofileLocator);
+            }, delay);
+            return;
+        }
         await this.handleTerminalP2PFailure(sanitizedHash, gofileLocator, error, null, loadGeneration);
     }
 }
