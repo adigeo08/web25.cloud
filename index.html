@@ -30,7 +30,8 @@
         />
 
         <!-- PWA Meta Tags -->
-        <meta name="theme-color" content="#66d4ea" />
+        <meta name="theme-color" content="#0a0c11" />
+        <meta name="color-scheme" content="dark" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -75,7 +76,7 @@
             </header>
 
             <!-- Tab Navigation -->
-            <nav class="tab-nav" role="tablist" style="justify-content: center">
+            <nav class="tab-nav" role="tablist">
                 <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
                     🔍 Browse / Load
                 </button>
@@ -546,7 +547,7 @@
                                 <p id="dm-peer-label" class="dm-peer-label"></p>
                             </div>
                             <div id="channels-messages" class="channels-messages"></div>
-                            <div class="hash-input-group" style="margin-top: 0.75rem">
+                            <div class="hash-input-group">
                                 <input
                                     type="text"
                                     id="channels-message-input"
@@ -557,7 +558,7 @@
                                 <button id="channels-attach-btn" class="btn btn-secondary" title="Attach file (peer-to-peer only)">📎</button>
                                 <button id="channels-send-btn" class="btn btn-primary">Send</button>
                             </div>
-                            <div id="channels-files" style="margin-top: 0.5rem"></div>
+                            <div id="channels-files"></div>
                             <div class="dm-chat-actions">
                                 <button id="dm-save-contact-btn" class="btn btn-secondary btn-sm">➕ Save as contact</button>
                                 <button id="channels-leave-btn" class="btn btn-secondary btn-sm">Disconnect</button>
@@ -784,7 +785,7 @@
             <footer>
                 <p>
                     ☁️ Made with ❤️ for the decentralized web —
-                    <a href="https://github.com/adigeo08/web25.cloud" target="_blank" style="color: #cce4ff"
+                    <a href="https://github.com/adigeo08/web25.cloud" target="_blank"
                         >WEB25.cloud</a
                     >
                     ☁️
