@@ -1603,81 +1603,153 @@ input[type='checkbox'] {
     font-weight: 600;
 }
 
-/* ── 09 Identity ─────────────────────────────────────────────────────── */
+/* ── 09 Account ──────────────────────────────────────────────────────── */
 
-.identity-widget-grid {
-    display: grid;
-    align-items: start;
-    grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
-    gap: 0.85rem;
-    margin: 1.1rem 0;
-}
-
-.identity-widget-grid:has(.identity-keys-panel.hidden) {
-    grid-template-columns: minmax(0, 1fr);
-}
-
-.identity-profile-card {
+.account-header {
     display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1.1rem;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: linear-gradient(140deg, rgba(76, 125, 255, 0.1), transparent 55%), var(--surface-2);
-}
-
-.identity-profile-header {
-    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.85rem;
+    gap: 1rem;
+    margin-bottom: 0.85rem;
+}
+
+.account-identity {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.9rem;
+    margin-right: auto;
 }
 
 .identity-avatar {
     display: grid;
     place-items: center;
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
+    width: 52px;
+    height: 52px;
+    flex: 0 0 52px;
     border: 1px solid var(--accent-line);
-    border-radius: 12px;
-    background: var(--accent-soft);
-    font-size: 1.2rem;
+    border-radius: 14px;
+    background: linear-gradient(140deg, rgba(76, 125, 255, 0.22), rgba(139, 92, 246, 0.16));
+    font-size: 1.4rem;
 }
 
-.identity-profile-name {
-    color: var(--text);
-    font-size: 0.98rem;
-    font-weight: 600;
+.account-identity-text h3 {
+    margin: 0;
+    font-size: 1.05rem;
 }
 
 .identity-profile-status,
+.identity-profile-name,
 .identity-profile-detail {
     color: var(--muted);
-    font-size: 0.82rem;
+    font-size: 0.85rem;
     overflow-wrap: anywhere;
 }
 
+.account-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.account-badges .hidden {
+    display: none !important;
+}
+
+.account-header-actions {
+    flex: 0 0 auto;
+}
+
+/* Two identity cards, same skeleton: head, fields, footer action. */
 .identity-keys-panel {
     display: grid;
-    gap: 0.6rem;
-    align-content: start;
-    padding: 1rem;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--surface-2);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 0.85rem;
 }
 
 .identity-keys-panel.hidden {
     display: none !important;
 }
 
-.identity-key-block {
+.account-card {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    padding: 1.15rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.account-card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.account-card-icon {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: 10px;
+    background: var(--accent-soft);
+    font-size: 1.05rem;
+}
+
+.account-card-head h4 {
+    font-size: 0.98rem;
+}
+
+.account-card-head p {
+    margin-top: 0.1rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.account-fields {
+    display: grid;
+    gap: 0.6rem;
+    align-content: start;
+    flex: 1;
+    padding: 0.9rem 0;
+}
+
+.account-field {
     min-width: 0;
     padding: 0.7rem 0.8rem;
     border: 1px solid var(--border-soft);
     border-radius: var(--r);
     background: var(--bg-soft);
+}
+
+.account-field + .account-field {
+    margin-top: 0.6rem;
+}
+
+.account-card-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border-soft);
+}
+
+.account-card-foot .identity-pubkey-hint {
+    flex: 1 1 14rem;
+    margin: 0;
+}
+
+.account-card-foot .identity-key-actions {
+    margin: 0;
 }
 
 .identity-key-label {
@@ -1728,30 +1800,52 @@ input[type='checkbox'] {
     line-height: 1.5;
 }
 
-.identity-key-footer {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    padding: 0.15rem 0.15rem 0.4rem;
-}
-
-.identity-key-footer .identity-pubkey-hint {
-    flex: 1 1 16rem;
-    margin: 0;
-}
-
-.identity-key-footer .identity-key-actions {
-    margin: 0;
-}
-
 .identity-key-actions,
 .identity-wallet-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
-    margin-top: 0.6rem;
+}
+
+/* Three equal reassurances under the cards. */
+.account-notes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.85rem;
+    margin-top: 0.85rem;
+}
+
+.account-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+
+.account-note-icon {
+    font-size: 1.05rem;
+    line-height: 1.4;
+}
+
+.account-note strong {
+    display: block;
+    color: var(--text);
+    font-size: 0.87rem;
+}
+
+.account-note span {
+    display: block;
+    margin-top: 0.15rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.account-seed {
+    margin-top: 0.85rem;
 }
 
 .identity-security-summary {
@@ -1770,51 +1864,16 @@ input[type='checkbox'] {
     font-size: 0.7rem;
 }
 
-.identity-side-widgets {
-    display: grid;
-    gap: 0.55rem;
-    align-content: start;
-}
+@media (max-width: 900px) {
+    .identity-keys-panel,
+    .account-notes {
+        grid-template-columns: minmax(0, 1fr);
+    }
 
-.mini-widget {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.7rem 0.85rem;
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    background: var(--surface-2);
-}
-
-.mini-widget:hover {
-    border-color: var(--border-strong);
-}
-
-.widget-icon {
-    display: grid;
-    place-items: center;
-    width: 32px;
-    height: 32px;
-    flex: 0 0 32px;
-    border-radius: 8px;
-    background: var(--accent-soft);
-    color: var(--accent-hi);
-}
-
-.mini-widget small {
-    display: block;
-    color: var(--muted);
-    font-size: 0.65rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.mini-widget strong {
-    display: block;
-    margin-top: 0.1rem;
-    color: var(--text);
-    font-size: 0.82rem;
+    .account-header-actions,
+    .account-badges {
+        flex: 1 1 100%;
+    }
 }
 
 /* ── 10 Direct Messenger ─────────────────────────────────────────────── */
@@ -2969,6 +3028,83 @@ input[type='checkbox'] {
     font-size: 0.78rem;
 }
 
+/* Widget: the "built on" band */
+.lp-logos {
+    margin-top: clamp(1.5rem, 4vw, 2.25rem);
+    padding: 1.25rem clamp(1rem, 3vw, 2rem);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+
+.lp-logos-label {
+    margin-bottom: 0.9rem;
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.lp-logos-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+.lp-logo {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.85rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: var(--r);
+    color: var(--text-dim);
+    text-align: center;
+    transition:
+        color 0.18s ease,
+        border-color 0.18s ease,
+        background 0.18s ease;
+}
+
+.lp-logo:hover {
+    border-color: var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.lp-logo-mark {
+    width: 26px;
+    height: 26px;
+    opacity: 0.85;
+}
+
+.lp-logo:hover .lp-logo-mark {
+    color: var(--accent-hi);
+    opacity: 1;
+}
+
+.lp-logo-name {
+    font-size: 0.92rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+}
+
+.lp-logo-role {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+@media (max-width: 640px) {
+    .lp-logos-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 .lp-section {
     margin-top: clamp(2rem, 5vw, 3.25rem);
 }
@@ -3017,6 +3153,255 @@ input[type='checkbox'] {
 .lp-step p {
     color: var(--muted);
     font-size: 0.87rem;
+}
+
+.lp-section-sub {
+    max-width: 62ch;
+    margin-top: 0.5rem;
+    color: var(--muted);
+    font-size: 0.92rem;
+}
+
+/* Widget: three pillar boxes */
+.lp-pillars {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.85rem;
+}
+
+.lp-pillar {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    padding: 1.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    background: linear-gradient(170deg, rgba(76, 125, 255, 0.08), transparent 45%), var(--surface);
+    overflow: hidden;
+    transition:
+        transform 0.25s ease,
+        border-color 0.25s ease;
+}
+
+.lp-pillar::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--violet));
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.lp-pillar:hover {
+    transform: translateY(-4px);
+    border-color: var(--border-strong);
+}
+
+.lp-pillar:hover::after {
+    opacity: 1;
+}
+
+.lp-pillar-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 0.9rem;
+    border-radius: 12px;
+    background: var(--accent-soft);
+    font-size: 1.25rem;
+}
+
+.lp-pillar h4 {
+    font-size: 1.05rem;
+}
+
+.lp-pillar > p {
+    margin: 0.4rem 0 0.9rem;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+}
+
+.lp-pillar-list {
+    display: grid;
+    gap: 0.3rem;
+    margin-top: auto;
+    padding: 0;
+    list-style: none;
+}
+
+.lp-pillar-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.35rem 0;
+    border-top: 1px solid var(--border-soft);
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.lp-pillar-list li::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    flex: 0 0 5px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+/* Widget: parallax band. The backdrop is pinned to the viewport, so it drifts
+   against the band as the page scrolls. */
+.lp-parallax {
+    position: relative;
+    margin: 1.25rem 0;
+    padding: clamp(3rem, 9vw, 6rem) clamp(1.25rem, 5vw, 4rem);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    background-color: var(--bg-soft);
+    background-image:
+        radial-gradient(680px 340px at 20% 30%, rgba(76, 125, 255, 0.35), transparent 65%),
+        radial-gradient(560px 320px at 80% 70%, rgba(139, 92, 246, 0.32), transparent 65%),
+        radial-gradient(400px 260px at 55% 20%, rgba(52, 199, 123, 0.16), transparent 70%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    overflow: hidden;
+    text-align: center;
+}
+
+.lp-parallax-inner {
+    max-width: 60ch;
+    margin: 0 auto;
+}
+
+.lp-quote {
+    color: var(--text);
+    font-size: clamp(1.35rem, 3.6vw, 2.1rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+    text-wrap: balance;
+}
+
+.lp-quote-sub {
+    margin-top: 0.9rem;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+}
+
+/* Widget: sticky showcase rail */
+.lp-showcase {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
+    align-items: start;
+    gap: 1.25rem;
+    margin-top: 1.25rem;
+}
+
+.lp-showcase-rail {
+    position: sticky;
+    top: 5rem;
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+
+.lp-showcase-rail h4 {
+    margin: 0.35rem 0 0.5rem;
+    font-size: 1.1rem;
+}
+
+.lp-showcase-rail p {
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
+.lp-showcase-index {
+    display: grid;
+    gap: 0.15rem;
+    margin-top: 1rem;
+    padding: 0;
+    list-style: none;
+    counter-reset: showcase;
+}
+
+.lp-showcase-index li {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0;
+    border-top: 1px solid var(--border-soft);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    counter-increment: showcase;
+}
+
+.lp-showcase-index li::before {
+    content: counter(showcase, decimal-leading-zero);
+    color: var(--accent-hi);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.lp-showcase-cards {
+    display: grid;
+    gap: 0.85rem;
+}
+
+/* Scroll reveal, where the browser can drive it off the scroll position
+   itself. Anywhere else the cards are simply visible. */
+@supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+        .lp-reveal {
+            animation: lp-reveal linear both;
+            animation-timeline: view();
+            /* Ends the moment the element is fully in view: a card that cannot
+               scroll any further (a short page, a very tall window) is then
+               never left sitting at zero opacity. */
+            animation-range: entry 0% entry 100%;
+        }
+    }
+}
+
+@media print {
+    .lp-reveal {
+        animation: none;
+        opacity: 1;
+    }
+}
+
+@keyframes lp-reveal {
+    from {
+        opacity: 0;
+        transform: translateY(26px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@media (max-width: 1000px) {
+    .lp-pillars {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-showcase {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-showcase-rail {
+        position: static;
+    }
+}
+
+@media (max-width: 640px) {
+    .lp-parallax {
+        background-attachment: scroll;
+    }
 }
 
 .lp-status-grid {
@@ -3487,10 +3872,6 @@ select,
 
 @media (max-width: 1000px) {
     .about-bento {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .identity-widget-grid {
         grid-template-columns: minmax(0, 1fr);
     }
 }

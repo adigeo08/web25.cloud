@@ -68,7 +68,7 @@ export function renderInvitations(invitations) {
             if (entries.length > 0) {
                 tab.setAttribute(
                     'aria-label',
-                    `Direct Messenger, ${entries.length} chat invitation${entries.length === 1 ? '' : 's'} waiting`
+                    `Chat, ${entries.length} invitation${entries.length === 1 ? '' : 's'} waiting`
                 );
             } else {
                 tab.removeAttribute('aria-label');

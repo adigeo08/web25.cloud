@@ -78,14 +78,14 @@
             <!-- Tab Navigation -->
             <nav class="tab-nav" role="tablist">
                 <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
-                    🔍 Browse / Load
+                    🔍 Search
                 </button>
                 <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">🚀 Deploy</button>
                 <button class="tab-btn" data-tab="auth" role="tab" aria-selected="false" style="display: none">
-                    📇 Identity
+                    👤 Account
                 </button>
                 <button class="tab-btn" data-tab="channels" role="tab" aria-selected="false" style="display: none">
-                    💬 Direct Messenger
+                    💬 Chat
                     <span id="dm-tab-badge" class="tab-badge hidden" aria-hidden="true">0</span>
                 </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
@@ -94,185 +94,171 @@
             <main class="container">
                 <!-- ── AUTH TAB ── -->
                 <div id="tab-auth" class="tab-panel" role="tabpanel" style="display: none">
-                    <section class="quick-upload identity-dashboard card-base">
-                        <h3>📇 Local Identity Profile</h3>
+                    <header class="account-header card-base">
+                        <div class="account-identity">
+                            <div class="identity-avatar" aria-hidden="true">👤</div>
+                            <div class="account-identity-text">
+                                <h3>Your account</h3>
+                                <p id="local-wallet-meta" class="identity-profile-status">Local wallet: unlocked</p>
+                            </div>
+                        </div>
 
-                        <div class="identity-widget-grid">
-                            <div class="identity-profile-card identity-main-widget">
-                                <div class="identity-profile-header">
-                                    <div class="identity-avatar" aria-hidden="true">🔓</div>
+                        <div class="account-badges">
+                            <span id="passkey-protection-badge" class="status-chip status-success hidden">
+                                Passkey protected
+                            </span>
+                            <span id="biometric-session-indicator" class="status-chip status-success hidden">
+                                Session unlocked
+                            </span>
+                            <span id="passkey-unsupported-warning" class="status-chip status-pending hidden">
+                                Passkeys unavailable on this device
+                            </span>
+                        </div>
 
-                                    <p
-                                            id="local-wallet-meta"
-                                            class="identity-profile-status"
-                                    >
-                                        Local wallet: unlocked
-                                    </p>
+                        <div class="button-group identity-wallet-actions account-header-actions">
+                            <button id="lock-disconnect-auth-btn" class="btn btn-secondary hidden">🔒 Lock Wallet</button>
+                            <button id="add-passkey-btn" class="btn btn-secondary hidden">🧬 Add Passkey</button>
+                        </div>
+                    </header>
+
+                    <!--
+                        Two identities, two identical cards: keys on top, the action
+                        that removes them at the bottom of their own card.
+                    -->
+                    <div id="identity-keys-panel" class="identity-keys-panel hidden">
+                        <article class="account-card">
+                            <header class="account-card-head">
+                                <span class="account-card-icon" aria-hidden="true">🪪</span>
+                                <div>
+                                    <h4>Wallet identity</h4>
+                                    <p>One local secp256k1 key, signing deploys and encrypting messages.</p>
+                                </div>
+                            </header>
+
+                            <div class="account-fields">
+                                <div class="account-field">
+                                    <p class="identity-key-label">EVM Address</p>
+                                    <div class="identity-pubkey-row">
+                                        <p id="identity-full-address" class="identity-key-value"></p>
+                                        <button id="copy-address-btn" class="btn btn-secondary btn-sm" title="Copy EVM address">
+                                            📋 Copy
+                                        </button>
+                                    </div>
                                 </div>
 
-                                <div class="button-group identity-wallet-actions">
-                                    <button
-                                            id="lock-disconnect-auth-btn"
-                                            class="btn btn-secondary hidden"
-                                    >
-                                        🔒 Lock Wallet
-                                    </button>
-
-                                    <button
-                                            id="add-passkey-btn"
-                                            class="btn btn-secondary hidden"
-                                    >
-                                        🧬 Add Passkey
-                                    </button>
+                                <div class="account-field">
+                                    <p class="identity-key-label">ECIES Public Key</p>
+                                    <div class="identity-pubkey-row">
+                                        <p id="identity-full-pubkey" class="identity-key-value"></p>
+                                        <button id="copy-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy ECIES public key">
+                                            📋 Copy
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div
-                                    id="identity-keys-panel"
-                                    class="identity-keys-panel hidden"
-                            >
-                                <div class="identity-key-block">
-                                    <p class="identity-key-label">EVM Address</p>
-
-                                    <div class="identity-pubkey-row">
-                                        <p
-                                                id="identity-full-address"
-                                                class="identity-key-value"
-                                        ></p>
-
-                                        <button
-                                                id="copy-address-btn"
-                                                class="btn btn-secondary btn-sm"
-                                                title="Copy EVM address"
-                                        >
-                                            📋 Copy
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div class="identity-key-block">
-                                    <p class="identity-key-label">ECIES Public Key</p>
-
-                                    <div class="identity-pubkey-row">
-                                        <p
-                                                id="identity-full-pubkey"
-                                                class="identity-key-value"
-                                        ></p>
-
-                                        <button
-                                                id="copy-pubkey-btn"
-                                                class="btn btn-secondary btn-sm"
-                                                title="Copy ECIES public key"
-                                        >
-                                            📋 Copy
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div class="identity-key-footer">
-                                    <p class="identity-pubkey-hint">
-                                        The EVM address and the ECIES key are two faces of one local
-                                        secp256k1 key. Deleting the wallet removes both from this browser.
-                                    </p>
-
-                                    <div class="button-group identity-key-actions">
-                                        <button
-                                                id="delete-local-wallet-btn"
-                                                class="btn btn-clear btn-sm"
-                                        >
-                                            🗑️ Delete Wallet
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div id="identity-nostr-block" class="identity-key-block">
-                                    <p class="identity-key-label">Nostr Address</p>
-
-                                    <div id="identity-nostr-present">
-                                        <div class="identity-pubkey-row">
-                                            <p
-                                                    id="identity-full-npub"
-                                                    class="identity-key-value"
-                                            ></p>
-
-                                            <button
-                                                    id="copy-npub-btn"
-                                                    class="btn btn-secondary btn-sm"
-                                                    title="Copy Nostr address"
-                                            >
-                                                📋 Copy
-                                            </button>
-                                        </div>
-
-                                        <p class="identity-key-label" style="margin-top: 0.6rem">Nostr Public Key</p>
-
-                                        <div class="identity-pubkey-row">
-                                            <p
-                                                    id="identity-full-nostr-pubkey"
-                                                    class="identity-key-value"
-                                            ></p>
-
-                                            <button
-                                                    id="copy-nostr-pubkey-btn"
-                                                    class="btn btn-secondary btn-sm"
-                                                    title="Copy Nostr public key"
-                                            >
-                                                📋 Copy
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <p id="identity-nostr-absent" class="identity-pubkey-hint hidden">
-                                        This identity is not reachable over Nostr. Add it to receive
-                                        encrypted Direct Messages at your <code>npub</code>.
-                                    </p>
-
-                                    <div class="button-group identity-key-actions">
-                                        <button
-                                                id="add-nostr-identity-btn"
-                                                class="btn btn-secondary btn-sm hidden"
-                                        >
-                                            ➕ Add Nostr Identity
-                                        </button>
-
-                                        <button
-                                                id="delete-nostr-identity-btn"
-                                                class="btn btn-clear btn-sm hidden"
-                                        >
-                                            🗑️ Delete Nostr Identity
-                                        </button>
-                                    </div>
-                                </div>
-
+                            <footer class="account-card-foot">
                                 <p class="identity-pubkey-hint">
-                                    All three identities come from one local key. They are safe to
-                                    share so others can reach you. Never share your seed phrase.
+                                    Both addresses are two faces of the same key. Deleting the wallet
+                                    removes them from this browser.
+                                </p>
+                                <div class="button-group identity-key-actions">
+                                    <button id="delete-local-wallet-btn" class="btn btn-clear btn-sm">🗑️ Delete Wallet</button>
+                                </div>
+                            </footer>
+                        </article>
+
+                        <article id="identity-nostr-block" class="account-card">
+                            <header class="account-card-head">
+                                <span class="account-card-icon" aria-hidden="true">🪐</span>
+                                <div>
+                                    <h4>Nostr identity</h4>
+                                    <p>The same key, published so other people can reach you in Chat.</p>
+                                </div>
+                            </header>
+
+                            <div class="account-fields">
+                                <div id="identity-nostr-present">
+                                    <div class="account-field">
+                                        <p class="identity-key-label">Nostr Address</p>
+                                        <div class="identity-pubkey-row">
+                                            <p id="identity-full-npub" class="identity-key-value"></p>
+                                            <button id="copy-npub-btn" class="btn btn-secondary btn-sm" title="Copy Nostr address">
+                                                📋 Copy
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="account-field">
+                                        <p class="identity-key-label">Nostr Public Key</p>
+                                        <div class="identity-pubkey-row">
+                                            <p id="identity-full-nostr-pubkey" class="identity-key-value"></p>
+                                            <button id="copy-nostr-pubkey-btn" class="btn btn-secondary btn-sm" title="Copy Nostr public key">
+                                                📋 Copy
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <p id="identity-nostr-absent" class="identity-pubkey-hint hidden">
+                                    This identity is not reachable over Nostr. Add it to receive
+                                    encrypted Direct Messages at your <code>npub</code>.
                                 </p>
                             </div>
+
+                            <footer class="account-card-foot">
+                                <p class="identity-pubkey-hint">
+                                    Removing it takes you off the relays. Adding it back restores the
+                                    same <code>npub</code>.
+                                </p>
+                                <div class="button-group identity-key-actions">
+                                    <button id="add-nostr-identity-btn" class="btn btn-secondary btn-sm hidden">
+                                        ➕ Add Nostr Identity
+                                    </button>
+                                    <button id="delete-nostr-identity-btn" class="btn btn-clear btn-sm hidden">
+                                        🗑️ Delete Nostr Identity
+                                    </button>
+                                </div>
+                            </footer>
+                        </article>
+                    </div>
+
+                    <div class="account-notes">
+                        <div class="account-note">
+                            <span class="account-note-icon" aria-hidden="true">🔐</span>
+                            <div>
+                                <strong>Kept in this browser</strong>
+                                <span>Key material never leaves the device, and no server holds a copy.</span>
+                            </div>
                         </div>
-
-                        <div
-                                id="seed-phrase-screen"
-                                class="upload-result hidden"
-                                style="margin-top: 1rem"
-                        >
-                            <h4>⚠️ Save your seed phrase now</h4>
-
-                            <p>
-                                <strong>Security warning:</strong>
-                                This local signing wallet is not for deposits or storing funds.
-                            </p>
-
-                            <pre id="seed-phrase-box" class="code-block"></pre>
-
-                            <button
-                                    id="close-seed-screen-btn"
-                                    class="btn btn-secondary"
-                            >
-                                I saved it
-                            </button>
+                        <div class="account-note">
+                            <span class="account-note-icon" aria-hidden="true">🧬</span>
+                            <div>
+                                <strong>Unlocked by passkey</strong>
+                                <span>Face ID, Touch ID or a device PIN gates every signing session.</span>
+                            </div>
                         </div>
-                    </section>
+                        <div class="account-note">
+                            <span class="account-note-icon" aria-hidden="true">🤝</span>
+                            <div>
+                                <strong>Safe to share</strong>
+                                <span>All three addresses are public. Your seed phrase never is.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="seed-phrase-screen" class="upload-result account-seed hidden">
+                        <h4>⚠️ Save your seed phrase now</h4>
+
+                        <p>
+                            <strong>Security warning:</strong>
+                            This local signing wallet is not for deposits or storing funds.
+                        </p>
+
+                        <pre id="seed-phrase-box" class="code-block"></pre>
+
+                        <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
+                    </div>
                 </div>
 
                 <!-- ── PUBLISH TAB ── -->
@@ -732,6 +718,75 @@
                         </div>
                     </section>
 
+                    <!-- Built on: the projects the platform stands on -->
+                    <section class="lp-logos" aria-label="Technologies WEB25.cloud is built on">
+                        <p class="lp-logos-label">Built on</p>
+                        <div class="lp-logos-row">
+                            <a class="lp-logo" href="https://viem.sh" target="_blank" rel="noopener noreferrer">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M12 2 5 12l7 4 7-4-7-10Z" fill="currentColor" opacity=".9" />
+                                    <path d="M12 22 5 13.6l7 4.1 7-4.1L12 22Z" fill="currentColor" opacity=".5" />
+                                </svg>
+                                <span class="lp-logo-name">viem</span>
+                                <span class="lp-logo-role">EVM signing</span>
+                            </a>
+
+                            <a class="lp-logo" href="https://webtorrent.io" target="_blank" rel="noopener noreferrer">
+                                <svg
+                                    class="lp-logo-mark"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.6"
+                                    stroke-linecap="round"
+                                    aria-hidden="true"
+                                >
+                                    <circle cx="12" cy="4.6" r="2.4" />
+                                    <circle cx="4.9" cy="18" r="2.4" />
+                                    <circle cx="19.1" cy="18" r="2.4" />
+                                    <path d="M10.7 6.7 6.2 15.7M13.3 6.7l4.5 9M7.3 18h9.4" />
+                                </svg>
+                                <span class="lp-logo-name">WebTorrent</span>
+                                <span class="lp-logo-role">P2P delivery</span>
+                            </a>
+
+                            <a class="lp-logo" href="https://nostr.com" target="_blank" rel="noopener noreferrer">
+                                <svg
+                                    class="lp-logo-mark"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.6"
+                                    stroke-linecap="round"
+                                    aria-hidden="true"
+                                >
+                                    <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
+                                    <path d="M7.1 7.6a7 7 0 0 0 0 8.8M16.9 7.6a7 7 0 0 1 0 8.8M4 4.4a11.5 11.5 0 0 0 0 15.2M20 4.4a11.5 11.5 0 0 1 0 15.2" />
+                                </svg>
+                                <span class="lp-logo-name">Nostr</span>
+                                <span class="lp-logo-role">Addressing &amp; signalling</span>
+                            </a>
+
+                            <a class="lp-logo" href="https://gofile.io" target="_blank" rel="noopener noreferrer">
+                                <svg
+                                    class="lp-logo-mark"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.6"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path d="M7 18.5h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 5.7 11.2 3.65 3.65 0 0 0 7 18.5Z" />
+                                    <path d="M12 15.6V9.4m0 0-2.2 2.2M12 9.4l2.2 2.2" />
+                                </svg>
+                                <span class="lp-logo-name">GoFile</span>
+                                <span class="lp-logo-role">Fallback mirror</span>
+                            </a>
+                        </div>
+                    </section>
+
                     <!-- How it works -->
                     <section class="lp-section">
                         <div class="lp-section-head">
@@ -767,149 +822,230 @@
                         </div>
                     </section>
 
-                    <!-- Deep dive -->
+                    <!-- Deep dive: pillars, a parallax band, and a sticky showcase -->
                     <section class="lp-section">
                         <div class="lp-section-head">
                             <span class="section-kicker">Under the hood</span>
                             <h3>What the platform actually does</h3>
+                            <p class="lp-section-sub">
+                                Three pieces carry the whole thing: who you are, how a site ships, and
+                                how two browsers talk.
+                            </p>
                         </div>
-                        <div class="about-bento">
-                            <article class="about-card">
-                                <h3>🪪 Identity: one local key, three addresses</h3>
+
+                        <div class="lp-pillars">
+                            <article class="lp-pillar lp-reveal">
+                                <span class="lp-pillar-icon" aria-hidden="true">🪪</span>
+                                <h4>One key, three addresses</h4>
                                 <p>
-                                    The identity model is local-first and is inspired by
-                                    <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
-                                    key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
-                                    A single secp256k1 key backs all three identities shown on the Identity page —
-                                    there is no second seed and no second private key.
+                                    A single local secp256k1 key signs your deploys, encrypts your
+                                    messages and publishes your handle — no second seed anywhere.
                                 </p>
-                                <div class="feature-grid">
-                                    <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
-                                    <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
-                                    <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
-                                    <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
-                                    <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
-                                    <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
-                                </div>
-                                <p>
-                                    The Identity page shows all three side by side, each with its own copy button.
-                                    The Nostr address can be added or removed there: removing it takes you off the
-                                    relays and hides the address, and adding it back restores the same
-                                    <code>npub</code> — because it was never a separate key to begin with.
-                                </p>
+                                <ul class="lp-pillar-list">
+                                    <li><code>0x…</code> signs deploys</li>
+                                    <li><code>04…</code> encrypts messages</li>
+                                    <li><code>npub1…</code> is how people reach you</li>
+                                </ul>
                             </article>
 
-                            <article class="about-card">
-                                <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+                            <article class="lp-pillar lp-reveal">
+                                <span class="lp-pillar-icon" aria-hidden="true">📦</span>
+                                <h4>Sites ship signed</h4>
                                 <p>
-                                    Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
-                                    manifest carrying publisher identity and integrity metadata.
+                                    Your folder is bundled in memory, signed, and seeded straight from
+                                    the tab. The signature travels with the bytes.
                                 </p>
-                                <div class="feature-grid">
-                                    <div class="feature">🗜️ Default bundle mode: gzip</div>
-                                    <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
-                                    <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
-                                    <div class="feature">✅ Identity/integrity checks applied during load</div>
-                                </div>
+                                <ul class="lp-pillar-list">
+                                    <li>gzip bundle, built in the browser</li>
+                                    <li>Signed <code>.torrentchain</code> manifest</li>
+                                    <li>Verified before anything renders</li>
+                                </ul>
                             </article>
 
-                            <article class="about-card">
-                                <h3>💬 Direct Messenger: search an address, start a chat</h3>
+                            <article class="lp-pillar lp-reveal">
+                                <span class="lp-pillar-icon" aria-hidden="true">💬</span>
+                                <h4>Chats find each other</h4>
                                 <p>
-                                    Messaging UX started from
-                                    <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                                    and replaced its manual offer/answer step entirely. You enter someone's Nostr
-                                    address, and the encrypted WebRTC invitation is delivered for you through public
-                                    Nostr relays — no magnet links or key pasting.
+                                    Type someone's Nostr address and the encrypted invitation is
+                                    delivered for you — no magnet links, no key pasting.
                                 </p>
-                                <div class="feature-grid">
-                                    <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
-                                    <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
-                                    <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
-                                    <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
-                                    <div class="feature">🪪 Peer verification from public key to EVM address</div>
-                                    <div class="feature">✍️ Per-message signatures verified on receive</div>
-                                    <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
-                                </div>
-                                <p>
-                                    WebRTC stays the preferred transport. If a direct connection cannot be
-                                    established, messages fall back to the relays — still signed and ECIES-encrypted
-                                    exactly as before, with NIP-44 on top. The chat header says which path is in use:
-                                    <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
-                                </p>
+                                <ul class="lp-pillar-list">
+                                    <li>WebRTC first, relay fallback</li>
+                                    <li>NIP-44 / NIP-59 gift wrap</li>
+                                    <li>Unknown senders wait for your Accept</li>
+                                </ul>
                             </article>
+                        </div>
 
-                            <article class="about-card">
-                                <h3>🤝 Cryptographic validity is not consent</h3>
-                                <p>
-                                    Verifying an invitation proves the sender <em>is who they claim</em>. It does not
-                                    mean you want to talk to them — and anyone who knows your <code>npub</code> can
-                                    produce a perfectly valid offer. Answering one is not free: it reveals your full
-                                    ECIES public key, your EVM address, and, through ICE gathering, your machine's
-                                    network addresses.
+                        <!-- Parallax band: the fixed backdrop drifts against the page -->
+                        <div class="lp-parallax">
+                            <div class="lp-parallax-inner">
+                                <p class="lp-quote">“Cryptographic validity is not consent.”</p>
+                                <p class="lp-quote-sub">
+                                    A valid invitation proves who sent it — never that you want to
+                                    answer. Anything from someone you do not already trust simply waits,
+                                    and declining sends nothing back at all.
                                 </p>
-                                <p>
-                                    So an invitation from anyone who is not already a trusted contact simply
-                                    <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
-                                    sent back until you press Accept. Declining discards it silently — the sender is
-                                    not told, because telling them would confirm the address is live — and their
-                                    retries are dropped, so a refusal cannot be worn down by repetition.
-                                </p>
-                                <div class="feature-grid">
-                                    <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
-                                    <div class="feature">📨 A stranger's chat request arrives there too — one ask is enough</div>
-                                    <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
-                                    <div class="feature">🚫 Decline sends nothing at all</div>
-                                    <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
-                                    <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
-                                    <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
-                                </div>
-                                <p>
-                                    Trust is authorization layered on top of authentication — it replaces none of the
-                                    existing checks. A trusted friend's invitation is still verified end to end, and
-                                    its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
-                                    what was stored, so taking over an <code>npub</code> does not inherit the trust
-                                    attached to it. Removing a contact is a local change only: they become unknown
-                                    again, and no key is deleted or rotated on either side.
-                                </p>
-                            </article>
+                            </div>
+                        </div>
 
-                            <article class="about-card">
-                                <h3>🛰️ Nostr relay: browser to relay, directly</h3>
+                        <!-- Sticky showcase: the rail holds still while the cards move -->
+                        <div class="lp-showcase">
+                            <aside class="lp-showcase-rail">
+                                <span class="section-kicker">Deep dive</span>
+                                <h4>Six things worth knowing</h4>
                                 <p>
-                                    The app talks straight to one public relay over a WebSocket. There is no Web25
-                                    relay, no proxy and no signalling server — just a rendezvous both sides agree on.
+                                    The detail behind each piece — what is stored, what is signed, what
+                                    is sent, and what is deliberately not.
                                 </p>
-                                <p>
-                                    Two browsers can only meet on a relay they both use. Spreading over several
-                                    relays looks sturdier and behaves worse: a message accepted by one relay and a
-                                    subscription healthy on another never meet, and the invitation is lost while
-                                    every relay involved reports success. One relay makes finding each other
-                                    predictable, at an honest cost: while that relay is down, the messenger is
-                                    down with it.
-                                </p>
-                                <div class="feature-grid">
-                                    <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>
-                                    <div class="feature">⚙️ One array in the config — point it at your own relay</div>
-                                    <div class="feature">🧯 Reconnects with backoff; a dropped socket is not a lost session</div>
-                                    <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
-                                </div>
-                            </article>
+                                <ol class="lp-showcase-index">
+                                    <li>Identity</li>
+                                    <li>Publishing</li>
+                                    <li>Direct Messenger</li>
+                                    <li>Consent</li>
+                                    <li>Nostr relay</li>
+                                    <li>Security profile</li>
+                                </ol>
+                            </aside>
 
-                            <article class="about-card">
-                                <h3>🛡️ Security profile</h3>
-                                <p>
-                                    WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
-                                    The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
-                                    to support richer static websites.
-                                </p>
-                                <div class="feature-grid">
-                                    <div class="feature">🧾 Signed-manifest verification before render gates</div>
-                                    <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
-                                    <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
-                                    <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
-                                </div>
-                            </article>
+                            <div class="lp-showcase-cards">
+                                <article class="about-card lp-reveal">
+                                    <h3>🪪 Identity: one local key, three addresses</h3>
+                                    <p>
+                                        The identity model is local-first and is inspired by
+                                        <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
+                                        key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+                                        A single secp256k1 key backs all three identities shown on the Account page —
+                                        there is no second seed and no second private key.
+                                    </p>
+                                    <div class="feature-grid">
+                                        <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
+                                        <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
+                                        <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
+                                        <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
+                                        <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
+                                        <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
+                                    </div>
+                                    <p>
+                                        The Account page shows all three side by side, each with its own copy button.
+                                        The Nostr address can be added or removed there: removing it takes you off the
+                                        relays and hides the address, and adding it back restores the same
+                                        <code>npub</code> — because it was never a separate key to begin with.
+                                    </p>
+                                </article>
+
+                                <article class="about-card lp-reveal">
+                                    <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+                                    <p>
+                                        Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
+                                        manifest carrying publisher identity and integrity metadata.
+                                    </p>
+                                    <div class="feature-grid">
+                                        <div class="feature">🗜️ Default bundle mode: gzip</div>
+                                        <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
+                                        <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
+                                        <div class="feature">✅ Identity/integrity checks applied during load</div>
+                                    </div>
+                                </article>
+
+                                <article class="about-card lp-reveal">
+                                    <h3>💬 Direct Messenger: search an address, start a chat</h3>
+                                    <p>
+                                        Messaging UX started from
+                                        <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
+                                        and replaced its manual offer/answer step entirely. You enter someone's Nostr
+                                        address, and the encrypted WebRTC invitation is delivered for you through public
+                                        Nostr relays — no magnet links or key pasting.
+                                    </p>
+                                    <div class="feature-grid">
+                                        <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
+                                        <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
+                                        <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
+                                        <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
+                                        <div class="feature">🪪 Peer verification from public key to EVM address</div>
+                                        <div class="feature">✍️ Per-message signatures verified on receive</div>
+                                        <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                                    </div>
+                                    <p>
+                                        WebRTC stays the preferred transport. If a direct connection cannot be
+                                        established, messages fall back to the relays — still signed and ECIES-encrypted
+                                        exactly as before, with NIP-44 on top. The chat header says which path is in use:
+                                        <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
+                                    </p>
+                                </article>
+
+                                <article class="about-card lp-reveal">
+                                    <h3>🤝 Cryptographic validity is not consent</h3>
+                                    <p>
+                                        Verifying an invitation proves the sender <em>is who they claim</em>. It does not
+                                        mean you want to talk to them — and anyone who knows your <code>npub</code> can
+                                        produce a perfectly valid offer. Answering one is not free: it reveals your full
+                                        ECIES public key, your EVM address, and, through ICE gathering, your machine's
+                                        network addresses.
+                                    </p>
+                                    <p>
+                                        So an invitation from anyone who is not already a trusted contact simply
+                                        <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
+                                        sent back until you press Accept. Declining discards it silently — the sender is
+                                        not told, because telling them would confirm the address is live — and their
+                                        retries are dropped, so a refusal cannot be worn down by repetition.
+                                    </p>
+                                    <div class="feature-grid">
+                                        <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+                                        <div class="feature">📨 A stranger's chat request arrives there too — one ask is enough</div>
+                                        <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
+                                        <div class="feature">🚫 Decline sends nothing at all</div>
+                                        <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
+                                        <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
+                                        <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
+                                    </div>
+                                    <p>
+                                        Trust is authorization layered on top of authentication — it replaces none of the
+                                        existing checks. A trusted friend's invitation is still verified end to end, and
+                                        its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
+                                        what was stored, so taking over an <code>npub</code> does not inherit the trust
+                                        attached to it. Removing a contact is a local change only: they become unknown
+                                        again, and no key is deleted or rotated on either side.
+                                    </p>
+                                </article>
+
+                                <article class="about-card lp-reveal">
+                                    <h3>🛰️ Nostr relay: browser to relay, directly</h3>
+                                    <p>
+                                        The app talks straight to one public relay over a WebSocket. There is no Web25
+                                        relay, no proxy and no signalling server — just a rendezvous both sides agree on.
+                                    </p>
+                                    <p>
+                                        Two browsers can only meet on a relay they both use. Spreading over several
+                                        relays looks sturdier and behaves worse: a message accepted by one relay and a
+                                        subscription healthy on another never meet, and the invitation is lost while
+                                        every relay involved reports success. One relay makes finding each other
+                                        predictable, at an honest cost: while that relay is down, the messenger is
+                                        down with it.
+                                    </p>
+                                    <div class="feature-grid">
+                                        <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>
+                                        <div class="feature">⚙️ One array in the config — point it at your own relay</div>
+                                        <div class="feature">🧯 Reconnects with backoff; a dropped socket is not a lost session</div>
+                                        <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
+                                    </div>
+                                </article>
+
+                                <article class="about-card lp-reveal">
+                                    <h3>🛡️ Security profile</h3>
+                                    <p>
+                                        WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+                                        The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
+                                        to support richer static websites.
+                                    </p>
+                                    <div class="feature-grid">
+                                        <div class="feature">🧾 Signed-manifest verification before render gates</div>
+                                        <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
+                                        <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
+                                        <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
+                                    </div>
+                                </article>
+                            </div>
                         </div>
                     </section>
 
