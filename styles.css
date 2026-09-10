@@ -808,7 +808,7 @@ input[type='text'],
 input[type='password'],
 input[type='search'],
 textarea {
-    flex: 1 1 16rem;
+    flex: 1 1 2rem;
     min-width: 0;
     padding: 0.58rem 0.8rem;
     border: 1px solid var(--border-strong);
@@ -2520,7 +2520,7 @@ input[type='checkbox'] {
 
 .dm-search-result-main {
     min-width: 0;
-    flex: 1 1 16rem;
+    flex: 1 1 4rem;
 }
 
 .dm-search-result-name {

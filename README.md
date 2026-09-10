@@ -573,9 +573,10 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 ## Future goals (not implemented yet)
 
 1. Own WebTorrent tracker
-2. Own STUN/TURN infra
-3. Encrypted static-site content
-4. Decryption-key unlock via atomic-swap payment flow
+2. Own Nostr infrastructure
+3. Migrating from GoFile to Sia Network
+4. Encrypted static-site content
+5. Decryption-key unlock via atomic-swap payment flow
 
 ---
 
