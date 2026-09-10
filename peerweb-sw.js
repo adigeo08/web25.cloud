@@ -2,7 +2,7 @@
 // @ts-check
 
 // Service Worker Version
-const SW_VERSION = 'v1.0.0';
+const SW_VERSION = 'v1.0.1';
 const CACHE_NAME = `peerweb-cache-${SW_VERSION}`;
 
 console.log(`[PeerWeb SW] Service worker loading... Version: ${SW_VERSION}`);
