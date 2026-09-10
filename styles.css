@@ -4296,3 +4296,20 @@ select,
         scroll-behavior: auto !important;
     }
 }
+
+.lp-logos-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 16px;
+    width: 100%;
+}
+
+.lp-logo {
+    min-width: 0;
+}
+
+@media (max-width: 768px) {
+    .lp-logos-row {
+        grid-template-columns: 1fr;
+    }
+}
