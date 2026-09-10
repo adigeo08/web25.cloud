@@ -141,6 +141,22 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend }) {
 
     bindCopyButton(copyOwnNpubBtn, () => document.getElementById('dm-own-npub-value')?.textContent || '');
 
+    // The address itself is the obvious thing to click, so it drives the same
+    // copy button rather than carrying a second clipboard implementation (and
+    // its own success/failure flash) alongside it.
+    const ownNpubValue = document.getElementById('dm-own-npub-value');
+    if (ownNpubValue && !ownNpubValue.dataset.copyBound) {
+        ownNpubValue.dataset.copyBound = '1';
+        const copyOwnNpub = () => copyOwnNpubBtn?.dispatchEvent(new MouseEvent('click'));
+        ownNpubValue.addEventListener('click', copyOwnNpub);
+        ownNpubValue.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                copyOwnNpub();
+            }
+        });
+    }
+
     sendBtn?.addEventListener('click', () => onSend(messageInput?.value || ''));
     messageInput?.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') onSend(messageInput.value || '');

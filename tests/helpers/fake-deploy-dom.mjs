@@ -49,6 +49,12 @@ function element(extra = {}) {
     node.removeAttribute = (name) => {
         delete node.attributes[name];
     };
+    node.toggleAttribute = (name, force) => {
+        const on = force === undefined ? !(name in node.attributes) : Boolean(force);
+        if (on) node.attributes[name] = '';
+        else delete node.attributes[name];
+        return on;
+    };
     node.addEventListener = (type, handler) => {
         (node.listeners[type] = node.listeners[type] || []).push(handler);
     };
@@ -63,6 +69,9 @@ function stepChip(text, { note = null } = {}) {
     if (note !== null) chip.children['.step-chip-note'] = element({ textContent: note });
     return chip;
 }
+
+/** The wizard's screens, in the order index.html declares them. */
+const SCREEN_NAMES = ['upload', 'sign', 'live'];
 
 const CHIP_LABELS = [
     '1. Select files',
@@ -84,6 +93,15 @@ export function installDeployDom() {
 
     const elements = new Map();
     const chips = CHIP_LABELS.map((label, index) => stepChip(label, { note: index === 5 ? 'Optional' : null }));
+    const screens = SCREEN_NAMES.map((name) => {
+        const screen = element();
+        screen.setAttribute('data-deploy-screen', name);
+        if (name === 'upload') screen.classList.add('is-active');
+        return screen;
+    });
+    // "Change files" / "Deploy another site": presentation-only back navigation.
+    const navButtons = [element(), element()];
+    navButtons.forEach((button) => button.setAttribute('data-deploy-nav', 'upload'));
     const opened = [];
     const copied = [];
 
@@ -115,7 +133,10 @@ export function installDeployDom() {
             return elements.get(id);
         },
         querySelectorAll(selector) {
-            return selector === '#tab-publish .step-chip' ? chips : [];
+            if (selector === '#tab-publish .step-chip') return chips;
+            if (selector === '#tab-publish [data-deploy-screen]') return screens;
+            if (selector === '#tab-publish [data-deploy-nav]') return navButtons;
+            return [];
         },
         querySelector: () => null,
         addEventListener() {}
@@ -124,8 +145,14 @@ export function installDeployDom() {
     return {
         elements,
         chips,
+        screens,
+        navButtons,
         opened,
         copied,
+        /** The screen currently on show, by name. */
+        activeScreen: () => screens.find((s) => s.classList.contains('is-active'))?.getAttribute('data-deploy-screen') ?? null,
+        /** Press one of the "back to the drop zone" buttons. */
+        pressDeployNav: (index = 0) => navButtons[index].dispatch('click'),
         get: (id) => globalThis.document.getElementById(id),
         text: (id) => globalThis.document.getElementById(id).textContent,
         /** The chip states, 1-based, as a readable array for assertions. */

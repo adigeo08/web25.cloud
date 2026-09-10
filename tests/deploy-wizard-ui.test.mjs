@@ -142,14 +142,75 @@ test('progress and status regions carry the semantics assistive tech needs', () 
 test('the resolver input documents and accepts all three address forms', () => {
     // The help text used to promise that only a bare hash was accepted.
     assert.doesNotMatch(MARKUP, /Just the hash/);
-    assert.match(MARKUP, /Enter a hash, <code>hash&amp;GoFileLocator<\/code>, or a complete WEB25 URL/);
-    assert.match(MARKUP, /placeholder="Torrent hash, hash&amp;mirror, or WEB25 URL/);
+    assert.match(MARKUP, /placeholder="Paste a torrent hash, hash&amp;mirror, or WEB25 URL/);
+    // Each accepted form is named on the gateway itself, beside the field,
+    // rather than only inside the placeholder.
+    assert.match(MARKUP, /<b>hash<\/b> 40-character infohash/);
+    assert.match(MARKUP, /<b>hash&amp;locator<\/b> hash with GoFile mirror/);
+    assert.match(MARKUP, /<b>web25 url<\/b> a complete shared link/);
 
     for (const input of [HASH, `${HASH}&${LOCATOR}`, `https://web25.cloud/?orc=${HASH}&${LOCATOR}`]) {
         const parsed = parseWeb25Address(input);
         assert.equal(parsed.torrentHash, HASH);
         assert.equal(parsed.gofileLocator, input === HASH ? null : LOCATOR);
     }
+});
+
+// ── 1b. Wizard screens ──────────────────────────────────────────────────────
+
+test('the wizard shows one screen per stage, ending on the shareable result', async () => {
+    const { dom, context } = await deployHarness();
+
+    context.pendingDeployFiles = [];
+    context.lastSignature = null;
+    context.lastSignedPublish = null;
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'upload');
+
+    context.pendingDeployFiles = [payloadFile('index.html', 'x')];
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'sign');
+
+    // Signing does not move the publisher: Deploy is the next button on the
+    // same screen.
+    context.lastSignature = { signature: '0xsig' };
+    context.lastSignedPublish = { torrentHash: HASH };
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'sign');
+
+    context.lastDeployResult = { hash: HASH, mirrorState: 'disabled' };
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'live');
+
+    // Whatever is off-screen is out of the tab order too.
+    const hidden = dom.screens.filter((screen) => !screen.classList.contains('is-active'));
+    assert.equal(hidden.length, 2);
+    hidden.forEach((screen) => assert.equal(screen.getAttribute('inert'), ''));
+});
+
+test('stepping back to the drop zone keeps deploy state and yields when the pipeline moves on', async () => {
+    const { dom, context } = await deployHarness();
+
+    context.pendingDeployFiles = [payloadFile('index.html', 'x')];
+    context.lastSignature = { signature: '0xsig' };
+    context.lastSignedPublish = { torrentHash: HASH };
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'sign');
+
+    dom.pressDeployNav();
+    assert.equal(dom.activeScreen(), 'upload');
+
+    // Looking back at the drop zone is presentation only: the staged files and
+    // the signature that let Deploy run are still there.
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'upload');
+    assert.equal(dom.get('sign-publish-btn').disabled, false);
+    assert.equal(dom.get('publish-btn').disabled, false);
+
+    // The pipeline itself moving on overrides where the publisher wandered.
+    context.lastDeployResult = { hash: HASH, mirrorState: 'disabled' };
+    context.refreshDeployUiState();
+    assert.equal(dom.activeScreen(), 'live');
 });
 
 // ── 2. Wizard state, before deployment ──────────────────────────────────────
