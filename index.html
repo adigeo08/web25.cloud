@@ -73,10 +73,22 @@
                 <div class="network-telemetry" aria-label="Network status">
                     <span><b>01</b> BROWSER NODE</span><span><b>E2E</b> ENCRYPTED</span><span><b>P2P</b> DELIVERY</span>
                 </div>
+
+                <!-- Phone-only: opens the tab list below the bar. -->
+                <button
+                    id="nav-toggle"
+                    class="nav-burger"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="primary-nav"
+                >
+                    <span class="nav-burger-bars" aria-hidden="true"></span>
+                    Menu
+                </button>
             </header>
 
             <!-- Tab Navigation -->
-            <nav class="tab-nav" role="tablist">
+            <nav id="primary-nav" class="tab-nav" role="tablist">
                 <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
                     🔍 Search
                 </button>
@@ -564,19 +576,6 @@
                         <!-- SUB-PANEL 1: Find someone to message -->
                         <div id="dm-choose-role">
                             <h3>💬 Direct Messenger</h3>
-                            <div class="dm-lede">
-                                <p>
-                                    Message anyone by their Nostr address. Unknown peers wait for you to
-                                    accept; trusted contacts reconnect on their own.
-                                </p>
-                                <ul class="dm-stack">
-                                    <li><span>Transport</span> WebRTC · relay fallback</li>
-                                    <li><span>Signalling</span> Nostr NIP-59 gift wrap</li>
-                                    <li><span>Messages</span> ECIES + NIP-44, signed</li>
-                                    <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
-                                </ul>
-                            </div>
-
                             <div class="dm-search">
                                 <label class="dm-search-label" for="dm-recipient-npub-input">Recipient Nostr address</label>
                                 <div class="hash-input-group">
@@ -603,6 +602,19 @@
                                 </div>
 
                                 <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
+                            </div>
+
+                            <div class="dm-lede">
+                                <p>
+                                    Message anyone by their Nostr address. Unknown peers wait for you to
+                                    accept; trusted contacts reconnect on their own.
+                                </p>
+                                <ul class="dm-stack">
+                                    <li><span>Transport</span> WebRTC · relay fallback</li>
+                                    <li><span>Signalling</span> Nostr NIP-59 gift wrap</li>
+                                    <li><span>Messages</span> ECIES + NIP-44, signed</li>
+                                    <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
+                                </ul>
                             </div>
                         </div>
 
@@ -649,14 +661,16 @@
 
                         <div class="gateway-search">
                             <div class="hash-input-group gateway-input-group">
-                                <span class="gateway-search-icon" aria-hidden="true">🔍</span>
-                                <input
-                                    type="text"
-                                    id="hash-input"
-                                    placeholder="Paste a torrent hash, hash&amp;mirror, or WEB25 URL"
-                                    class="hash-input"
-                                    aria-label="Torrent hash, hash and mirror locator, or complete WEB25 URL"
-                                />
+                                <div class="gateway-field">
+                                    <span class="gateway-search-icon" aria-hidden="true">🔍</span>
+                                    <input
+                                        type="text"
+                                        id="hash-input"
+                                        placeholder="Paste a torrent hash, hash&amp;mirror, or WEB25 URL"
+                                        class="hash-input"
+                                        aria-label="Torrent hash, hash and mirror locator, or complete WEB25 URL"
+                                    />
+                                </div>
                                 <button id="load-site" class="btn btn-primary">Load Site</button>
                             </div>
                             <div class="gateway-formats" aria-label="Accepted formats">
@@ -1254,6 +1268,30 @@
                         if (panel) panel.classList.add('active');
                     });
                 });
+
+                // Phone navigation: the tab list is collapsed behind a burger.
+                // Desktop never calls this — the list is always laid out there.
+                var navToggle = document.getElementById('nav-toggle');
+                var primaryNav = document.getElementById('primary-nav');
+                function setNavOpen(open) {
+                    if (!primaryNav || !navToggle) return;
+                    primaryNav.classList.toggle('is-open', open);
+                    navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                }
+                if (navToggle && primaryNav) {
+                    navToggle.addEventListener('click', function () {
+                        setNavOpen(!primaryNav.classList.contains('is-open'));
+                    });
+                    // Choosing a destination closes the menu behind you.
+                    btns.forEach(function (btn) {
+                        btn.addEventListener('click', function () {
+                            setNavOpen(false);
+                        });
+                    });
+                    document.addEventListener('keydown', function (event) {
+                        if (event.key === 'Escape') setNavOpen(false);
+                    });
+                }
 
                 // In-page links that jump to a tab (landing-page CTAs). They
                 // drive the real tab button so nav state stays in one place.
