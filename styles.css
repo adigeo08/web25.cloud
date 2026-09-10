@@ -401,6 +401,69 @@ ol {
     display: none !important;
 }
 
+/* Phone navigation trigger. Hidden on desktop, where the tab strip stands. */
+.nav-burger {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.nav-burger:hover {
+    background: var(--surface-2);
+}
+
+.nav-burger-bars,
+.nav-burger-bars::before,
+.nav-burger-bars::after {
+    display: block;
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: currentColor;
+}
+
+.nav-burger-bars {
+    position: relative;
+}
+
+.nav-burger-bars::before,
+.nav-burger-bars::after {
+    content: '';
+    position: absolute;
+    left: 0;
+}
+
+.nav-burger-bars::before {
+    top: -5px;
+}
+
+.nav-burger-bars::after {
+    top: 5px;
+}
+
+.nav-burger[aria-expanded='true'] .nav-burger-bars {
+    background: transparent;
+}
+
+.nav-burger[aria-expanded='true'] .nav-burger-bars::before {
+    top: 0;
+    transform: rotate(45deg);
+}
+
+.nav-burger[aria-expanded='true'] .nav-burger-bars::after {
+    top: 0;
+    transform: rotate(-45deg);
+}
+
 .container {
     width: 100%;
     max-width: var(--shell);
@@ -2399,7 +2462,15 @@ input[type='checkbox'] {
 }
 
 .dm-search {
+    margin-top: 0.9rem;
+}
+
+/* The search now leads the panel, so the explanation that follows it reads as
+   background rather than as a preamble. */
+.dm-search + .dm-lede {
     margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-soft);
 }
 
 .dm-search.hidden {
@@ -2893,7 +2964,7 @@ input[type='checkbox'] {
 .gateway-input-group {
     position: relative;
     margin: 0;
-    padding: 0.35rem 0.35rem 0.35rem 2.6rem;
+    padding: 0.35rem 0.35rem 0.35rem 1.1rem;
     border: 1px solid var(--border-strong);
     border-radius: 999px;
     background: var(--surface);
@@ -2901,6 +2972,16 @@ input[type='checkbox'] {
     transition:
         border-color 0.15s ease,
         box-shadow 0.15s ease;
+}
+
+/* Icon and input travel together, so the pill can become a stacked field on a
+   phone without the icon floating away from the row it belongs to. */
+.gateway-field {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 8rem;
+    align-items: center;
+    gap: 0.55rem;
 }
 
 .gateway-input-group:focus-within {
@@ -2911,17 +2992,15 @@ input[type='checkbox'] {
 }
 
 .gateway-search-icon {
-    position: absolute;
-    left: 1rem;
-    top: 50%;
-    transform: translateY(-50%);
+    flex: 0 0 auto;
     font-size: 0.9rem;
     opacity: 0.7;
     pointer-events: none;
 }
 
 .gateway-input-group .hash-input {
-    flex: 1 1 12rem;
+    flex: 1 1 4rem;
+    min-width: 0;
     padding: 0.5rem 0.25rem;
     border: 0;
     background: none;
@@ -2933,6 +3012,7 @@ input[type='checkbox'] {
 }
 
 .gateway-input-group .btn {
+    flex: 0 0 auto;
     border-radius: 999px;
     padding: 0.55rem 1.3rem;
 }
@@ -3166,6 +3246,178 @@ input[type='checkbox'] {
 .lp-logo-role {
     color: var(--muted);
     font-size: 0.72rem;
+}
+
+/* ── Phone layout ────────────────────────────────────────────────────────
+   Everything below 720px only. Desktop and the tablet range keep the rules
+   defined above untouched. */
+
+@media (max-width: 720px) {
+    /* Top bar: brand and the burger share the first line. */
+    .hero {
+        align-items: center;
+        gap: 0.6rem 0.75rem;
+        padding: 0.6rem clamp(0.9rem, 4vw, 2rem);
+    }
+
+    .hero h1 {
+        order: 0;
+        flex: 1 1 auto;
+        font-size: 1rem;
+    }
+
+    .nav-burger {
+        display: inline-flex;
+        order: 1;
+        flex: 0 0 auto;
+    }
+
+    .hero-kicker {
+        order: 2;
+        font-size: 0.62rem;
+    }
+
+    /* Three static facts are not worth two rows above the fold on a phone. */
+    .network-telemetry {
+        display: none;
+    }
+
+    /* The tab list drops out of the bar and behind the burger. */
+    .tab-nav {
+        display: none;
+        padding: 0.5rem;
+        gap: 0.15rem;
+        overflow: visible;
+    }
+
+    .tab-nav.is-open {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        box-shadow: var(--shadow-lg);
+    }
+
+    .tab-btn {
+        width: 100%;
+        justify-content: flex-start;
+        padding: 0.75rem 0.85rem;
+        border-radius: var(--r-sm);
+        font-size: 0.95rem;
+    }
+
+    .tab-btn:hover {
+        background: var(--surface-2);
+    }
+
+    .tab-btn.active {
+        background: var(--accent-soft);
+    }
+
+    /* The active marker moves to the leading edge, where a list expects it. */
+    .tab-btn::after {
+        left: 0;
+        right: auto;
+        top: 0.4rem;
+        bottom: 0.4rem;
+        width: 2px;
+        height: auto;
+        border-radius: 2px;
+    }
+
+    .tab-badge {
+        margin-left: auto;
+    }
+
+    /* Search: the field takes a line of its own, the action takes the next. */
+    .gateway-input-group {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        border-radius: var(--r-lg);
+    }
+
+    .gateway-field {
+        flex: 1 1 auto;
+        padding: 0.2rem 0.5rem;
+    }
+
+    .gateway-input-group .hash-input {
+        flex: 1 1 auto;
+        width: 100%;
+        padding: 0.55rem 0.15rem;
+        font-size: 0.88rem;
+    }
+
+    .gateway-input-group .btn {
+        width: 100%;
+    }
+
+    /* Deploy steps: one row showing the step before, the current one in the
+       middle, and the step after. The rest stay out of the way. */
+    .deploy-stepper {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+        align-items: start;
+        gap: 0.4rem;
+        margin: 1.1rem 0 1.2rem;
+    }
+
+    .deploy-stepper::before {
+        content: '';
+        position: absolute;
+        top: 10px;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--border);
+    }
+
+    .step-chip {
+        display: none;
+        padding: 1.7rem 0.15rem 0;
+        font-size: 0.7rem;
+        text-align: center;
+    }
+
+    /* The rails belong to the seven-across view; this one has its own. */
+    .step-chip::after {
+        display: none;
+    }
+
+    .step-chip.is-current {
+        display: block;
+        grid-column: 2;
+    }
+
+    .step-chip:has(+ .step-chip.is-current) {
+        display: block;
+        grid-column: 1;
+    }
+
+    .step-chip.is-current + .step-chip {
+        display: block;
+        grid-column: 3;
+    }
+
+    /* Neighbours are context, not the task in hand. */
+    .step-chip:has(+ .step-chip.is-current),
+    .step-chip.is-current + .step-chip {
+        opacity: 0.5;
+    }
+
+    .step-chip:has(+ .step-chip.is-current) .step-chip-text,
+    .step-chip.is-current + .step-chip .step-chip-text {
+        display: block;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    .step-chip .step-chip-note {
+        font-size: 0.58rem;
+    }
 }
 
 @media (max-width: 640px) {
@@ -3979,34 +4231,8 @@ select,
         font-size: 14px;
     }
 
-    .hero {
-        align-items: flex-start;
-    }
-
-    .hero h1 {
-        flex-basis: 100%;
-        order: 0;
-    }
-
-    .hero-kicker,
-    .network-telemetry {
-        order: 2;
-    }
-
     .container {
         padding-bottom: 2rem;
-    }
-
-    .deploy-stepper {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .step-chip:nth-child(3n)::after {
-        display: block;
-    }
-
-    .step-chip:nth-child(2n)::after {
-        display: none;
     }
 
     .channels-message {
