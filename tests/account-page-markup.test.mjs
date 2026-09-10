@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 
 const MARKUP = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
-const NAV = MARKUP.slice(MARKUP.indexOf('<nav class="tab-nav"'), MARKUP.indexOf('</nav>'));
+const NAV = MARKUP.slice(MARKUP.indexOf('<nav id="primary-nav"'), MARKUP.indexOf('</nav>'));
 const ACCOUNT = MARKUP.slice(MARKUP.indexOf('id="tab-auth"'), MARKUP.indexOf('<!-- ── PUBLISH TAB ── -->'));
 
 test('the navigation reads Search, Deploy, Account, Chat, About', () => {
