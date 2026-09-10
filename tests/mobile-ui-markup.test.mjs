@@ -57,3 +57,16 @@ test('the recipient search leads the messenger panel, ahead of the explanation',
     assert.match(panel, /id="dm-nostr-search-btn"/);
     assert.match(panel, /id="dm-search-result"/);
 });
+
+test('the recipient search button spans the row on a phone, like Copy my address', () => {
+    const phone = STYLES.slice(STYLES.lastIndexOf('@media (max-width: 640px)'));
+    // The copy button is full width at every size; the search button only needs
+    // to be at this one, where its field already takes the whole row and a
+    // content-width control under it reads as an afterthought.
+    assert.match(STYLES, /\.dm-copy-address-btn \{[\s\S]*?width: 100%;/);
+    assert.match(phone, /\.dm-search \.hash-input-group \{[\s\S]*?flex-direction: column;/);
+    assert.match(phone, /\.dm-search \.hash-input-group \.btn \{[\s\S]*?width: 100%;/);
+    // Both controls live in the messenger panel, which is what makes the
+    // mismatch visible in the first place.
+    assert.match(MARKUP, /id="dm-copy-own-npub-btn"[\s\S]*?id="dm-nostr-search-btn"/);
+});
