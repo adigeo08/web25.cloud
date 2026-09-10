@@ -1190,6 +1190,8 @@ input[type='checkbox'] {
     border-radius: var(--r-lg);
     background: var(--bg-soft);
     text-align: center;
+    /* The whole panel opens the file picker, so it points like a control. */
+    cursor: pointer;
     transition:
         border-color 0.18s ease,
         background 0.18s ease;
@@ -4248,6 +4250,19 @@ select,
     .dm-own-pubkey-panel .btn {
         width: 100%;
         margin-left: 0 !important;
+    }
+
+    /* The recipient search wraps onto its own line at this width anyway, and a
+       content-width button under a full-width field reads as an afterthought.
+       It gets the same full-width treatment as "Copy my address" above it, so
+       the two controls on the messenger panel match. */
+    .dm-search .hash-input-group {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .dm-search .hash-input-group .btn {
+        width: 100%;
     }
 
     .result-actions .btn,

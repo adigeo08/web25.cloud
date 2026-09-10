@@ -3,6 +3,81 @@
 import { readSignedTorrentMetadata } from '../../torrent/SignedTorrentProtocol.js';
 import { formatWeb25Url } from '../../gofile/Web25Url.js';
 
+/**
+ * Read everything under a dropped directory entry, depth first.
+ *
+ * A folder dropped on the zone arrives in `dataTransfer.files` as a single
+ * entry with no contents — readable as a name and nothing else. The directory
+ * itself is only reachable through `webkitGetAsEntry`, so that is what is
+ * walked here.
+ *
+ * Each file is tagged with its path relative to the drop, root folder included,
+ * which is the same shape `<input webkitdirectory>` produces in
+ * `webkitRelativePath` — so a dropped folder and a picked one are indis-
+ * tinguishable by the time they reach the bundler.
+ *
+ * @param {any} entry
+ * @param {File[]} out
+ */
+async function collectEntry(entry, out) {
+    if (!entry) return;
+
+    if (entry.isFile) {
+        const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+        if (!file) return;
+        // fullPath is "/root/sub/file.html"; the leading slash is not part of a
+        // relative path and would survive normalization as an absolute one.
+        const path = `${entry.fullPath || file.name}`.replace(/^\/+/, '');
+        try {
+            Object.defineProperty(file, 'path', { value: path });
+        } catch (_) {}
+        out.push(file);
+        return;
+    }
+
+    if (!entry.isDirectory) return;
+
+    const reader = entry.createReader();
+    // readEntries returns at most a batchful per call and signals the end with
+    // an empty batch, so one call is not enough for a real site.
+    for (;;) {
+        const batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+        if (!batch.length) return;
+        for (const child of batch) await collectEntry(child, out);
+    }
+}
+
+/**
+ * The files behind a drop, folders expanded.
+ *
+ * Falls back to the flat `files` list when the browser offers no entry API —
+ * loose files still work there, which is all that list can describe anyway.
+ *
+ * @param {DataTransfer | null} dataTransfer
+ * @returns {Promise<File[]>}
+ */
+async function filesFromDrop(dataTransfer) {
+    if (!dataTransfer) return [];
+
+    // A DataTransfer only holds its data for the duration of the event, and
+    // reading a directory is asynchronous — so both lists are taken now, before
+    // the first await, and the object is not touched again afterwards.
+    const flat = Array.from(dataTransfer.files || []);
+    const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+    const entries = items
+        .filter((item) => item.kind === 'file')
+        .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+        .filter(Boolean);
+
+    if (!entries.length) return flat;
+
+    const files = [];
+    for (const entry of entries) await collectEntry(entry, files);
+    // A directory that could not be read at all should not silently stage
+    // nothing when the flat list has something usable in it.
+    return files.length ? files : flat;
+}
+
 export function setupDragAndDrop() {
     const dropZone = document.getElementById('drop-zone');
     const folderInput = document.getElementById('folder-input');
@@ -20,24 +95,55 @@ export function setupDragAndDrop() {
         });
     });
 
-    // Highlight drop zone when item is dragged over it
-    ['dragenter', 'dragover'].forEach((eventName) => {
-        dropZone.addEventListener(eventName, () => {
-            dropZone.classList.add('drag-over');
-        });
+    // Highlight while a drag is anywhere over the zone. dragenter/dragleave
+    // fire again on every child the pointer crosses, so the highlight is kept
+    // on a depth count rather than on the last event seen — otherwise it
+    // flickers off over the icon and the heading, exactly where people aim.
+    let dragDepth = 0;
+    dropZone.addEventListener('dragenter', () => {
+        dragDepth += 1;
+        dropZone.classList.add('drag-over');
     });
-
-    ['dragleave', 'drop'].forEach((eventName) => {
-        dropZone.addEventListener(eventName, () => {
-            dropZone.classList.remove('drag-over');
-        });
+    dropZone.addEventListener('dragleave', () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) dropZone.classList.remove('drag-over');
     });
 
     // Handle dropped files
     dropZone.addEventListener('drop', (e) => {
-        const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
-        this.handleDroppedFiles(files);
+        dragDepth = 0;
+        dropZone.classList.remove('drag-over');
+        filesFromDrop(e.dataTransfer)
+            .catch((error) => {
+                // Reading a directory can fail outright; a drop that stages
+                // nothing and says nothing is the one outcome to avoid.
+                this.log(`Could not read the dropped folder: ${error?.message || error}`);
+                return e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+            })
+            .then((files) => this.handleDroppedFiles(files));
     });
+
+    // The whole zone is the target, not just the button in the middle of it:
+    // it is drawn as one dashed panel that says "drop a folder here", so a
+    // click anywhere on it opens the picker. Clicks that land on a control of
+    // their own are left to it, or the button below would open the picker
+    // twice.
+    if (folderInput) {
+        const openPicker = () => folderInput.click();
+
+        dropZone.addEventListener('click', (e) => {
+            const target = /** @type {HTMLElement} */ (e.target);
+            if (target && target.closest('button, a, input, label, select, textarea')) return;
+            openPicker();
+        });
+
+        // The zone deliberately gets no role and no tabindex. It contains the
+        // "Select Folder" button, which is already in the tab order and already
+        // opens the picker, and a role="button" holding an interactive
+        // descendant is invalid ARIA — a screen reader may swallow the real
+        // button into the wrapper's name. Clicking the panel is a pointer
+        // shortcut to a control that is still there, not the only way in.
+    }
 
     // Folder selection button
     const selectFolder = document.getElementById('select-folder');

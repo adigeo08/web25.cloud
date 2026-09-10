@@ -952,9 +952,19 @@
                                         <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
                                         <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
                                         <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
-                                        <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
+                                        <div class="feature">🧬 WebAuthn PRF unlock with Face ID / Touch ID / device PIN</div>
+                                        <div class="feature">🗝️ Several passkeys, one wallet — each wraps the same key</div>
                                         <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
                                     </div>
+                                    <p>
+                                        The passkey does more than gate the unlock — it is what the key is wrapped
+                                        <em>with</em>. Web25 requires the WebAuthn <strong>PRF</strong> extension, and the
+                                        secret the authenticator returns during a user-verified assertion is stretched
+                                        through HKDF-SHA256 into a non-extractable AES-GCM key that wraps the vault. That
+                                        secret never leaves the call stack and is never written to storage, so nothing
+                                        persisted on the device is enough on its own to derive the wallet. A browser or
+                                        security key without PRF is refused rather than quietly handed a weaker path.
+                                    </p>
                                     <p>
                                         The Account page shows all three side by side, each with its own copy button.
                                         The Nostr address can be added or removed there: removing it takes you off the
