@@ -115,21 +115,14 @@
                                             id="lock-disconnect-auth-btn"
                                             class="btn btn-secondary hidden"
                                     >
-                                        Lock Wallet
-                                    </button>
-
-                                    <button
-                                            id="delete-local-wallet-btn"
-                                            class="btn btn-clear"
-                                    >
-                                        Delete Wallet
+                                        🔒 Lock Wallet
                                     </button>
 
                                     <button
                                             id="add-passkey-btn"
                                             class="btn btn-secondary hidden"
                                     >
-                                        Add Passkey
+                                        🧬 Add Passkey
                                     </button>
                                 </div>
                             </div>
@@ -172,6 +165,22 @@
                                                 title="Copy ECIES public key"
                                         >
                                             📋 Copy
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="identity-key-footer">
+                                    <p class="identity-pubkey-hint">
+                                        The EVM address and the ECIES key are two faces of one local
+                                        secp256k1 key. Deleting the wallet removes both from this browser.
+                                    </p>
+
+                                    <div class="button-group identity-key-actions">
+                                        <button
+                                                id="delete-local-wallet-btn"
+                                                class="btn btn-clear btn-sm"
+                                        >
+                                            🗑️ Delete Wallet
                                         </button>
                                     </div>
                                 </div>
@@ -287,74 +296,15 @@
                     </section>
 
                     <div id="deploy-panel" class="hidden">
-                        <section class="quick-upload card-base">
-                            <h3>📤 Quick Upload</h3>
-                            <div id="drop-zone" class="drop-zone">
-                                <div class="drop-content">
-                                    <div class="drop-icon">📁</div>
-                                    <h4>Drag &amp; Drop Your Website</h4>
-                                    <p>Drop a folder with your static site files. We bundle it in browser memory, then sign and deploy.</p>
-                                    <div class="drop-buttons">
-                                        <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
-                                    </div>
+                        <section class="deploy-shell card-base">
+                            <div class="console-heading">
+                                <div>
+                                    <span class="section-kicker">DEPLOY / PIPELINE</span>
+                                    <h3>Ship a static site</h3>
                                 </div>
-                                <div id="upload-progress" class="upload-progress hidden">
-                                    <div class="progress-container">
-                                        <div class="progress-track">
-                                            <div
-                                                id="upload-progress-bar"
-                                                class="progress-bar"
-                                                role="progressbar"
-                                                aria-valuemin="0"
-                                                aria-valuemax="100"
-                                                aria-valuenow="0"
-                                                aria-labelledby="upload-progress-text"
-                                            ></div>
-                                        </div>
-                                        <div id="upload-progress-text" class="progress-text" role="status" aria-live="polite">Processing files...</div>
-                                    </div>
-                                </div>
+                                <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             </div>
 
-                            <div id="upload-result" class="upload-result hidden">
-                                <div class="result-success">
-                                    <h4>✅ Website Ready</h4>
-                                    <div class="result-info">
-                                        <p><strong>Status:</strong> <code id="result-transport">Live and seeding over WebTorrent</code></p>
-                                        <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
-                                        <p id="result-gofile-row" class="hidden">
-                                            <strong>GoFile fallback mirror:</strong>
-                                            <code id="result-gofile-mirror"></code>
-                                        </p>
-                                        <p><strong>Web25 URL:</strong> <code id="result-url"></code></p>
-                                        <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
-                                        <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
-                                        <p>
-                                            <strong>Signature status:</strong>
-                                            <code id="result-signature-status">UNVERIFIED</code>
-                                        </p>
-                                    </div>
-                                    <div class="result-actions">
-                                        <button id="open-site" class="btn btn-primary">🚀 Open Site</button>
-                                        <button id="copy-link" class="btn btn-secondary">📋 Copy Link</button>
-                                        <a id="download-torrent-file" class="btn btn-secondary" download
-                                            >💾 Download .torrent</a
-                                        >
-                                    </div>
-                                    <div class="hosting-notice">
-                                        <div class="notice-box">
-                                            <h5>☁️ Hosting Notice</h5>
-                                            <p>Your website is signed, deployed, and seeding from an in-memory bundle in this session.</p>
-                                            <p>Keep this tab open for P2P availability. A GoFile mirror, when you ask for one, is temporary fallback transport only.</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="controls deploy-card card-base">
-                            <h3>✍️ Sign and Deploy</h3>
-                            <p id="signature-status" class="status-chip status-pending">Signature pending</p>
                             <div class="deploy-stepper" role="list" aria-label="Deployment progress">
                                 <span class="step-chip is-current" role="listitem"
                                     ><span class="step-chip-text">1. Select files</span></span
@@ -379,36 +329,141 @@
                                     ><span class="step-chip-text">7. Live + mirrored</span></span
                                 >
                             </div>
-                            <div class="deploy-stage-box" role="status" aria-live="polite">
-                                <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
-                                <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
+
+                            <!--
+                                Stage, progress and next-action live outside the screens: a
+                                deployment reports progress while the sign screen is showing, so
+                                these must never be inside the screen that happens to be hidden.
+                            -->
+                            <div class="deploy-status">
+                                <div class="deploy-stage-box" role="status" aria-live="polite">
+                                    <div id="deploy-stage-label" class="stage-label">Stage 1 · Select files</div>
+                                    <div id="deploy-stage-detail" class="stage-detail">In-memory artifact not staged</div>
+                                </div>
+                                <div id="upload-progress" class="upload-progress hidden">
+                                    <div class="progress-container">
+                                        <div class="progress-track">
+                                            <div
+                                                id="upload-progress-bar"
+                                                class="progress-bar"
+                                                role="progressbar"
+                                                aria-valuemin="0"
+                                                aria-valuemax="100"
+                                                aria-valuenow="0"
+                                                aria-labelledby="upload-progress-text"
+                                            ></div>
+                                        </div>
+                                        <div id="upload-progress-text" class="progress-text" role="status" aria-live="polite">Processing files...</div>
+                                    </div>
+                                </div>
+                                <p id="deploy-wizard-next" class="deploy-wizard-next">▶ Next: Upload your website folder to stage files.</p>
                             </div>
-                            <p id="deploy-wizard-next" class="deploy-wizard-next">▶ Next: Upload your website folder to stage files.</p>
-                            <div class="deploy-option">
-                                <label class="deploy-option-label" for="deploy-gofile-mirror">
-                                    <input
-                                        type="checkbox"
-                                        id="deploy-gofile-mirror"
-                                        aria-describedby="deploy-gofile-mirror-hint"
-                                    />
-                                    <span>Create temporary GoFile fallback mirror</span>
-                                </label>
-                                <p id="deploy-gofile-mirror-hint" class="deploy-option-hint">
-                                    Optional. Uploads a copy of this signed deployment to GoFile. WebTorrent remains the
-                                    primary transport, and your deployment succeeds either way.
-                                </p>
+
+                            <div class="deploy-screens">
+                                <!-- SCREEN 1 · Stage files -->
+                                <section class="deploy-screen is-active" data-deploy-screen="upload" aria-label="Select files">
+                                    <div class="deploy-screen-head">
+                                        <h4>Step 1 · Choose your website folder</h4>
+                                        <p>Everything is bundled in browser memory. Nothing is uploaded to a server.</p>
+                                    </div>
+                                    <div id="drop-zone" class="drop-zone">
+                                        <div class="drop-content">
+                                            <div class="drop-icon">📁</div>
+                                            <h4>Drag &amp; Drop Your Website</h4>
+                                            <p>Drop a folder with your static site files. We bundle it in browser memory, then sign and deploy.</p>
+                                            <div class="drop-buttons">
+                                                <button id="select-folder" class="btn btn-primary">📁 Select Folder</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <!-- SCREEN 2 · Sign and deploy -->
+                                <section class="deploy-screen" data-deploy-screen="sign" aria-label="Sign and deploy">
+                                    <div class="deploy-screen-head">
+                                        <h4>Step 2 · Sign, then deploy</h4>
+                                        <p>Your local identity signs the payload; the signed torrent is what goes live.</p>
+                                    </div>
+                                    <div class="deploy-option">
+                                        <label class="deploy-option-label" for="deploy-gofile-mirror">
+                                            <input
+                                                type="checkbox"
+                                                id="deploy-gofile-mirror"
+                                                aria-describedby="deploy-gofile-mirror-hint"
+                                            />
+                                            <span>Create temporary GoFile fallback mirror</span>
+                                        </label>
+                                        <p id="deploy-gofile-mirror-hint" class="deploy-option-hint">
+                                            Optional. Uploads a copy of this signed deployment to GoFile. WebTorrent remains the
+                                            primary transport, and your deployment succeeds either way.
+                                        </p>
+                                    </div>
+                                    <div class="button-group deploy-actions">
+                                        <button id="sign-publish-btn" class="btn btn-primary" disabled>✍️ Sign Payload</button>
+                                        <button id="publish-btn" class="btn btn-create" disabled>🚀 Deploy Signed Torrent</button>
+                                        <button type="button" class="btn btn-secondary" data-deploy-nav="upload">
+                                            ↩ Change files
+                                        </button>
+                                    </div>
+                                    <details id="deploy-tech-details">
+                                        <summary>View technical details</summary>
+                                        <h4>Payload Preview</h4>
+                                        <pre id="publish-payload-preview" class="code-block"></pre>
+                                        <h4>Deploy Output</h4>
+                                        <pre id="publish-output" class="code-block"></pre>
+                                    </details>
+                                </section>
+
+                                <!-- SCREEN 3 · Live -->
+                                <section class="deploy-screen" data-deploy-screen="live" aria-label="Deployment result">
+                                    <div id="upload-result" class="upload-result hidden">
+                                        <div class="result-success">
+                                            <div class="result-hero">
+                                                <span class="result-hero-badge status-chip status-success">Live and seeding</span>
+                                                <h4>Your site is live</h4>
+                                                <p class="result-hero-hint">
+                                                    Share this WEB25 link — anyone who opens it loads your site straight
+                                                    from the peer network.
+                                                </p>
+                                                <div class="result-url-row">
+                                                    <code id="result-url"></code>
+                                                </div>
+                                                <div class="result-actions">
+                                                    <button id="open-site" class="btn btn-primary btn-lg">🚀 Open Site</button>
+                                                    <button id="copy-link" class="btn btn-secondary btn-lg">📋 Copy Link</button>
+                                                    <a id="download-torrent-file" class="btn btn-secondary" download
+                                                        >💾 Download .torrent</a
+                                                    >
+                                                    <button type="button" class="btn btn-secondary" data-deploy-nav="upload">
+                                                        ➕ Deploy another site
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="result-info">
+                                                <p><strong>Status:</strong> <code id="result-transport">Live and seeding over WebTorrent</code></p>
+                                                <p><strong>Torrent hash:</strong> <code id="result-hash"></code></p>
+                                                <p id="result-gofile-row" class="hidden">
+                                                    <strong>GoFile fallback mirror:</strong>
+                                                    <code id="result-gofile-mirror"></code>
+                                                </p>
+                                                <p><strong>Signed by:</strong> <code id="result-signed-by">Not signed</code></p>
+                                                <p><strong>Signature:</strong> <code id="result-signature-preview">N/A</code></p>
+                                                <p>
+                                                    <strong>Signature status:</strong>
+                                                    <code id="result-signature-status">UNVERIFIED</code>
+                                                </p>
+                                            </div>
+                                            <div class="hosting-notice">
+                                                <div class="notice-box">
+                                                    <h5>☁️ Hosting Notice</h5>
+                                                    <p>Your website is signed, deployed, and seeding from an in-memory bundle in this session.</p>
+                                                    <p>Keep this tab open for P2P availability. A GoFile mirror, when you ask for one, is temporary fallback transport only.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
                             </div>
-                            <div class="button-group">
-                                <button id="sign-publish-btn" class="btn btn-primary" disabled>Sign Payload</button>
-                                <button id="publish-btn" class="btn btn-create" disabled>Deploy Signed Torrent</button>
-                            </div>
-                            <details id="deploy-tech-details">
-                                <summary>View technical details</summary>
-                                <h4>Payload Preview</h4>
-                                <pre id="publish-payload-preview" class="code-block"></pre>
-                                <h4>Deploy Output</h4>
-                                <pre id="publish-output" class="code-block"></pre>
-                            </details>
                         </section>
 
                         <details class="deploy-help-details">
@@ -443,6 +498,38 @@
 
                         <div class="dm-layout">
                         <aside class="dm-contacts" aria-label="Contacts">
+                            <div id="dm-my-npub-panel" class="dm-own-pubkey-panel dm-identity-card hidden">
+                                <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
+                                <code
+                                    id="dm-own-npub-value"
+                                    class="dm-own-pubkey-value"
+                                    title="Click to copy"
+                                    role="button"
+                                    tabindex="0"
+                                ></code>
+                                <button
+                                    id="dm-copy-own-npub-btn"
+                                    class="btn btn-primary btn-sm dm-copy-address-btn"
+                                    title="Copy my Nostr address"
+                                >
+                                    📋 Copy my address
+                                </button>
+                                <p class="dm-own-pubkey-hint">Share this so others can message you.</p>
+                            </div>
+
+                            <div id="dm-my-npub-locked" class="dm-own-pubkey-panel dm-identity-card hidden">
+                                <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
+                                <p class="dm-own-pubkey-hint">Unlock your wallet to see your Nostr address.</p>
+                            </div>
+
+                            <div id="dm-nostr-disabled" class="dm-own-pubkey-panel dm-identity-card hidden">
+                                <p class="dm-own-pubkey-label">🪐 Nostr identity removed</p>
+                                <p class="dm-own-pubkey-hint">
+                                    Add your Nostr identity on the Identity page to send and receive
+                                    Direct Messages.
+                                </p>
+                            </div>
+
                             <section id="dm-invitations" class="dm-invitations hidden" aria-label="Chat invitations">
                                 <div class="dm-contacts-head">
                                     <p class="dm-contacts-title">Chat invitations</p>
@@ -487,28 +574,6 @@
                                     <li><span>Messages</span> ECIES + NIP-44, signed</li>
                                     <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
                                 </ul>
-                            </div>
-
-                            <div id="dm-my-npub-panel" class="dm-own-pubkey-panel hidden">
-                                <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
-                                <div class="identity-pubkey-row">
-                                    <code id="dm-own-npub-value" class="dm-own-pubkey-value"></code>
-                                    <button id="dm-copy-own-npub-btn" class="btn btn-secondary btn-sm" title="Copy my Nostr address" style="margin-left: 0.5rem; white-space: nowrap">📋 Copy</button>
-                                </div>
-                                <p class="dm-own-pubkey-hint">Share this so others can message you.</p>
-                            </div>
-
-                            <div id="dm-my-npub-locked" class="dm-own-pubkey-panel hidden">
-                                <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
-                                <p class="dm-own-pubkey-hint">Unlock your wallet to see your Nostr address.</p>
-                            </div>
-
-                            <div id="dm-nostr-disabled" class="dm-own-pubkey-panel hidden">
-                                <p class="dm-own-pubkey-label">🪐 Nostr identity removed</p>
-                                <p class="dm-own-pubkey-hint">
-                                    Add your Nostr identity on the Identity page to send and receive
-                                    Direct Messages.
-                                </p>
                             </div>
 
                             <div class="dm-search">
@@ -572,214 +637,333 @@
 
                 <!-- ── BROWSE TAB ── -->
                 <div id="tab-browse" class="tab-panel active" role="tabpanel">
-                    <section class="example cloud-console card-base">
-                        <div class="console-heading"><div><span class="section-kicker">GATEWAY / RESOLVE</span><h3>Load a Site by Hash</h3></div><span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span></div>
-                        <p>Resolve and open any peer-hosted website through your local browser node.</p>
-                        <div class="hash-input-group">
-                            <input
-                                type="text"
-                                id="hash-input"
-                                placeholder="Torrent hash, hash&amp;mirror, or WEB25 URL..."
-                                class="hash-input"
-                                aria-label="Torrent hash, hash and mirror locator, or complete WEB25 URL"
-                            />
-                            <button id="load-site" class="btn btn-primary">Load Site</button>
+                    <section class="gateway">
+                        <div class="gateway-brand">
+                            <div class="gateway-logo" aria-hidden="true">☁️</div>
+                            <p class="gateway-wordmark">WEB25 <span>gateway</span></p>
+                            <p class="gateway-tagline">
+                                Open any peer-hosted site by its hash, mirror locator or full WEB25 link.
+                            </p>
                         </div>
-                        <p>🎯 Enter a hash, <code>hash&amp;GoFileLocator</code>, or a complete WEB25 URL. P2P is always tried first.</p>
+
+                        <div class="gateway-search">
+                            <div class="hash-input-group gateway-input-group">
+                                <span class="gateway-search-icon" aria-hidden="true">🔍</span>
+                                <input
+                                    type="text"
+                                    id="hash-input"
+                                    placeholder="Paste a torrent hash, hash&amp;mirror, or WEB25 URL"
+                                    class="hash-input"
+                                    aria-label="Torrent hash, hash and mirror locator, or complete WEB25 URL"
+                                />
+                                <button id="load-site" class="btn btn-primary">Load Site</button>
+                            </div>
+                            <div class="gateway-formats" aria-label="Accepted formats">
+                                <span class="gateway-format"><b>hash</b> 40-character infohash</span>
+                                <span class="gateway-format"><b>hash&amp;locator</b> hash with GoFile mirror</span>
+                                <span class="gateway-format"><b>web25 url</b> a complete shared link</span>
+                            </div>
+                            <p class="gateway-note">
+                                P2P is always tried first. A mirror is only ever a fallback.
+                            </p>
+                        </div>
+
+                        <div class="gateway-meta">
+                            <span class="status-chip status-success"><i class="live-dot"></i> Gateway ready</span>
+                            <span class="gateway-meta-item">Signature checked before render</span>
+                            <span class="gateway-meta-item">Sandboxed, opaque-origin frame</span>
+                            <span class="gateway-meta-item">Local cache first</span>
+                        </div>
                     </section>
 
-                    <section class="debug console-widget card-base">
-                        <h3>🐛 Debug Mode</h3>
-                        <p>Add <code>&amp;debug=true</code> to any URL for detailed progress logs:</p>
-                        <div class="code-block">
-                            <code>https://WEB25.cloud?orc=ABC123DEF456...&amp;debug=true</code>
-                        </div>
+                    <section class="gateway-facts">
+                        <article class="gateway-fact">
+                            <div class="gateway-fact-icon" aria-hidden="true">🛰️</div>
+                            <h4>Resolved by your browser</h4>
+                            <p>Your own node joins the swarm and pulls the bundle from whoever is seeding it.</p>
+                        </article>
+                        <article class="gateway-fact">
+                            <div class="gateway-fact-icon" aria-hidden="true">🧾</div>
+                            <h4>Verified before it renders</h4>
+                            <p>The signed <code>.torrentchain</code> manifest is checked against the publisher identity.</p>
+                        </article>
+                        <article class="gateway-fact">
+                            <div class="gateway-fact-icon" aria-hidden="true">🧯</div>
+                            <h4>Mirror as a fallback</h4>
+                            <p>If no peer answers, a temporary GoFile locator in the link can serve the same bytes.</p>
+                        </article>
                     </section>
+
+                    <details class="gateway-debug">
+                        <summary>🐛 Debug mode</summary>
+                        <section class="debug">
+                            <p>Add <code>&amp;debug=true</code> to any URL for detailed progress logs:</p>
+                            <div class="code-block">
+                                <code>https://WEB25.cloud?orc=ABC123DEF456...&amp;debug=true</code>
+                            </div>
+                        </section>
+                    </details>
                 </div>
 
                 <!-- ── ABOUT TAB ── -->
                 <div id="tab-about" class="tab-panel" role="tabpanel">
-                    <section class="intro about-hero-card card-base">
-                        <h3>☁️ About WEB25.cloud</h3>
-                        <p>
-                            WEB25.cloud is a
-                            <a href="https://github.com/Omodaka9375/peerweb" target="_blank" rel="noopener noreferrer">PeerWeb fork</a>
-                            focused on local EVM identity, signed static-site deploys, and direct peer-to-peer messaging
-                            addressed by Nostr. Core flows are browser-native: no backend, no signalling server and no
-                            mandatory MetaMask connection. The browser talks directly to STUN, WebTorrent and public
-                            Nostr relays.
+                    <!-- Landing hero -->
+                    <section class="lp-hero">
+                        <span class="lp-eyebrow">☁️ WEB25.cloud · a PeerWeb fork</span>
+                        <h2 class="lp-title">The web, hosted by the people reading it</h2>
+                        <p class="lp-sub">
+                            Sign a static site with a key that never leaves your browser, seed it to the
+                            swarm, and message anyone by their Nostr address — no backend, no signalling
+                            server, no mandatory wallet extension.
                         </p>
-                    </section>
-
-                    <section class="features about-bento">
-                        <article class="about-card">
-                            <h3>🪪 Identity: one local key, three addresses</h3>
-                            <p>
-                                The identity model is local-first and is inspired by
-                                <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
-                                key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
-                                A single secp256k1 key backs all three identities shown on the Identity page —
-                                there is no second seed and no second private key.
-                            </p>
-                            <div class="feature-grid">
-                                <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
-                                <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
-                                <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
-                                <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
-                                <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
-                                <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
-                            </div>
-                            <p>
-                                The Identity page shows all three side by side, each with its own copy button.
-                                The Nostr address can be added or removed there: removing it takes you off the
-                                relays and hides the address, and adding it back restores the same
-                                <code>npub</code> — because it was never a separate key to begin with.
-                            </p>
-                        </article>
-
-                        <article class="about-card">
-                            <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
-                            <p>
-                                Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
-                                manifest carrying publisher identity and integrity metadata.
-                            </p>
-                            <div class="feature-grid">
-                                <div class="feature">🗜️ Default bundle mode: gzip</div>
-                                <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
-                                <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
-                                <div class="feature">✅ Identity/integrity checks applied during load</div>
-                            </div>
-                        </article>
-
-                        <article class="about-card">
-                            <h3>💬 Direct Messenger: search an address, start a chat</h3>
-                            <p>
-                                Messaging UX started from
-                                <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
-                                and replaced its manual offer/answer step entirely. You enter someone's Nostr
-                                address, and the encrypted WebRTC invitation is delivered for you through public
-                                Nostr relays — no magnet links or key pasting.
-                            </p>
-                            <div class="feature-grid">
-                                <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
-                                <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
-                                <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
-                                <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
-                                <div class="feature">🪪 Peer verification from public key to EVM address</div>
-                                <div class="feature">✍️ Per-message signatures verified on receive</div>
-                                <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
-                            </div>
-                            <p>
-                                WebRTC stays the preferred transport. If a direct connection cannot be
-                                established, messages fall back to the relays — still signed and ECIES-encrypted
-                                exactly as before, with NIP-44 on top. The chat header says which path is in use:
-                                <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
-                            </p>
-                        </article>
-
-                        <article class="about-card">
-                            <h3>🤝 Cryptographic validity is not consent</h3>
-                            <p>
-                                Verifying an invitation proves the sender <em>is who they claim</em>. It does not
-                                mean you want to talk to them — and anyone who knows your <code>npub</code> can
-                                produce a perfectly valid offer. Answering one is not free: it reveals your full
-                                ECIES public key, your EVM address, and, through ICE gathering, your machine's
-                                network addresses.
-                            </p>
-                            <p>
-                                So an invitation from anyone who is not already a trusted contact simply
-                                <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
-                                sent back until you press Accept. Declining discards it silently — the sender is
-                                not told, because telling them would confirm the address is live — and their
-                                retries are dropped, so a refusal cannot be worn down by repetition.
-                            </p>
-                            <p>
-                                One person asking is enough. A stranger's chat request lands in that same list
-                                with Accept and Decline, so nobody has to guess that they should go and search
-                                for the other. Accepting is what sends consent back, and the connection starts
-                                from there. A trusted contact never queues at all.
-                            </p>
-                            <div class="feature-grid">
-                                <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
-                                <div class="feature">📨 A stranger's chat request arrives there too — one ask is enough</div>
-                                <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
-                                <div class="feature">🚫 Decline sends nothing at all</div>
-                                <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
-                                <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
-                                <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
-                            </div>
-                            <p>
-                                Trust is authorization layered on top of authentication — it replaces none of the
-                                existing checks. A trusted friend's invitation is still verified end to end, and
-                                its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
-                                what was stored, so taking over an <code>npub</code> does not inherit the trust
-                                attached to it. Removing a contact is a local change only: they become unknown
-                                again, and no key is deleted or rotated on either side.
-                            </p>
-                        </article>
-
-                        <article class="about-card">
-                            <h3>🛰️ Nostr relay: browser to relay, directly</h3>
-                            <p>
-                                The app talks straight to one public relay over a WebSocket. There is no Web25
-                                relay, no proxy and no signalling server — just a rendezvous both sides agree on.
-                            </p>
-                            <p>
-                                Two browsers can only meet on a relay they both use. Spreading over several
-                                relays looks sturdier and behaves worse: a message accepted by one relay and a
-                                subscription healthy on another never meet, and the invitation is lost while
-                                every relay involved reports success. One relay makes finding each other
-                                predictable, at an honest cost: while that relay is down, the messenger is
-                                down with it.
-                            </p>
-                            <div class="feature-grid">
-                                <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>
-                                <div class="feature">⚙️ One array in the config — point it at your own relay</div>
-                                <div class="feature">🧯 Reconnects with backoff; a dropped socket is not a lost session</div>
-                                <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
-                            </div>
-                        </article>
-
-                        <article class="about-card">
-                            <h3>🛡️ Security profile</h3>
-                            <p>
-                                WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
-                                The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
-                                to support richer static websites.
-                            </p>
-                            <div class="feature-grid">
-                                <div class="feature">🧾 Signed-manifest verification before render gates</div>
-                                <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
-                                <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
-                                <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
-                            </div>
-                        </article>
-                    </section>
-
-                    <section class="requirements">
-                        <h3>📋 What is available now</h3>
-                        <div class="req-list">
-                            <div class="req">✅ Signed static-site deploys with publisher identity in .torrentchain</div>
-                            <div class="req">✅ Load-time verification path for identity + bundle integrity</div>
-                            <div class="req">✅ Local EVM identity protected by WebAuthn passkeys</div>
-                            <div class="req">✅ One key, three identities: EVM, ECIES and Nostr</div>
-                            <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
-                            <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
-                            <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
-                            <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
+                        <div class="lp-cta">
+                            <button type="button" class="btn btn-primary btn-lg" data-goto-tab="publish">
+                                🚀 Deploy a site
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-lg" data-goto-tab="browse">
+                                🔍 Open the gateway
+                            </button>
+                        </div>
+                        <div class="lp-hero-stats">
+                            <div class="lp-stat"><b>0</b><span>servers to rent</span></div>
+                            <div class="lp-stat"><b>1</b><span>local key, three addresses</span></div>
+                            <div class="lp-stat"><b>E2E</b><span>encrypted direct messages</span></div>
+                            <div class="lp-stat"><b>P2P</b><span>browser-to-browser delivery</span></div>
                         </div>
                     </section>
 
-                    <section class="benefits">
-                        <h3>🛣️ Future goals</h3>
-                        <div class="benefit-grid">
-                            <div class="benefit">🛰️ Own WebTorrent tracker</div>
-                            <div class="benefit">🧊 Own STUN/TURN infrastructure</div>
-                            <div class="benefit">🔒 Encrypted static-site content delivery</div>
-                            <div class="benefit">💱 Decryption-key unlock via atomic-swap payment flow</div>
+                    <!-- How it works -->
+                    <section class="lp-section">
+                        <div class="lp-section-head">
+                            <span class="section-kicker">How it works</span>
+                            <h3>Three steps, all of them in your browser</h3>
+                        </div>
+                        <div class="lp-steps">
+                            <article class="lp-step">
+                                <span class="lp-step-num">1</span>
+                                <h4>Bundle and sign</h4>
+                                <p>
+                                    Your folder is bundled in memory (gzip by default) and signed with your
+                                    local EVM identity. A <code>.torrentchain</code> manifest carries the
+                                    publisher identity and integrity metadata.
+                                </p>
+                            </article>
+                            <article class="lp-step">
+                                <span class="lp-step-num">2</span>
+                                <h4>Seed to the swarm</h4>
+                                <p>
+                                    WebTorrent seeds the signed bundle straight from this tab. An optional
+                                    GoFile mirror can stand in as temporary fallback transport.
+                                </p>
+                            </article>
+                            <article class="lp-step">
+                                <span class="lp-step-num">3</span>
+                                <h4>Share one link</h4>
+                                <p>
+                                    Anyone who opens your WEB25 link resolves it peer-first, verifies the
+                                    signature, and renders the site in a sandboxed, opaque-origin frame.
+                                </p>
+                            </article>
+                        </div>
+                    </section>
+
+                    <!-- Deep dive -->
+                    <section class="lp-section">
+                        <div class="lp-section-head">
+                            <span class="section-kicker">Under the hood</span>
+                            <h3>What the platform actually does</h3>
+                        </div>
+                        <div class="about-bento">
+                            <article class="about-card">
+                                <h3>🪪 Identity: one local key, three addresses</h3>
+                                <p>
+                                    The identity model is local-first and is inspired by
+                                    <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
+                                    key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+                                    A single secp256k1 key backs all three identities shown on the Identity page —
+                                    there is no second seed and no second private key.
+                                </p>
+                                <div class="feature-grid">
+                                    <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
+                                    <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
+                                    <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
+                                    <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
+                                    <div class="feature">🧬 WebAuthn unlock with Face ID / Touch ID / device PIN</div>
+                                    <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
+                                </div>
+                                <p>
+                                    The Identity page shows all three side by side, each with its own copy button.
+                                    The Nostr address can be added or removed there: removing it takes you off the
+                                    relays and hides the address, and adding it back restores the same
+                                    <code>npub</code> — because it was never a separate key to begin with.
+                                </p>
+                            </article>
+
+                            <article class="about-card">
+                                <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+                                <p>
+                                    Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
+                                    manifest carrying publisher identity and integrity metadata.
+                                </p>
+                                <div class="feature-grid">
+                                    <div class="feature">🗜️ Default bundle mode: gzip</div>
+                                    <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
+                                    <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
+                                    <div class="feature">✅ Identity/integrity checks applied during load</div>
+                                </div>
+                            </article>
+
+                            <article class="about-card">
+                                <h3>💬 Direct Messenger: search an address, start a chat</h3>
+                                <p>
+                                    Messaging UX started from
+                                    <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
+                                    and replaced its manual offer/answer step entirely. You enter someone's Nostr
+                                    address, and the encrypted WebRTC invitation is delivered for you through public
+                                    Nostr relays — no magnet links or key pasting.
+                                </p>
+                                <div class="feature-grid">
+                                    <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
+                                    <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
+                                    <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
+                                    <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
+                                    <div class="feature">🪪 Peer verification from public key to EVM address</div>
+                                    <div class="feature">✍️ Per-message signatures verified on receive</div>
+                                    <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+                                </div>
+                                <p>
+                                    WebRTC stays the preferred transport. If a direct connection cannot be
+                                    established, messages fall back to the relays — still signed and ECIES-encrypted
+                                    exactly as before, with NIP-44 on top. The chat header says which path is in use:
+                                    <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
+                                </p>
+                            </article>
+
+                            <article class="about-card">
+                                <h3>🤝 Cryptographic validity is not consent</h3>
+                                <p>
+                                    Verifying an invitation proves the sender <em>is who they claim</em>. It does not
+                                    mean you want to talk to them — and anyone who knows your <code>npub</code> can
+                                    produce a perfectly valid offer. Answering one is not free: it reveals your full
+                                    ECIES public key, your EVM address, and, through ICE gathering, your machine's
+                                    network addresses.
+                                </p>
+                                <p>
+                                    So an invitation from anyone who is not already a trusted contact simply
+                                    <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
+                                    sent back until you press Accept. Declining discards it silently — the sender is
+                                    not told, because telling them would confirm the address is live — and their
+                                    retries are dropped, so a refusal cannot be worn down by repetition.
+                                </p>
+                                <div class="feature-grid">
+                                    <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+                                    <div class="feature">📨 A stranger's chat request arrives there too — one ask is enough</div>
+                                    <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
+                                    <div class="feature">🚫 Decline sends nothing at all</div>
+                                    <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
+                                    <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
+                                    <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
+                                </div>
+                                <p>
+                                    Trust is authorization layered on top of authentication — it replaces none of the
+                                    existing checks. A trusted friend's invitation is still verified end to end, and
+                                    its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
+                                    what was stored, so taking over an <code>npub</code> does not inherit the trust
+                                    attached to it. Removing a contact is a local change only: they become unknown
+                                    again, and no key is deleted or rotated on either side.
+                                </p>
+                            </article>
+
+                            <article class="about-card">
+                                <h3>🛰️ Nostr relay: browser to relay, directly</h3>
+                                <p>
+                                    The app talks straight to one public relay over a WebSocket. There is no Web25
+                                    relay, no proxy and no signalling server — just a rendezvous both sides agree on.
+                                </p>
+                                <p>
+                                    Two browsers can only meet on a relay they both use. Spreading over several
+                                    relays looks sturdier and behaves worse: a message accepted by one relay and a
+                                    subscription healthy on another never meet, and the invitation is lost while
+                                    every relay involved reports success. One relay makes finding each other
+                                    predictable, at an honest cost: while that relay is down, the messenger is
+                                    down with it.
+                                </p>
+                                <div class="feature-grid">
+                                    <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>
+                                    <div class="feature">⚙️ One array in the config — point it at your own relay</div>
+                                    <div class="feature">🧯 Reconnects with backoff; a dropped socket is not a lost session</div>
+                                    <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
+                                </div>
+                            </article>
+
+                            <article class="about-card">
+                                <h3>🛡️ Security profile</h3>
+                                <p>
+                                    WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+                                    The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
+                                    to support richer static websites.
+                                </p>
+                                <div class="feature-grid">
+                                    <div class="feature">🧾 Signed-manifest verification before render gates</div>
+                                    <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
+                                    <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
+                                    <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
+                                </div>
+                            </article>
+                        </div>
+                    </section>
+
+                    <!-- Status -->
+                    <section class="lp-section">
+                        <div class="lp-section-head">
+                            <span class="section-kicker">Status</span>
+                            <h3>Shipped today, and what comes next</h3>
+                        </div>
+                        <div class="lp-status-grid">
+                            <section class="requirements">
+                                <h3>📋 What is available now</h3>
+                                <div class="req-list">
+                                    <div class="req">✅ Signed static-site deploys with publisher identity in .torrentchain</div>
+                                    <div class="req">✅ Load-time verification path for identity + bundle integrity</div>
+                                    <div class="req">✅ Local EVM identity protected by WebAuthn passkeys</div>
+                                    <div class="req">✅ One key, three identities: EVM, ECIES and Nostr</div>
+                                    <div class="req">✅ Direct P2P messaging with asymmetric cryptography</div>
+                                    <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
+                                    <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
+                                    <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
+                                </div>
+                            </section>
+
+                            <section class="benefits">
+                                <h3>🛣️ Future goals</h3>
+                                <div class="benefit-grid">
+                                    <div class="benefit">🛰️ Own WebTorrent tracker</div>
+                                    <div class="benefit">🧊 Own STUN/TURN infrastructure</div>
+                                    <div class="benefit">🔒 Encrypted static-site content delivery</div>
+                                    <div class="benefit">💱 Decryption-key unlock via atomic-swap payment flow</div>
+                                </div>
+                            </section>
+                        </div>
+                    </section>
+
+                    <!-- Closing CTA -->
+                    <section class="lp-closing">
+                        <h3>Publish something nobody can take down for you</h3>
+                        <p>
+                            Create a local wallet, drop a folder, sign it, and share the link. It runs
+                            entirely in this tab.
+                        </p>
+                        <div class="lp-cta">
+                            <button type="button" class="btn btn-primary btn-lg" data-goto-tab="publish">
+                                🚀 Start deploying
+                            </button>
+                            <a class="btn btn-secondary btn-lg" href="https://github.com/adigeo08/web25.cloud" target="_blank" rel="noopener noreferrer">
+                                ⭐ View the source
+                            </a>
                         </div>
                     </section>
                 </div>
+
             </main>
 
             <footer>
@@ -917,6 +1101,18 @@
                         btn.setAttribute('aria-selected', 'true');
                         var panel = document.getElementById('tab-' + target);
                         if (panel) panel.classList.add('active');
+                    });
+                });
+
+                // In-page links that jump to a tab (landing-page CTAs). They
+                // drive the real tab button so nav state stays in one place.
+                document.querySelectorAll('[data-goto-tab]').forEach(function (el) {
+                    el.addEventListener('click', function () {
+                        var wanted = el.getAttribute('data-goto-tab');
+                        var btn = document.querySelector('.tab-nav .tab-btn[data-tab="' + wanted + '"]');
+                        if (!btn) return;
+                        btn.click();
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
                     });
                 });
             })();

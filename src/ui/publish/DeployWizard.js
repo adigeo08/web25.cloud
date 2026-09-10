@@ -21,6 +21,19 @@ let wizardNextEl = null;
 /** @type {HTMLDetailsElement | null} */
 let techDetails = null;
 
+/** @type {NodeListOf<HTMLElement> | null} */
+let screens = null;
+
+/**
+ * The screen the publisher asked to see ("Change files", "Deploy another"),
+ * which holds only until the pipeline itself moves on to a different one.
+ * @type {string | null}
+ */
+let manualScreen = null;
+
+/** Screen derived from state on the previous update, to detect that move. */
+let lastDerivedScreen = null;
+
 const MIRROR_STEP = 6;
 const LIVE_STEP = 7;
 
@@ -41,6 +54,37 @@ export function initDeployWizard() {
     stepChips = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#tab-publish .step-chip'));
     wizardNextEl = document.getElementById('deploy-wizard-next');
     techDetails = /** @type {HTMLDetailsElement | null} */ (document.getElementById('deploy-tech-details'));
+    screens = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#tab-publish [data-deploy-screen]'));
+    manualScreen = null;
+    lastDerivedScreen = null;
+
+    // Screen navigation is presentation only: it never touches deploy state, so
+    // a publisher can look back at the drop zone without losing a signature.
+    document.querySelectorAll('#tab-publish [data-deploy-nav]').forEach((button) => {
+        button.addEventListener('click', () => {
+            manualScreen = button.getAttribute('data-deploy-nav');
+            applyScreen(manualScreen);
+        });
+    });
+}
+
+/** Which of the three screens a pipeline step belongs to. */
+function screenForStep(activeStep, hasDeployResult) {
+    if (hasDeployResult) return 'live';
+    if (activeStep >= 4) return 'sign';
+    return 'upload';
+}
+
+function applyScreen(name) {
+    if (!screens || screens.length === 0) return;
+    screens.forEach((screen) => {
+        const isActive = screen.getAttribute('data-deploy-screen') === name;
+        screen.classList.toggle('is-active', isActive);
+        // Hidden screens leave the accessibility tree and the tab order with
+        // them, so nothing focusable sits behind the one on show.
+        screen.toggleAttribute('inert', !isActive);
+        screen.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+    });
 }
 
 function setChipText(chip, selector, text) {
@@ -125,6 +169,15 @@ export function updateDeployWizard(state) {
         }
         wizardNextEl.textContent = nextText;
     }
+
+    // Move to the screen this step belongs to. A publisher who stepped back
+    // stays where they are until the pipeline itself advances.
+    const derivedScreen = screenForStep(activeStep, hasDeployResult);
+    if (derivedScreen !== lastDerivedScreen) {
+        lastDerivedScreen = derivedScreen;
+        manualScreen = null;
+    }
+    applyScreen(manualScreen || derivedScreen);
 
     // Auto-open technical details panel on error states
     if (techDetails && isError) {

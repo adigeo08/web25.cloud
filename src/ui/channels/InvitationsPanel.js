@@ -114,7 +114,9 @@ function renderInvitationRow(invitation) {
     body.appendChild(npub);
 
     const evm = document.createElement('p');
-    evm.className = 'dm-invite-evm';
+    // A request carries no address, so that line is a sentence rather than a
+    // key, and it is marked as one instead of being set in monospace.
+    evm.className = invitation.evmAddress ? 'dm-invite-evm' : 'dm-invite-evm is-note';
     // A request has no keys in it by design, so saying "no EVM identity" would
     // read as something missing rather than as the shape of a request. It must
     // not promise a check either: accepting sends consent, and the identity
