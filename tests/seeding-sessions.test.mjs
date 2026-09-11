@@ -412,3 +412,213 @@ test('a stop that cannot be persisted keeps the session and says so', async () =
     assert.equal(torrent.destroyed, false, 'the site keeps being served');
     assert.equal(context._seedingTorrents.size, 1);
 });
+
+/** A torrent that can be told it died, the way WebTorrent's does. */
+function emitterTorrent(hash = HASH) {
+    const listeners = new Map();
+    return {
+        infoHash: hash,
+        name: 'my-site',
+        pieceLength: 32768,
+        length: 42,
+        numPeers: 1,
+        uploaded: 0,
+        destroyed: false,
+        once(event, handler) {
+            listeners.set(event, handler);
+        },
+        emit(event, payload) {
+            listeners.get(event)?.(payload);
+        },
+        destroy() {
+            this.destroyed = true;
+            this.emit('close');
+        }
+    };
+}
+
+test('two records for the same hash do not overwrite each other', async () => {
+    const { context } = await harness();
+    const payload = [payloadFile('index.html', 'x')];
+
+    // A mirrored deploy records itself twice in quick succession. Run
+    // concurrently against a store that reads before it writes, both calls used
+    // to read the same old state and the later write lost.
+    const [, second] = await Promise.all([
+        context.recordSeedingSession.call(context, {
+            hash: HASH,
+            torrent: liveTorrent(),
+            torrentFile: null,
+            payloadFiles: payload,
+            siteName: 'my-site',
+            deploy: { ...DEPLOY, mirrorState: 'pending' }
+        }),
+        context.recordSeedingSession.call(context, {
+            hash: HASH,
+            torrent: liveTorrent(),
+            torrentFile: null,
+            payloadFiles: payload,
+            siteName: 'my-site',
+            deploy: { ...DEPLOY, mirror: { locator: 'abc123', filename: 'm.json' }, mirrorState: 'available' }
+        })
+    ]);
+
+    const record = await context._seedingStore.get(HASH);
+    assert.equal(record.deploy.mirrorState, 'available', 'the newest metadata wins');
+    assert.equal(record.deploy.mirror.locator, 'abc123');
+    assert.equal(second.deploy.mirrorState, 'available');
+    assert.equal(record.fileCount, 1, 'and the payload was copied once, not twice');
+});
+
+test('a seed callback that arrives after the timeout is destroyed, not left running', async () => {
+    const { context } = await harness();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent: liveTorrent(),
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    const fresh = await harness();
+    fresh.context._seedingStore = context._seedingStore;
+    fresh.context._resumeTimeoutMs = 20;
+
+    let late = null;
+    fresh.context.client = {
+        get: () => null,
+        seed(files, options, callback) {
+            // WebTorrent keeps hashing after we stop waiting, and calls back.
+            late = liveTorrent();
+            setTimeout(() => callback(late), 60);
+        }
+    };
+
+    await fresh.context.restoreSeedingSessions.call(fresh.context);
+    assert.match(fresh.context._seedingErrors.get(HASH), /Timed out/);
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Nothing tracks that torrent: it would seed forever with no card in Pages
+    // and no way to stop it.
+    assert.equal(late.destroyed, true, 'the late torrent is torn down');
+    assert.equal(fresh.context._seedingTorrents.size, 0);
+});
+
+test('one stuck session does not hold up the others', async () => {
+    const { context } = await harness();
+    for (const hash of [HASH, OTHER_HASH, 'a'.repeat(40)]) {
+        await context.recordSeedingSession.call(context, {
+            hash,
+            torrent: { ...liveTorrent(hash) },
+            torrentFile: null,
+            payloadFiles: [payloadFile('index.html', hash)],
+            siteName: `site-${hash.slice(0, 4)}`,
+            deploy: DEPLOY
+        });
+    }
+
+    const fresh = await harness();
+    fresh.context._seedingStore = context._seedingStore;
+    fresh.context._resumeTimeoutMs = 60;
+    fresh.context.client = {
+        get: () => null,
+        seed(files, options, callback) {
+            const hash = new TextDecoder().decode(files[0].bytes ?? new Uint8Array());
+            // One session never calls back at all.
+            if (hash === OTHER_HASH) return;
+            callback({ ...liveTorrent(hash), name: options.name });
+        }
+    };
+
+    const started = Date.now();
+    await fresh.context.restoreSeedingSessions.call(fresh.context);
+    const elapsed = Date.now() - started;
+
+    assert.equal(fresh.context._seedingTorrents.size, 2, 'the healthy sessions came up');
+    assert.match(fresh.context._seedingErrors.get(OTHER_HASH), /Timed out/);
+    // Sequentially this would be three timeouts long; concurrently it is one.
+    assert.ok(elapsed < 200, `restoring ran concurrently (${elapsed}ms)`);
+});
+
+test('a torrent that dies stops being reported as seeding', async () => {
+    const { context } = await harness();
+    const torrent = emitterTorrent();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent,
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+    assert.equal((await context.listSeedingSessionViews.call(context))[0].state, 'seeding');
+
+    torrent.emit('error', new Error('tracker exploded'));
+
+    const [view] = await context.listSeedingSessionViews.call(context);
+    // The map still held an object; an object is not a running torrent.
+    assert.equal(view.state, 'error');
+    assert.match(view.error, /tracker exploded/);
+    assert.equal(context._seedingTorrents.size, 0);
+});
+
+test('another tab stopping a session takes it down here too', async () => {
+    const { context } = await harness();
+    const torrent = emitterTorrent();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent,
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    // IndexedDB is shared between tabs; the live torrents are not. The tab that
+    // pressed Stop deleted the record — this one has to let go of its torrent.
+    const stopped = context.applyRemoteSeedingStop.call(context, HASH);
+
+    assert.equal(stopped, true);
+    assert.equal(torrent.destroyed, true);
+    assert.equal(context._seedingTorrents.size, 0);
+});
+
+test('stopping broadcasts to the other tabs', async () => {
+    const { context } = await harness();
+    const posted = [];
+    context._seedingChannel = { postMessage: (message) => posted.push(message) };
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent: liveTorrent(),
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    await context.stopSeedingSession.call(context, HASH);
+
+    assert.deepEqual(posted, [{ type: 'stopped', hash: HASH }]);
+});
+
+test('a write is only durable once the transaction commits', async () => {
+    const { context } = await harness();
+    // The request succeeds and the transaction aborts afterwards — a quota the
+    // browser only discovers while flushing. Reporting that as saved would
+    // promise a deployment that is not there on the next load.
+    await context._seedingStore.openDb();
+    idb.databases.get('web25-seeding').abortNextTransaction = true;
+
+    const record = await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent: liveTorrent(),
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    assert.equal(record, null, 'the write is reported as failed');
+    assert.equal(context._seedingTorrents.size, 0, 'and nothing was adopted on the strength of it');
+});

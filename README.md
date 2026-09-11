@@ -219,6 +219,15 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 - A session ends when the publisher presses **Stop seeding** on its card in **Pages**, behind a confirmation; closing the tab only pauses it until the next visit
 - The advanced-tools "Clear Cache" button, which used to take every live deployment down with it, is gone
 
+What "saved" means here is deliberately strict, because the promise is that the site is still there on the next load:
+
+- A write settles on the transaction's `complete`, never on the request. A successful `put` is not a durable write — IndexedDB reports the request inside the transaction, which can still abort afterwards — so a deployment is not treated as saved until it has committed, and an abort surfaces as a failure instead of being lost
+- A torrent enters the live registry only after that commit: the registry is exempt from every teardown path, so a torrent whose payload was never stored would be one nothing could stop
+- Writes for the same info hash are serialized. A mirrored deploy records itself twice in quick succession, and both calls read before they write; chained per hash, the second reads what the first wrote and the newest metadata wins without re-copying the payload
+- Restoring runs a few sessions at a time rather than one after another, so a session that never calls back cannot hold the rest of start-up behind its timeout — and a torrent that arrives after that timeout is destroyed rather than left running untracked
+- An owned torrent is followed to the end of its life: when one errors or closes, it leaves the registry and its card says so, rather than reading "Seeding" because an object is still in a `Map`
+- Stopping is broadcast to this browser's other WEB25 tabs over a `BroadcastChannel`. IndexedDB is shared but the live torrents are not, so without it a site the publisher stopped would go on being served from a tab they were not looking at. Nothing leaves the browser; a browser without `BroadcastChannel` simply catches up on its next reload
+
 Signed-but-not-yet-deployed artifacts are still kept in `localStorage` (`web25.deploy.session.v1`) so the deploy screen survives a refresh mid-flow.
 
 ---
@@ -228,6 +237,12 @@ Signed-but-not-yet-deployed artifacts are still kept in `localStorage` (`web25.d
 The wallet session lives in the signing worker and dies with the page, by design. What the user should not also lose is their place, or an explanation.
 
 A single `localStorage` entry records **which tab was open** and **whether a session was live** — no address, no public key, no npub, no hash, nothing derived from any of them. On the next load the tab is restored when it still exists, and the sign-in wall says the session ended with the page and needs unlocking again. It cannot unlock anything and cannot identify whose browser it is.
+
+The two facts age separately, and for different reasons. The interrupted-session flag answers "did the page that just loaded take a live session with it", which is true of that load and of no later one, so it is read once and put down; moving between tabs no longer renews it, which it did while a single timestamp covered both. The remembered tab keeps its own timestamp and survives that.
+
+```json
+{ "tab": "publish", "tabSavedAt": 1762000000000, "wasUnlocked": true, "sessionAt": 1762000000000 }
+```
 
 ---
 

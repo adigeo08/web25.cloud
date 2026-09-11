@@ -101,22 +101,72 @@ export default class SeedingSessionStore {
         });
     }
 
-    /** @param {IDBRequest} request */
-    _request(request) {
-        return new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
     /**
+     * Run one transaction and resolve only once it has committed.
+     *
+     * A successful `put` request is not a durable write: IndexedDB reports the
+     * request as soon as it is applied inside the transaction, and the
+     * transaction can still abort afterwards — a quota the browser only
+     * discovers while flushing, a version change, a tab being killed. Resolving
+     * on the request is therefore a promise that the bytes are safe when they
+     * may not be, and this store's whole job is the opposite of that: a
+     * deployment counts as saved when it will still be there on the next load.
+     *
+     * So the result of the request is held, and the promise settles on the
+     * transaction's `complete` — or rejects on `abort`/`error`, which is how a
+     * failed write reaches the caller instead of being silently lost.
+     *
      * @param {'readonly'|'readwrite'} mode
      * @param {(store: IDBObjectStore) => IDBRequest} run
      */
     async _withStore(mode, run) {
         const db = await this.openDb();
-        const tx = db.transaction(STORE_SESSIONS, mode);
-        return this._request(run(tx.objectStore(STORE_SESSIONS)));
+        return new Promise((resolve, reject) => {
+            let tx;
+            let request;
+            try {
+                tx = db.transaction(STORE_SESSIONS, mode);
+                request = run(tx.objectStore(STORE_SESSIONS));
+            } catch (error) {
+                reject(error instanceof Error ? error : new Error(String(error)));
+                return;
+            }
+
+            let result;
+            let settled = false;
+            const fail = (error) => {
+                if (settled) return;
+                settled = true;
+                reject(
+                    error instanceof Error ? error : new Error(`${error || 'The seeding store transaction failed.'}`)
+                );
+            };
+
+            request.onsuccess = () => {
+                result = request.result;
+            };
+            request.onerror = () => fail(request.error || new Error('The seeding store rejected a request.'));
+
+            // A transaction-less double (or a very old implementation) would
+            // never commit; falling back to the request keeps it working rather
+            // than hanging.
+            if (!tx || (typeof tx.addEventListener !== 'function' && !('oncomplete' in tx))) {
+                request.onsuccess = () => {
+                    if (settled) return;
+                    settled = true;
+                    resolve(request.result);
+                };
+                return;
+            }
+
+            tx.oncomplete = () => {
+                if (settled) return;
+                settled = true;
+                resolve(result);
+            };
+            tx.onabort = () => fail(tx.error || new Error('The seeding store transaction was aborted.'));
+            tx.onerror = () => fail(tx.error || new Error('The seeding store transaction failed.'));
+        });
     }
 
     /** @param {SeedingSessionRecord} record */

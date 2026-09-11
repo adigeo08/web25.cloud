@@ -19,6 +19,22 @@ import { bindPagesPanel, confirmStopSeeding, renderPages, updatePagesLiveStats }
 /** How often the Pages cards refresh their live peer/upload counters. */
 const SEEDING_STATS_INTERVAL_MS = 5000;
 
+/** How long one resume may take before it is given up on. */
+const RESUME_TIMEOUT_MS = 30000;
+
+/**
+ * How many sessions are resumed at once.
+ *
+ * Restoring runs before the first page load is dispatched, so it is on the
+ * critical path: one site that never calls back must not hold the other nine —
+ * and the whole UI — behind its 30-second timeout. Small enough not to ask the
+ * browser to hash ten payloads at once.
+ */
+const RESUME_CONCURRENCY = 3;
+
+/** Channel name for telling other tabs of this browser what changed. */
+const SEEDING_CHANNEL = 'web25-seeding';
+
 /**
  * Rebuild a payload file exactly as it was seeded, path and all.
  * @param {{ path: string, type: string, bytes: Uint8Array }} entry
@@ -83,18 +99,46 @@ export function isSeedingTorrent(torrent) {
  *           payloadFiles: File[]|null, siteName?: string, createdAt?: string,
  *           deploy: any }} params
  */
-export async function recordSeedingSession({
-    hash,
-    torrent,
-    torrentFile,
-    payloadFiles,
-    siteName = '',
-    createdAt = '',
-    deploy
-}) {
-    const sanitized = `${hash || ''}`.toLowerCase();
+export async function recordSeedingSession(params) {
+    const sanitized = `${params?.hash || ''}`.toLowerCase();
     if (!sanitized) return null;
 
+    // One writer per deployment at a time.
+    //
+    // A mirrored deploy records itself twice in quick succession — live, then
+    // mirror-resolved — and both calls read the stored record before writing
+    // it. Run concurrently, both read the same old state and the second write
+    // overwrites the first: whichever finishes last wins, which is not the same
+    // as the newest metadata winning. Chaining per hash makes the second call
+    // read what the first one wrote.
+    if (!this._seedingWrites) this._seedingWrites = new Map();
+    const queued = (this._seedingWrites.get(sanitized) || Promise.resolve()).then(
+        () => writeSeedingSession.call(this, sanitized, params),
+        () => writeSeedingSession.call(this, sanitized, params)
+    );
+    // Never leave a rejected promise as the tail: the next writer chains off it.
+    this._seedingWrites.set(
+        sanitized,
+        queued.catch(() => {})
+    );
+    try {
+        return await queued;
+    } finally {
+        if (this._seedingWrites.get(sanitized) === queued) this._seedingWrites.delete(sanitized);
+    }
+}
+
+/**
+ * The body of one record, already serialized against its own hash.
+ *
+ * @param {string} sanitized
+ * @param {{ torrent: any, torrentFile: ArrayBuffer|Uint8Array|null, payloadFiles: File[]|null,
+ *           siteName?: string, createdAt?: string, deploy: any }} params
+ */
+async function writeSeedingSession(
+    sanitized,
+    { torrent, torrentFile, payloadFiles, siteName = '', createdAt = '', deploy }
+) {
     // Two calls land here for a mirrored deployment — once when the site goes
     // live, once when the mirror resolves — and a deployment is its content, so
     // a record that already holds the payload for this hash holds the right
@@ -181,7 +225,59 @@ export function adoptSeedingTorrent(hash, torrent) {
     if (!torrent) return null;
     const sanitized = `${hash || ''}`.toLowerCase();
     this.seedingTorrents().set(sanitized, torrent);
+    this.watchSeedingTorrent(sanitized, torrent);
     return torrent;
+}
+
+/**
+ * Follow an owned torrent to the end of its life.
+ *
+ * The registry is a map of objects, and an object outlives the thing it
+ * represents: a torrent that errors out or is closed by the client leaves its
+ * entry sitting there, so Pages goes on showing "Seeding" for a site nobody can
+ * download any more. Listening for that is what keeps the card honest.
+ *
+ * @param {string} hash
+ * @param {any} torrent
+ */
+export function watchSeedingTorrent(hash, torrent) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (!torrent || typeof torrent.once !== 'function') return;
+    if (torrent.__web25SeedingWatched) return;
+    try {
+        Object.defineProperty(torrent, '__web25SeedingWatched', { value: true, enumerable: false });
+    } catch (_) {
+        torrent.__web25SeedingWatched = true;
+    }
+
+    torrent.once('error', (error) => {
+        this.handleSeedingTorrentGone(sanitized, torrent, error?.message || 'the torrent errored out');
+    });
+    torrent.once('close', () => {
+        this.handleSeedingTorrentGone(sanitized, torrent, 'the torrent was closed');
+    });
+}
+
+/**
+ * An owned torrent died on its own. Stop claiming it is seeding.
+ *
+ * Deliberately a no-op when the registry has already moved on: `stopSeedingSession`
+ * removes the entry before destroying the torrent, so the `close` that follows
+ * an intentional stop is not reported as a failure.
+ *
+ * @param {string} hash
+ * @param {any} torrent
+ * @param {string} reason
+ */
+export function handleSeedingTorrentGone(hash, torrent, reason) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (this.seedingTorrents().get(sanitized) !== torrent) return;
+
+    this.seedingTorrents().delete(sanitized);
+    if (!this._seedingErrors) this._seedingErrors = new Map();
+    this._seedingErrors.set(sanitized, `Stopped seeding: ${reason}.`);
+    this.log(`Seeding session ${sanitized} ended: ${reason}.`);
+    void this.refreshPagesPanel();
 }
 
 /**
@@ -198,10 +294,7 @@ export async function resumeSeedingSession(record) {
     if (this.seedingTorrents().has(hash)) return this.seedingTorrents().get(hash);
 
     const existing = this.client?.get?.(hash);
-    if (existing) {
-        this.seedingTorrents().set(hash, existing);
-        return existing;
-    }
+    if (existing) return this.adoptSeedingTorrent(hash, existing);
 
     const files = (record.files || [])
         .map((entry) => ({ ...entry, bytes: toBytes(entry.bytes) }))
@@ -220,15 +313,36 @@ export async function resumeSeedingSession(record) {
     // what makes the resumed torrent hash to the same deployment.
     if (record.pieceLength) seedOptions.pieceLength = record.pieceLength;
 
+    // Overridable so a test can exercise the timeout without waiting out the
+    // real one; nothing in the application sets it.
+    const timeoutMs = Number(this._resumeTimeoutMs) || RESUME_TIMEOUT_MS;
     const torrent = await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('Timed out while resuming the seeding session.')), 30000);
+        let settled = false;
+        const timer = setTimeout(() => {
+            settled = true;
+            reject(new Error('Timed out while resuming the seeding session.'));
+        }, timeoutMs);
+
         try {
             this.client.seed(files, seedOptions, (seeded) => {
                 clearTimeout(timer);
+                // The timeout only stops this page waiting; WebTorrent keeps
+                // hashing and calls back eventually. That torrent belongs to
+                // nobody — it is not in the registry, so nothing will ever stop
+                // it and Pages will never show it — so it goes now.
+                if (settled) {
+                    this.log(`Resume of ${hash} timed out; destroying the torrent that arrived late.`);
+                    try {
+                        seeded?.destroy?.();
+                    } catch (_) {}
+                    return;
+                }
+                settled = true;
                 resolve(seeded);
             });
         } catch (error) {
             clearTimeout(timer);
+            settled = true;
             reject(error instanceof Error ? error : new Error(String(error)));
         }
     });
@@ -241,8 +355,7 @@ export async function resumeSeedingSession(record) {
         throw new Error(`Resumed torrent hashes to ${seededHash || 'nothing'}, not ${hash}.`);
     }
 
-    this.seedingTorrents().set(hash, torrent);
-    return torrent;
+    return this.adoptSeedingTorrent(hash, torrent);
 }
 
 /**
@@ -267,15 +380,26 @@ export async function restoreSeedingSessions() {
     }
 
     this._seedingErrors = new Map();
-    for (const record of records) {
-        try {
-            await this.resumeSeedingSession(record);
-            this.log(`Resumed seeding ${record.hash} (${record.siteName}).`);
-        } catch (error) {
-            this._seedingErrors.set(`${record.hash}`.toLowerCase(), error.message);
-            this.log(`Could not resume seeding ${record.hash}: ${error.message}`);
+
+    // A few at a time, not one after another. This runs before the first site
+    // load is dispatched, so a session that never calls back would otherwise
+    // hold every other session — and the rest of start-up — behind its own
+    // 30-second timeout.
+    let next = 0;
+    const worker = async () => {
+        while (next < records.length) {
+            const record = records[next];
+            next += 1;
+            try {
+                await this.resumeSeedingSession(record);
+                this.log(`Resumed seeding ${record.hash} (${record.siteName}).`);
+            } catch (error) {
+                this._seedingErrors.set(`${record.hash}`.toLowerCase(), error.message);
+                this.log(`Could not resume seeding ${record.hash}: ${error.message}`);
+            }
         }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(RESUME_CONCURRENCY, records.length) }, worker));
 
     const resumed = this.seedingTorrents().size;
     if (resumed > 0) {
@@ -323,8 +447,78 @@ export async function stopSeedingSession(hash) {
         this.clearDeploySession?.();
     }
 
+    // Other tabs of this browser hold their own torrent for the same record.
+    // The record is gone for all of them, so the torrents have to go too, or a
+    // site the publisher stopped goes on being served from the tab they were
+    // not looking at.
+    this.broadcastSeedingStopped(sanitized);
+
     this.log(`Stopped seeding ${sanitized}.`);
     await this.refreshPagesPanel();
+}
+
+/**
+ * The local coordination channel between this browser's WEB25 tabs.
+ *
+ * IndexedDB is shared, the live torrents are not: each tab re-seeds the same
+ * records into its own WebTorrent client. Nothing leaves the browser here — a
+ * `BroadcastChannel` is same-origin only — and a browser without one simply
+ * goes back to the old behaviour, where the other tab catches up on its next
+ * reload.
+ */
+export function initSeedingChannel() {
+    if (this._seedingChannel !== undefined) return this._seedingChannel;
+    this._seedingChannel = null;
+    if (typeof BroadcastChannel !== 'function') return null;
+
+    try {
+        const channel = new BroadcastChannel(SEEDING_CHANNEL);
+        channel.onmessage = (event) => {
+            const message = event?.data;
+            if (!message || message.type !== 'stopped') return;
+            this.applyRemoteSeedingStop(`${message.hash || ''}`.toLowerCase());
+        };
+        // Node's BroadcastChannel keeps the event loop alive; a browser's has no
+        // `unref` at all. Same reason every timer in this codebase is unref'd:
+        // a test process must not be held open by a listener.
+        if (typeof (/** @type {any} */ (channel).unref) === 'function') /** @type {any} */ (channel).unref();
+        this._seedingChannel = channel;
+    } catch (error) {
+        this.log(`Seeding sessions are not synchronised between tabs: ${error.message}`);
+    }
+    return this._seedingChannel;
+}
+
+/** @param {string} hash */
+export function broadcastSeedingStopped(hash) {
+    try {
+        this.initSeedingChannel()?.postMessage({ type: 'stopped', hash: `${hash || ''}`.toLowerCase() });
+    } catch (error) {
+        this.log(`Could not tell other tabs that ${hash} stopped: ${error.message}`);
+    }
+}
+
+/**
+ * Another tab stopped this session. The record is already deleted there; this
+ * tab only has to let go of its own torrent.
+ * @param {string} hash
+ */
+export function applyRemoteSeedingStop(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    const torrent = this.seedingTorrents().get(sanitized);
+    if (!torrent) {
+        void this.refreshPagesPanel();
+        return false;
+    }
+
+    this.seedingTorrents().delete(sanitized);
+    this._seedingErrors?.delete(sanitized);
+    try {
+        torrent.destroy?.();
+    } catch (_) {}
+    this.log(`Another tab stopped seeding ${sanitized}; letting go of it here too.`);
+    void this.refreshPagesPanel();
+    return true;
 }
 
 /**
@@ -343,7 +537,11 @@ export async function listSeedingSessionViews() {
 
     return records.map((record) => {
         const hash = `${record.hash}`.toLowerCase();
-        const torrent = this.seedingTorrents().get(hash) || null;
+        const owned = this.seedingTorrents().get(hash) || null;
+        // An entry in the map is an object, not a promise that it still works:
+        // a destroyed torrent must not keep a card reading "Seeding".
+        const torrent = owned && owned.destroyed !== true ? owned : null;
+        if (owned && !torrent) this.seedingTorrents().delete(hash);
         const error = this._seedingErrors?.get(hash) || null;
         return {
             hash,
@@ -398,6 +596,7 @@ export function stopSeedingStatsTimer() {
 
 /** Wire the Pages tab's card actions. Safe to call more than once. */
 export function initPagesPanel() {
+    this.initSeedingChannel();
     bindPagesPanel({
         onOpen: (hash) => void this.openSeedingSession(hash),
         onCopy: (hash) => void this.copySeedingSessionLink(hash),

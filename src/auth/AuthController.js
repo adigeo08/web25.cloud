@@ -14,7 +14,12 @@ import {
     registerLocalWalletFromSeed
 } from './LocalWalletService.js';
 import { addAlternatePasskey, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
-import { markSessionLocked, markSessionUnlocked, readResumeHint } from './SessionResumeHint.js';
+import {
+    consumeInterruptedSession,
+    markSessionLocked,
+    markSessionUnlocked,
+    readResumeHint
+} from './SessionResumeHint.js';
 import {
     clearNostrIdentityPreference,
     isNostrIdentityEnabled,
@@ -72,6 +77,10 @@ export default class AuthController {
         if (deleteNostrBtn) deleteNostrBtn.addEventListener('click', () => this.setNostrIdentityEnabled(false));
 
         this.render();
+        // The notice is on screen now, so the flag has done its job: it says
+        // "the page you just loaded ended a live session", which is not true of
+        // any later load. Put it down, keeping the remembered tab.
+        if (this.state.resumeHint?.wasUnlocked) consumeInterruptedSession();
         this.notify();
     }
 
@@ -91,8 +100,10 @@ export default class AuthController {
     /** Worker-side TTL expiry or crash: drop back to the locked UI state. */
     async handleWorkerLock() {
         // The session ended without the user asking, so the unlock screen says
-        // so — the same sentence a reload earns.
-        this.state.resumeHint = readResumeHint();
+        // so — the same sentence a reload earns. This one is about the page
+        // that is open, so it is set here rather than read back from a flag
+        // that has already been consumed.
+        this.state.resumeHint = { ...(this.state.resumeHint || { tab: '', savedAt: Date.now() }), wasUnlocked: true };
         await this.refreshLocalWalletState();
         this.render();
         this.notify();

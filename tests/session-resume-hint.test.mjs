@@ -25,10 +25,13 @@ test('the hint stores a tab name and a boolean, and nothing else', async () => {
     markSessionUnlocked();
 
     const stored = JSON.parse(data.get(KEY));
-    assert.deepEqual(Object.keys(stored).sort(), ['savedAt', 'tab', 'wasUnlocked']);
+    // The tab and the session flag age separately, so each carries its own
+    // timestamp; nothing else is stored.
+    assert.deepEqual(Object.keys(stored).sort(), ['sessionAt', 'tab', 'tabSavedAt', 'wasUnlocked']);
     assert.equal(stored.tab, 'publish');
     assert.equal(stored.wasUnlocked, true);
-    assert.equal(typeof stored.savedAt, 'number');
+    assert.equal(typeof stored.sessionAt, 'number');
+    assert.equal(typeof stored.tabSavedAt, 'number');
 });
 
 test('an unknown tab name is never written', async () => {
@@ -42,9 +45,8 @@ test('an unknown tab name is never written', async () => {
 
 test('locking on purpose keeps the place but drops the "unlock again" flag', async () => {
     installStorage();
-    const { rememberTab, markSessionUnlocked, markSessionLocked, readResumeHint } = await import(
-        '../src/auth/SessionResumeHint.js'
-    );
+    const { rememberTab, markSessionUnlocked, markSessionLocked, readResumeHint } =
+        await import('../src/auth/SessionResumeHint.js');
 
     rememberTab('channels');
     markSessionUnlocked();
@@ -78,8 +80,15 @@ test('a corrupt or foreign value reads as no hint at all', async () => {
     data.set(KEY, JSON.stringify({ tab: 'publish' }));
     assert.equal(readResumeHint(), null, 'a hint with no timestamp means nothing');
 
+    // A tab name this build does not have is simply not restorable; the live
+    // session it also recorded is still worth saying out loud.
     data.set(KEY, JSON.stringify({ tab: 'nope', wasUnlocked: true, savedAt: Date.now() }));
-    assert.equal(readResumeHint(), null);
+    const hint = readResumeHint();
+    assert.equal(hint.tab, '', 'nothing is restored from an unknown tab name');
+    assert.equal(hint.wasUnlocked, true);
+
+    data.set(KEY, JSON.stringify({ tab: 'nope', wasUnlocked: false, savedAt: Date.now() }));
+    assert.equal(readResumeHint(), null, 'with nothing usable left, the entry goes');
 });
 
 test('storage being unavailable is a lost convenience, never a thrown error', async () => {
@@ -94,9 +103,8 @@ test('storage being unavailable is a lost convenience, never a thrown error', as
             throw new Error('denied');
         }
     };
-    const { rememberTab, readResumeHint, markSessionUnlocked, clearResumeHint } = await import(
-        '../src/auth/SessionResumeHint.js'
-    );
+    const { rememberTab, readResumeHint, markSessionUnlocked, clearResumeHint } =
+        await import('../src/auth/SessionResumeHint.js');
 
     assert.equal(readResumeHint(), null);
     assert.equal(rememberTab('browse'), false);
@@ -114,4 +122,71 @@ test('the stored shape carries no identity material', async () => {
     for (const forbidden of ['address', 'publicKey', 'privateKey', 'npub', 'nostrPublicKey', 'infoHash']) {
         assert.ok(!new RegExp(`${forbidden}\\s*[:=]`).test(source), `${forbidden} must not be stored`);
     }
+});
+
+test('putting the user back on their tab does not renew the interruption', async () => {
+    const data = installStorage();
+    const { rememberTab, markSessionUnlocked, readResumeHint } = await import('../src/auth/SessionResumeHint.js');
+
+    markSessionUnlocked();
+    const before = JSON.parse(data.get(KEY)).sessionAt;
+
+    // Restoring a tab drives the real tab button, which persists the tab again.
+    // That is navigation, not news about the wallet.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    rememberTab('channels');
+
+    const after = JSON.parse(data.get(KEY));
+    assert.equal(after.sessionAt, before, 'the session timestamp is not renewed by a tab change');
+    assert.equal(after.tab, 'channels', 'but the tab is remembered');
+    assert.ok(after.tabSavedAt > before, 'the tab has its own, newer timestamp');
+    assert.equal(readResumeHint().wasUnlocked, true, 'and the pending notice still stands');
+});
+
+test('the interrupted-session flag is one-time information', async () => {
+    installStorage();
+    const { rememberTab, markSessionUnlocked, readResumeHint, consumeInterruptedSession } =
+        await import('../src/auth/SessionResumeHint.js');
+
+    rememberTab('publish');
+    markSessionUnlocked();
+
+    // The load that follows the interruption is told about it, once.
+    assert.equal(readResumeHint().wasUnlocked, true);
+    assert.equal(consumeInterruptedSession(), true);
+
+    // Every load after that is an ordinary visit to a locked wallet.
+    assert.equal(readResumeHint().wasUnlocked, false);
+    assert.equal(consumeInterruptedSession(), false);
+    assert.equal(readResumeHint().tab, 'publish', 'where they were is still remembered');
+});
+
+test('an old tab memory does not keep a stale interruption alive', async () => {
+    const data = installStorage();
+    const { readResumeHint, RESUME_HINT_MAX_AGE_MS } = await import('../src/auth/SessionResumeHint.js');
+
+    data.set(
+        KEY,
+        JSON.stringify({
+            tab: 'publish',
+            tabSavedAt: Date.now(),
+            wasUnlocked: true,
+            sessionAt: Date.now() - RESUME_HINT_MAX_AGE_MS - 1000
+        })
+    );
+
+    const hint = readResumeHint();
+    assert.equal(hint.tab, 'publish');
+    assert.equal(hint.wasUnlocked, false, 'a day-old session is not something to announce now');
+});
+
+test('a record written before the timestamps were split still reads', async () => {
+    const data = installStorage();
+    const { readResumeHint } = await import('../src/auth/SessionResumeHint.js');
+
+    data.set(KEY, JSON.stringify({ tab: 'channels', wasUnlocked: true, savedAt: Date.now() - 1000 }));
+
+    const hint = readResumeHint();
+    assert.equal(hint.tab, 'channels');
+    assert.equal(hint.wasUnlocked, true);
 });

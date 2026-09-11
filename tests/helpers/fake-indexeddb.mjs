@@ -129,10 +129,46 @@ class FakeDatabase {
         this.stores.delete(name);
     }
 
-    /** Accepts a store name or a list of them, like the real API. */
-    transaction(names) {
+    /**
+     * Accepts a store name or a list of them, like the real API, and returns a
+     * transaction that actually commits.
+     *
+     * A request succeeding is not a write landing: real IndexedDB settles the
+     * request inside the transaction and can still abort afterwards. Code that
+     * waits for `complete` needs a double that fires it — and one that can
+     * abort, so "the request succeeded but the transaction did not" is
+     * reachable in a test.
+     */
+    transaction(names, mode = 'readonly') {
         const requested = Array.isArray(names) ? names : [names];
-        return { objectStore: (name) => this.stores.get(name === undefined ? requested[0] : name) };
+        // Only a write aborts: that is the realistic failure — a quota the
+        // browser discovers while flushing, after the request looked fine.
+        const aborting = this.abortNextTransaction === true && mode === 'readwrite';
+        if (aborting) this.abortNextTransaction = false;
+
+        const tx = {
+            mode,
+            error: null,
+            oncomplete: null,
+            onabort: null,
+            onerror: null,
+            objectStore: (name) => this.stores.get(name === undefined ? requested[0] : name),
+            abort() {
+                this.error = this.error || new Error('AbortError');
+                setTimeout(() => this.onabort?.(), 0);
+            }
+        };
+
+        // After the request callbacks, which run on microtasks.
+        setTimeout(() => {
+            if (aborting) {
+                tx.error = new Error('QuotaExceededError');
+                tx.onabort?.();
+                return;
+            }
+            tx.oncomplete?.();
+        }, 0);
+        return tx;
     }
 
     close() {

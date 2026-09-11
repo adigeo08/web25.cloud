@@ -55,40 +55,82 @@ function write(hint) {
 }
 
 /**
- * The stored hint, or null when there is none, it is unreadable, it names a tab
- * this build does not have, or it is simply too old to mean anything.
- * @returns {ResumeHint|null}
+ * The stored record, normalised.
+ *
+ * The tab and the session flag carry their own timestamps on purpose. They age
+ * for different reasons: moving between tabs is not news about the wallet, and
+ * a flag that renewed itself every time the tab changed would keep announcing
+ * an interruption that happened yesterday — which is exactly what happened when
+ * one `savedAt` covered both.
  */
-export function readResumeHint() {
+function readRecord() {
     const stored = readRaw();
     if (!stored || typeof stored !== 'object') return null;
 
-    const tab = `${stored.tab || ''}`;
-    if (!RESUMABLE_TABS.includes(tab)) return null;
+    // Records written before the two timestamps were split carry one `savedAt`.
+    const legacy = Number(stored.savedAt) || 0;
+    return {
+        tab: RESUMABLE_TABS.includes(`${stored.tab || ''}`) ? `${stored.tab}` : '',
+        tabSavedAt: Number(stored.tabSavedAt) || legacy,
+        wasUnlocked: stored.wasUnlocked === true,
+        sessionAt: Number(stored.sessionAt) || legacy
+    };
+}
 
-    const savedAt = Number(stored.savedAt) || 0;
-    if (!savedAt || Date.now() - savedAt > RESUME_HINT_MAX_AGE_MS) {
+const fresh = (at) => Boolean(at) && Date.now() - at <= RESUME_HINT_MAX_AGE_MS;
+
+/**
+ * What this browser remembers, or null when there is nothing usable left.
+ * @returns {ResumeHint|null}
+ */
+export function readResumeHint() {
+    const record = readRecord();
+    if (!record) return null;
+
+    const tab = fresh(record.tabSavedAt) ? record.tab : '';
+    const wasUnlocked = record.wasUnlocked && fresh(record.sessionAt);
+
+    // Nothing worth acting on: drop the entry rather than leave it to be
+    // re-read on every load.
+    if (!tab && !wasUnlocked) {
         clearResumeHint();
         return null;
     }
-
-    return { tab, wasUnlocked: stored.wasUnlocked === true, savedAt };
+    if (!tab) return { tab: '', wasUnlocked, savedAt: record.sessionAt };
+    return { tab, wasUnlocked, savedAt: record.sessionAt || record.tabSavedAt };
 }
 
 /**
- * Remember the tab, keeping whatever the session flag already said.
+ * Remember the tab, and *only* the tab.
+ *
+ * Restoring a remembered tab drives the real tab button, which comes straight
+ * back here — so this must not touch the session flag or its age, or simply
+ * being put back where you were would renew the claim that your session was
+ * interrupted.
+ *
  * @param {string} tab
  */
 export function rememberTab(tab) {
     if (!RESUMABLE_TABS.includes(`${tab}`)) return false;
-    const existing = readResumeHint();
-    return write({ tab: `${tab}`, wasUnlocked: existing?.wasUnlocked === true, savedAt: Date.now() });
+    const record = readRecord();
+    return write({
+        tab: `${tab}`,
+        tabSavedAt: Date.now(),
+        wasUnlocked: record?.wasUnlocked === true,
+        sessionAt: record?.sessionAt || 0
+    });
 }
 
 /** A session is live in this page: whatever ends it, it ended mid-session. */
 export function markSessionUnlocked() {
-    const existing = readResumeHint();
-    return write({ tab: existing?.tab || 'publish', wasUnlocked: true, savedAt: Date.now() });
+    const record = readRecord();
+    const now = Date.now();
+    return write({
+        tab: record?.tab || 'publish',
+        tabSavedAt: record?.tabSavedAt || now,
+        wasUnlocked: true,
+        sessionAt: now
+    });
 }
 
 /**
@@ -96,9 +138,27 @@ export function markSessionUnlocked() {
  * told to unlock "again" is not, because nothing was interrupted.
  */
 export function markSessionLocked() {
-    const existing = readResumeHint();
-    if (!existing) return false;
-    return write({ tab: existing.tab, wasUnlocked: false, savedAt: Date.now() });
+    const record = readRecord();
+    if (!record) return false;
+    return write({ tab: record.tab, tabSavedAt: record.tabSavedAt, wasUnlocked: false, sessionAt: 0 });
+}
+
+/**
+ * Read the interrupted-session flag once and put it down.
+ *
+ * It answers "did the page take a live session with it", which is true of the
+ * load that is happening now and of no later one. Leaving it set meant a
+ * browser that never signed in again was told about the same interruption on
+ * every visit for half a day. The remembered tab is untouched: where you were
+ * is still true.
+ *
+ * @returns {boolean} whether a session had been interrupted
+ */
+export function consumeInterruptedSession() {
+    const record = readRecord();
+    if (!record?.wasUnlocked) return false;
+    write({ tab: record.tab, tabSavedAt: record.tabSavedAt, wasUnlocked: false, sessionAt: 0 });
+    return fresh(record.sessionAt);
 }
 
 export function clearResumeHint() {
