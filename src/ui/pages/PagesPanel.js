@@ -130,6 +130,14 @@ export function confirmStopSeeding({ siteName = '', hash = '' } = {}) {
     if (nameEl) nameEl.textContent = siteName || shortHash(hash);
     modal.classList.remove('hidden');
 
+    // Focus goes into the dialog and comes back out to whatever opened it.
+    // Without this a keyboard or screen-reader user is left on the card behind
+    // a destructive prompt they have not been told about, and Tab walks the
+    // page rather than the two choices in front of them.
+    const opener = document.activeElement;
+    const focusable = () => [closeBtn, confirmBtn, cancelBtn].filter(Boolean);
+    cancelBtn.focus?.();
+
     return new Promise((resolve) => {
         const finish = (result) => {
             modal.classList.add('hidden');
@@ -137,12 +145,36 @@ export function confirmStopSeeding({ siteName = '', hash = '' } = {}) {
             cancelBtn.removeEventListener('click', onCancel);
             closeBtn?.removeEventListener('click', onCancel);
             document.removeEventListener('keydown', onKey);
+            if (opener && typeof (/** @type {any} */ (opener).focus) === 'function') {
+                /** @type {any} */ (opener).focus();
+            }
             resolve(result);
         };
         const onConfirm = () => finish(true);
         const onCancel = () => finish(false);
         const onKey = (event) => {
-            if (event.key === 'Escape') finish(false);
+            if (event.key === 'Escape') {
+                finish(false);
+                return;
+            }
+            if (event.key !== 'Tab') return;
+
+            // Keep Tab inside the dialog while it is up.
+            const stops = focusable();
+            if (stops.length === 0) return;
+            const first = stops[0];
+            const last = stops[stops.length - 1];
+            const active = document.activeElement;
+            if (!event.shiftKey && active === last) {
+                event.preventDefault();
+                first.focus?.();
+            } else if (event.shiftKey && active === first) {
+                event.preventDefault();
+                last.focus?.();
+            } else if (!stops.includes(/** @type {any} */ (active))) {
+                event.preventDefault();
+                first.focus?.();
+            }
         };
 
         confirmBtn.addEventListener('click', onConfirm);

@@ -357,3 +357,58 @@ test('a second call for the same deployment patches instead of re-copying the pa
     assert.equal(record.deploy.mirrorState, 'available');
     assert.equal(record.fileCount, 1);
 });
+
+test('a torrent is adopted only once its payload is durably stored', async () => {
+    const { context } = await harness();
+    const torrent = liveTorrent();
+    // A full disk, a denied quota, a private window: the store refuses.
+    context._seedingStore = {
+        get: async () => null,
+        put: async () => {
+            throw new Error('QuotaExceededError');
+        }
+    };
+
+    const record = await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent,
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    assert.equal(record, null);
+    // Adopting a torrent the store never accepted would make it immortal: no
+    // card in Pages to stop it, and every teardown path refusing to touch it.
+    assert.equal(context._seedingTorrents.size, 0);
+    assert.equal(context.isSeedingTorrent.call(context, torrent), false);
+});
+
+test('a stop that cannot be persisted keeps the session and says so', async () => {
+    const { context } = await harness();
+    const torrent = liveTorrent();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent,
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    const store = context._seedingStore;
+    context._seedingStore = {
+        get: (hash) => store.get(hash),
+        list: () => store.list(),
+        remove: async () => {
+            throw new Error('database is closing');
+        }
+    };
+
+    // Reporting "stopped" while the record survives would promise something the
+    // next reload immediately undoes.
+    await assert.rejects(() => context.stopSeedingSession.call(context, HASH), /still seeding/);
+    assert.equal(torrent.destroyed, false, 'the site keeps being served');
+    assert.equal(context._seedingTorrents.size, 1);
+});

@@ -91,13 +91,20 @@ export async function init() {
         await this.registerServiceWorker();
         this.setupEventListeners();
         this.setupCleanupHandlers();
+        // Hosting comes back before anything asks who the user is: re-seeding
+        // needs no key, so a locked wallet keeps every published site up.
+        //
+        // It also has to happen before `checkURL()` dispatches a load. Somebody
+        // reloading the link to their own site would otherwise have the load
+        // add that info hash first, and the resume would adopt that empty,
+        // still-downloading torrent instead of seeding the bytes it holds —
+        // leaving the only copy of the site unshared, on the one page that has
+        // it.
+        this.initPagesPanel?.();
+        await this.restoreSeedingSessions?.();
         this.checkURL();
         this.updateDebugToggle();
         await this.initAuth();
-        // Hosting comes back before anything asks who the user is: re-seeding
-        // needs no key, so a locked wallet keeps every published site up.
-        this.initPagesPanel?.();
-        await this.restoreSeedingSessions?.();
         await this.restoreDeploySession();
         // Last, so it lands on a page whose tabs have finished deciding
         // whether they exist.

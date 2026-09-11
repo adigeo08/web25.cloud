@@ -136,10 +136,71 @@ class PeerWebCache {
     }
 
     /**
+     * Index the sites that were cached before the library existed.
+     *
+     * Adding the store does not populate it, so without this every site a
+     * visitor had already loaded would be missing from the library until they
+     * happened to open it again — which is exactly the case the library is for.
+     * Runs once per page, reads one site at a time rather than pulling every
+     * cached website into memory at once, and never blocks a search: a
+     * half-finished backfill just means fewer results this time.
+     *
+     * @returns {Promise<number>} how many rows were added
+     */
+    async backfillLibrary() {
+        if (this._backfilled) return 0;
+        this._backfilled = true;
+
+        try {
+            const db = await this.openDB();
+            const cached = await this._request(
+                db.transaction([this.storeName], 'readonly').objectStore(this.storeName).getAllKeys()
+            );
+            const hashes = Array.isArray(cached) ? cached : [];
+            if (hashes.length === 0) return 0;
+
+            const existing = await this._request(
+                db.transaction([this.libraryStore], 'readonly').objectStore(this.libraryStore).getAllKeys()
+            );
+            const indexed = new Set(Array.isArray(existing) ? existing : []);
+            const missing = hashes.filter((hash) => !indexed.has(hash));
+            if (missing.length === 0) return 0;
+
+            let added = 0;
+            for (const hash of missing) {
+                const record = await this._request(
+                    db.transaction([this.storeName], 'readonly').objectStore(this.storeName).get(hash)
+                );
+                if (!record?.data) continue;
+                await this._request(
+                    db
+                        .transaction([this.libraryStore], 'readwrite')
+                        .objectStore(this.libraryStore)
+                        .put(
+                            buildLibraryEntry({
+                                hash,
+                                siteData: record.data,
+                                signatureState: record.signatureState || null,
+                                timestamp: record.timestamp || Date.now()
+                            })
+                        )
+                );
+                added += 1;
+            }
+            if (added > 0) console.log(`[PeerWebCache] Indexed ${added} previously cached site(s)`);
+            return added;
+        } catch (error) {
+            console.warn('[PeerWebCache] Could not index previously cached sites:', error);
+            return 0;
+        }
+    }
+
+    /**
      * Every indexed site in this browser, newest first.
      * @returns {Promise<any[]>}
      */
     async listLibrary() {
+        await this.backfillLibrary();
         try {
             const db = await this.openDB();
             const transaction = db.transaction([this.libraryStore], 'readonly');

@@ -310,7 +310,8 @@
                             <span aria-hidden="true">🔄</span>
                             You were signed in before this page reloaded. The key only ever lives in the signing
                             worker, so it went with the page — unlock again to carry on where you left off. Sites you
-                            are seeding kept running throughout.
+                            were seeding started again on their own when this page loaded, and did not need the
+                            wallet to do it.
                         </p>
 
                         <div class="button-group">
@@ -1316,14 +1317,21 @@
         </div>
 
         <!-- Stop seeding confirmation -->
-        <div id="stop-seeding-modal" class="modal hidden">
+        <div
+            id="stop-seeding-modal"
+            class="modal hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="stop-seeding-title"
+            aria-describedby="stop-seeding-description"
+        >
             <div class="modal-content modal-narrow">
                 <div class="modal-header">
-                    <h3>⏹ Stop seeding</h3>
+                    <h3 id="stop-seeding-title">⏹ Stop seeding</h3>
                     <button id="stop-seeding-close" class="close-btn" aria-label="Cancel">×</button>
                 </div>
                 <div class="modal-body">
-                    <p>Stop seeding <strong id="stop-seeding-name">this site</strong>?</p>
+                    <p id="stop-seeding-description">Stop seeding <strong id="stop-seeding-name">this site</strong>?</p>
                     <p>
                         Visitors will no longer be able to load it from this browser, and it will not come back after a
                         reload. The WEB25 link keeps working only for as long as another peer — or a GoFile mirror —

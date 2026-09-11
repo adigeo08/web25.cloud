@@ -95,8 +95,6 @@ export async function recordSeedingSession({
     const sanitized = `${hash || ''}`.toLowerCase();
     if (!sanitized) return null;
 
-    if (torrent) this.seedingTorrents().set(sanitized, torrent);
-
     // Two calls land here for a mirrored deployment — once when the site goes
     // live, once when the mirror resolves — and a deployment is its content, so
     // a record that already holds the payload for this hash holds the right
@@ -115,6 +113,7 @@ export async function recordSeedingSession({
     if (stored?.files?.length || !payloadFiles || payloadFiles.length === 0) {
         try {
             const patched = await this.seedingStore().patch(sanitized, { deploy });
+            if (patched && torrent) this.adoptSeedingTorrent(sanitized, torrent);
             this.refreshPagesPanel();
             return patched;
         } catch (error) {
@@ -148,17 +147,41 @@ export async function recordSeedingSession({
         };
 
         await this.seedingStore().put(record);
+        // Adopted only once the record is durable. A torrent in the registry is
+        // protected from every teardown path, so adopting one the store never
+        // accepted would leave a live torrent with no card in Pages and no way
+        // for the user to stop it.
+        if (torrent) this.adoptSeedingTorrent(sanitized, torrent);
         this.log(`Seeding session stored for ${sanitized}; it will resume after a reload.`);
         this.refreshPagesPanel();
         return record;
     } catch (error) {
+        // Nothing was adopted, so this torrent stays ordinary page state: it
+        // seeds while the tab lives and is torn down with everything else.
+        this.seedingTorrents().delete(sanitized);
         this.log(`Could not store the seeding session for ${sanitized}: ${error.message}`);
         this.toast?.warning?.(
-            'This deployment is live, but it could not be saved for after a reload.',
+            'This deployment is live for as long as this tab stays open, but it could not be saved for after a reload.',
             'Seeding not persisted'
         );
         return null;
     }
+}
+
+/**
+ * Take ownership of a torrent on behalf of a stored session.
+ *
+ * Ownership and durability go together: everything in this registry is exempt
+ * from page teardown, so nothing may enter it that the store has not accepted.
+ *
+ * @param {string} hash
+ * @param {any} torrent
+ */
+export function adoptSeedingTorrent(hash, torrent) {
+    if (!torrent) return null;
+    const sanitized = `${hash || ''}`.toLowerCase();
+    this.seedingTorrents().set(sanitized, torrent);
+    return torrent;
 }
 
 /**
@@ -273,6 +296,18 @@ export async function restoreSeedingSessions() {
  */
 export async function stopSeedingSession(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
+
+    // The durable record goes first. Destroying the torrent and then failing to
+    // delete the record would report "stopped" for a site that comes straight
+    // back on the next reload — so a delete that fails leaves the session
+    // exactly as it was, still live, and says so.
+    try {
+        await this.seedingStore().remove(sanitized);
+    } catch (error) {
+        this.log(`Seeding session ${sanitized} could not be deleted: ${error.message}`);
+        throw new Error(`This site is still seeding: its saved session could not be deleted (${error.message}).`);
+    }
+
     const torrent = this.seedingTorrents().get(sanitized);
     this.seedingTorrents().delete(sanitized);
     this._seedingErrors?.delete(sanitized);
@@ -280,12 +315,6 @@ export async function stopSeedingSession(hash) {
     try {
         torrent?.destroy?.();
     } catch (_) {}
-
-    try {
-        await this.seedingStore().remove(sanitized);
-    } catch (error) {
-        this.log(`Seeding session ${sanitized} could not be deleted: ${error.message}`);
-    }
 
     // The deploy screen must not keep offering a deployment that is no longer
     // hosted from here.
@@ -436,6 +465,12 @@ export async function confirmStopSeedingSession(hash) {
     const record = await this.seedingStore().get(sanitized);
     const confirmed = await confirmStopSeeding({ siteName: record?.siteName || '', hash: sanitized });
     if (!confirmed) return;
-    await this.stopSeedingSession(sanitized);
+    try {
+        await this.stopSeedingSession(sanitized);
+    } catch (error) {
+        this.toast?.error?.(error.message, 'Still seeding');
+        await this.refreshPagesPanel();
+        return;
+    }
     this.toast?.info?.('This site is no longer seeding from this browser.', 'Seeding stopped');
 }

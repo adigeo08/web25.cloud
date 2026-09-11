@@ -157,23 +157,30 @@ export async function loadSite(addressInput, retryLocator = null) {
     this.log(`Magnet URI: ${magnetURI}`);
 
     try {
-        this.client.add(magnetURI, async (torrent) => {
+        const onTorrent = async (torrent) => {
             this.log(`Torrent added: ${torrent.name || 'Unknown'}`);
-            this.registerLoadTorrent(torrent, {
-                // Every tracker given up on means no way left to find a peer,
-                // and nothing else will say so: WebTorrent only emits
-                // `noPeers` off an announce that actually happened.
-                onTrackersExhausted: () => {
-                    if (!isTorrentPhase() || this.processingInProgress) return;
-                    void this.handleTerminalP2PFailure(
-                        sanitizedHash,
-                        gofileLocator,
-                        new Error('No WebRTC tracker could be reached.'),
-                        torrent,
-                        loadGeneration
-                    );
-                }
-            });
+            // A seeding session already owns its torrent, and owning it here
+            // too would mean destroying it when the next load starts and
+            // letting the tracker guard tear down the announces it lives on.
+            // The load borrows it instead: it is complete, so the site renders
+            // from local bytes immediately.
+            if (!this.isSeedingTorrent?.(torrent)) {
+                this.registerLoadTorrent(torrent, {
+                    // Every tracker given up on means no way left to find a peer,
+                    // and nothing else will say so: WebTorrent only emits
+                    // `noPeers` off an announce that actually happened.
+                    onTrackersExhausted: () => {
+                        if (!isTorrentPhase() || this.processingInProgress) return;
+                        void this.handleTerminalP2PFailure(
+                            sanitizedHash,
+                            gofileLocator,
+                            new Error('No WebRTC tracker could be reached.'),
+                            torrent,
+                            loadGeneration
+                        );
+                    }
+                });
+            }
             this.log(`Signature status: ${this.currentSiteSignatureStatus.label}`);
 
             // Verify embedded signed metadata when available from torrent payload.
@@ -390,7 +397,18 @@ export async function loadSite(addressInput, retryLocator = null) {
                     this.processTorrentEarly(torrent, sanitizedHash);
                 }
             }, dynamicTimeout);
-        });
+        };
+
+        // A site this browser is already seeding needs no announce: the bytes
+        // are here. WebTorrent also refuses a second torrent for the same info
+        // hash, so adding one would fail the load outright.
+        const alreadyInClient = this.client.get?.(sanitizedHash) || null;
+        if (alreadyInClient) {
+            this.log(`Torrent ${sanitizedHash} is already in this client; loading from it directly.`);
+            await onTorrent(alreadyInClient);
+        } else {
+            this.client.add(magnetURI, onTorrent);
+        }
     } catch (error) {
         // A synchronous add failure is still a P2P failure, and it spends the
         // one attempt like any other. WebRTC over the trackers is the
@@ -427,6 +445,8 @@ export function releaseLoadTorrent() {
     try {
         active.guard?.stop?.();
     } catch (_) {}
+    // A torrent a seeding session owns outlives the load that borrowed it.
+    if (this.isSeedingTorrent?.(active.torrent)) return;
     try {
         active.torrent?.destroy?.();
     } catch (_) {}
@@ -460,29 +480,46 @@ export async function handleTerminalP2PFailure(
     loadGeneration = null
 ) {
     if (this._gofileFallbackStarted === hash) return;
+
+    // The P2P phase is over the moment this is called, whether or not there is
+    // a mirror to fall back to. Marking it terminal first is what stops a
+    // hash-only load from reporting the same failure twice: an immediate
+    // `noPeers` used to alert and return with the 8-second deadline still
+    // armed, and the deadline then called straight back into here.
+    this._gofileFallbackStarted = hash;
+    this.clearP2PDeadline?.();
+    if (this.processingTimeout) {
+        clearTimeout(this.processingTimeout);
+        this.processingTimeout = null;
+    }
+
     if (!gofileLocator) {
+        this.releaseLoadTorrent?.();
+        if (torrent && !this.isSeedingTorrent?.(torrent)) {
+            try {
+                torrent.destroy?.();
+            } catch (_) {}
+        }
         this.hideLoadingOverlay();
         alert(`❌ Torrent Load Error\n\n${torrentError.message}`);
         return;
     }
-    this._gofileFallbackStarted = hash;
-    this.clearP2PDeadline?.();
     const isActiveLoad = () =>
         loadGeneration === null || (this._loadGeneration === loadGeneration && this.currentHash === hash);
     if (!isActiveLoad()) return;
     const controller = new AbortController();
     this._gofileFallbackController = controller;
     try {
-        // The torrent phase is over. Its timers, tracker sockets and torrent go
-        // now, so nothing from it can report progress over the mirrored render.
-        if (this.processingTimeout) {
-            clearTimeout(this.processingTimeout);
-            this.processingTimeout = null;
-        }
+        // The torrent phase is over. Its tracker sockets and torrent go now, so
+        // nothing from it can report progress over the mirrored render. Its
+        // timers were already stopped above, before this branched on whether
+        // there is a mirror at all.
         this.releaseLoadTorrent();
-        try {
-            torrent?.destroy?.();
-        } catch (_) {}
+        if (torrent && !this.isSeedingTorrent?.(torrent)) {
+            try {
+                torrent.destroy?.();
+            } catch (_) {}
+        }
         this.log('No torrent peers available. Trying GoFile mirror…');
         this.toast?.info?.('No torrent peers available. Trying the temporary GoFile mirror…', 'Fallback transport');
         const service = this.gofileService || new GoFileService();

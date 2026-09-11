@@ -751,20 +751,32 @@ export default class ChannelsService {
         if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal, source });
 
         if (payload.type === 'file-info') {
-            if (!this._fileBuffers) this._fileBuffers = {};
-            if (!this._fileInfos) this._fileInfos = {};
-            this._fileInfos[payload.fileId] = { fileName: payload.fileName, fileSize: payload.fileSize };
-            this._fileBuffers[payload.fileId] = { chunks: [], receivedSize: 0 };
-            this.emit({ type: 'file-incoming', fileId: payload.fileId, fileName: payload.fileName, fileSize: payload.fileSize, local: isLocal });
+            this._beginFileTransfer(payload, isLocal);
         }
 
         if (payload.type === 'file-chunk') {
+            // A DataChannel is ordered, so the announcement always arrived
+            // first there. Relays are not: each chunk is its own published
+            // event, and one can be delivered before the `file-info` that
+            // introduced it. Dropping those chunks meant a transfer that could
+            // never reach its size and hung forever, so a chunk carries enough
+            // to open the transfer by itself.
+            const info = this._beginFileTransfer(payload, isLocal);
             const buf = this._fileBuffers?.[payload.fileId];
-            const info = this._fileInfos?.[payload.fileId];
             if (!buf || !info) return;
+
             const bytes = Uint8Array.from(atob(payload.chunk), (c) => c.charCodeAt(0));
-            buf.chunks[payload.chunkIndex] = bytes;
-            buf.receivedSize += bytes.length;
+            // Count each index once: the same chunk arriving from two relays
+            // must not push the byte count past the real size.
+            if (!buf.received.has(payload.chunkIndex)) {
+                buf.chunks[payload.chunkIndex] = bytes;
+                buf.received.add(payload.chunkIndex);
+                buf.receivedSize += bytes.length;
+            }
+            if (Number.isInteger(payload.totalChunks) && payload.totalChunks > 0) {
+                buf.totalChunks = payload.totalChunks;
+            }
+
             // The name and size ride along: a progress event is the only thing
             // the receiving UI has between "incoming" and "ready", and over the
             // relay that gap is seconds long rather than instant.
@@ -776,14 +788,66 @@ export default class ChannelsService {
                 received: buf.receivedSize,
                 total: info.fileSize
             });
-            if (buf.receivedSize >= info.fileSize) {
-                const blob = new Blob(buf.chunks);
-                const url = URL.createObjectURL(blob);
-                this.emit({ type: 'file-ready', fileId: payload.fileId, fileName: info.fileName, url });
-                delete this._fileBuffers[payload.fileId];
-                delete this._fileInfos[payload.fileId];
-            }
+
+            // Complete means every chunk is here, not merely enough bytes: with
+            // out-of-order delivery a byte count can reach the total while an
+            // earlier index is still missing, and assembling then would write a
+            // hole into the file.
+            const complete = buf.totalChunks
+                ? buf.received.size === buf.totalChunks
+                : info.fileSize > 0 && buf.receivedSize >= info.fileSize;
+            if (!complete) return;
+
+            const blob = new Blob(buf.chunks);
+            const url = URL.createObjectURL(blob);
+            this.emit({ type: 'file-ready', fileId: payload.fileId, fileName: info.fileName, url });
+            delete this._fileBuffers[payload.fileId];
+            delete this._fileInfos[payload.fileId];
         }
+    }
+
+    /**
+     * Open a transfer, from whichever of its events arrived first.
+     *
+     * Called for both `file-info` and `file-chunk`, and deliberately does not
+     * reset an open transfer: a `file-info` that overtakes its own chunks would
+     * otherwise throw away everything already buffered.
+     *
+     * @param {any} payload
+     * @param {boolean} isLocal
+     * @returns {{ fileName: string, fileSize: number }|null}
+     */
+    _beginFileTransfer(payload, isLocal = false) {
+        if (!this._fileBuffers) this._fileBuffers = {};
+        if (!this._fileInfos) this._fileInfos = {};
+
+        const existing = this._fileInfos[payload.fileId];
+        if (existing) {
+            // A late announcement can still fill in what a chunk could not.
+            if (!existing.fileName && payload.fileName) existing.fileName = payload.fileName;
+            if (!existing.fileSize && payload.fileSize) existing.fileSize = Number(payload.fileSize) || 0;
+            return existing;
+        }
+
+        const fileSize = Number(payload.fileSize) || 0;
+        if (!payload.fileName && !fileSize) return null;
+
+        const info = { fileName: `${payload.fileName || 'file'}`, fileSize };
+        this._fileInfos[payload.fileId] = info;
+        this._fileBuffers[payload.fileId] = {
+            chunks: [],
+            received: new Set(),
+            receivedSize: 0,
+            totalChunks: Number.isInteger(payload.totalChunks) && payload.totalChunks > 0 ? payload.totalChunks : 0
+        };
+        this.emit({
+            type: 'file-incoming',
+            fileId: payload.fileId,
+            fileName: info.fileName,
+            fileSize: info.fileSize,
+            local: isLocal
+        });
+        return info;
     }
 
     /**
@@ -856,6 +920,13 @@ export default class ChannelsService {
                 timestamp: new Date().toISOString(),
                 fileId,
                 chunkIndex,
+                // Enough to open the transfer on its own. Relays publish each
+                // chunk as its own event and do not promise to deliver them in
+                // order, so a chunk that arrives before the announcement has to
+                // be usable rather than dropped.
+                fileName: file.name,
+                fileSize: file.size,
+                totalChunks,
                 chunk: b64
             };
             // A chunk that no transport accepted leaves the receiver with a
@@ -874,9 +945,7 @@ export default class ChannelsService {
             });
 
             if (overRelay && chunkIndex + 1 < totalChunks) {
-                await new Promise((resolve) =>
-                    setTimeout(resolve, this._transportConfig.RELAY_FILE_CHUNK_PAUSE_MS)
-                );
+                await new Promise((resolve) => setTimeout(resolve, this._transportConfig.RELAY_FILE_CHUNK_PAUSE_MS));
             }
         }
 

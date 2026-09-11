@@ -130,3 +130,35 @@ test('the publisher address is searchable', () => {
 test('searching is case-insensitive and ignores stray whitespace', () => {
     assert.equal(searchLibrary(LIBRARY, '  DARKroom  ').length, 1);
 });
+
+test('meta tags are read whatever order their attributes are in', () => {
+    const page = `<html><head>
+        <title>Mara &amp; Co</title>
+        <meta content="Prints &amp; frames" name="description" />
+        <meta charset="utf-8">
+        <meta NAME="Keywords" CONTENT="prints, framing">
+    </head></html>`;
+
+    const entry = buildLibraryEntry({ hash: 'd'.repeat(40), siteData: siteData(page) });
+
+    // HTML puts no order on attributes, and a site that writes `content` first
+    // is not a site without a description.
+    assert.equal(entry.description, 'Prints & frames');
+    assert.equal(entry.keywords, 'prints, framing', 'attribute names are case-insensitive');
+    // Entities are what the author wrote, decoded: a person reads this.
+    assert.equal(entry.title, 'Mara & Co');
+});
+
+test('numeric entities decode too, and unknown ones are left alone', () => {
+    const page = `<html><head><title>caf&#233; &#x2014; &unknownentity; bar</title></head></html>`;
+    const entry = buildLibraryEntry({ hash: 'e'.repeat(40), siteData: siteData(page) });
+
+    assert.equal(entry.title, 'café — &unknownentity; bar');
+});
+
+test('a decoded title is searchable by the word a person would type', () => {
+    const page = `<html><head><meta content="Bakery &amp; Coffee" name="description"></head></html>`;
+    const entry = buildLibraryEntry({ hash: 'f'.repeat(40), siteData: siteData(page) });
+
+    assert.equal(searchLibrary([entry], 'coffee').length, 1);
+});

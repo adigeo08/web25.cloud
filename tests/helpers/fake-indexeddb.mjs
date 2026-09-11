@@ -77,6 +77,19 @@ class FakeStore {
         return request;
     }
 
+    getAllKeys() {
+        const request = new FakeRequest();
+        request._succeed([...this.rows.keys()]);
+        return request;
+    }
+
+    clear() {
+        const request = new FakeRequest();
+        this.rows.clear();
+        request._succeed(undefined);
+        return request;
+    }
+
     put(value) {
         const request = new FakeRequest();
         this.rows.set(value[this.keyPath], structuredClone(value));
@@ -116,8 +129,10 @@ class FakeDatabase {
         this.stores.delete(name);
     }
 
-    transaction(name) {
-        return { objectStore: () => this.stores.get(name) };
+    /** Accepts a store name or a list of them, like the real API. */
+    transaction(names) {
+        const requested = Array.isArray(names) ? names : [names];
+        return { objectStore: (name) => this.stores.get(name === undefined ? requested[0] : name) };
     }
 
     close() {
@@ -150,7 +165,10 @@ export function installFakeIndexedDb() {
                 db.closed = false;
                 if (needsUpgrade) {
                     request.result = db;
-                    request.onupgradeneeded?.();
+                    // The real API hands the handler an event whose `target` is
+                    // the request; code that reads `event.target.result` is
+                    // doing the ordinary thing, not something exotic.
+                    request.onupgradeneeded?.({ target: request });
                 }
                 request._succeed(db);
             });

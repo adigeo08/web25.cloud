@@ -74,3 +74,25 @@ test('the sign-in wall can say why a session ended', () => {
     assert.match(wall, /id="session-resume-notice"[^>]*class="session-resume-notice hidden"/);
     assert.match(wall, /unlock again/i);
 });
+
+test('the stop confirmation is announced as a modal dialog', () => {
+    const modal = MARKUP.slice(MARKUP.indexOf('id="stop-seeding-modal"'), MARKUP.indexOf('<!-- Torrent Creator Modal -->'));
+
+    // Without these a screen-reader user is left on the card behind a
+    // destructive prompt, with nothing saying a decision is being asked for.
+    assert.match(modal, /role="dialog"/);
+    assert.match(modal, /aria-modal="true"/);
+    assert.match(modal, /aria-labelledby="stop-seeding-title"/);
+    assert.match(modal, /id="stop-seeding-title"/);
+    assert.match(modal, /aria-describedby="stop-seeding-description"/);
+    assert.match(modal, /id="stop-seeding-description"/);
+});
+
+test('the resume notice does not claim hosting continued while the page was gone', () => {
+    const wall = MARKUP.slice(MARKUP.indexOf('id="deploy-auth-wall"'), MARKUP.indexOf('id="deploy-panel"'));
+
+    // WebTorrent dies with the page; what the store buys is that seeding starts
+    // again by itself, which is a different promise and the true one.
+    assert.ok(!/kept running throughout/.test(wall));
+    assert.match(wall, /started again on their own/);
+});

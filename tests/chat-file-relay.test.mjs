@@ -191,3 +191,129 @@ test('an open DataChannel still uses the bigger chunk and no pacing', async () =
         false
     );
 });
+
+test('a chunk that overtakes its announcement still lands', async () => {
+    // Relays publish each chunk as its own event and promise nothing about
+    // order. A receiver that drops chunks arriving before `file-info` can never
+    // reach the announced size, so the transfer hangs forever.
+    const { service, events } = relayService();
+    const previousCreate = globalThis.URL.createObjectURL;
+    globalThis.URL.createObjectURL = () => 'blob:stub';
+
+    try {
+        const chunk = (index, text, total) => ({
+            type: 'file-chunk',
+            id: `fc-${index}`,
+            channel: 'room-relay',
+            from: GUEST_ADDRESS,
+            fileId: 'f1',
+            chunkIndex: index,
+            fileName: 'notes.txt',
+            fileSize: 6,
+            totalChunks: total,
+            chunk: btoa(text)
+        });
+
+        // Second chunk first, then the first, and the announcement last.
+        service.handleInbound(chunk(1, 'def', 2));
+        assert.ok(
+            events.some((event) => event.type === 'file-incoming'),
+            'the transfer opens from whichever event arrives first'
+        );
+        service.handleInbound(chunk(0, 'abc', 2));
+        service.handleInbound({
+            type: 'file-info',
+            id: 'fi-1',
+            channel: 'room-relay',
+            from: GUEST_ADDRESS,
+            fileId: 'f1',
+            fileName: 'notes.txt',
+            fileSize: 6
+        });
+
+        const ready = events.filter((event) => event.type === 'file-ready');
+        assert.equal(ready.length, 1, 'the file completes exactly once');
+        assert.equal(ready[0].fileName, 'notes.txt');
+    } finally {
+        globalThis.URL.createObjectURL = previousCreate;
+    }
+});
+
+test('a late announcement does not discard what is already buffered', async () => {
+    const { service, events } = relayService();
+    const previousCreate = globalThis.URL.createObjectURL;
+    globalThis.URL.createObjectURL = () => 'blob:stub';
+
+    try {
+        service.handleInbound({
+            type: 'file-chunk',
+            id: 'c0',
+            channel: 'room-relay',
+            from: GUEST_ADDRESS,
+            fileId: 'f2',
+            chunkIndex: 0,
+            fileName: 'a.bin',
+            fileSize: 6,
+            totalChunks: 2,
+            chunk: btoa('abc')
+        });
+        // The announcement used to reset the buffer, throwing away chunk 0.
+        service.handleInbound({
+            type: 'file-info',
+            id: 'fi-2',
+            channel: 'room-relay',
+            from: GUEST_ADDRESS,
+            fileId: 'f2',
+            fileName: 'a.bin',
+            fileSize: 6
+        });
+        service.handleInbound({
+            type: 'file-chunk',
+            id: 'c1',
+            channel: 'room-relay',
+            from: GUEST_ADDRESS,
+            fileId: 'f2',
+            chunkIndex: 1,
+            fileName: 'a.bin',
+            fileSize: 6,
+            totalChunks: 2,
+            chunk: btoa('def')
+        });
+
+        assert.equal(events.filter((event) => event.type === 'file-ready').length, 1);
+    } finally {
+        globalThis.URL.createObjectURL = previousCreate;
+    }
+});
+
+test('a duplicate chunk from a second relay is counted once', async () => {
+    const { service, events } = relayService();
+    const previousCreate = globalThis.URL.createObjectURL;
+    globalThis.URL.createObjectURL = () => 'blob:stub';
+
+    try {
+        const chunk = (id, index, text) => ({
+            type: 'file-chunk',
+            id,
+            channel: 'room-relay',
+            from: GUEST_ADDRESS,
+            fileId: 'f3',
+            chunkIndex: index,
+            fileName: 'a.bin',
+            fileSize: 6,
+            totalChunks: 2,
+            chunk: btoa(text)
+        });
+
+        service.handleInbound(chunk('x0', 0, 'abc'));
+        // Same chunk, different message id: the id-based dedupe does not catch
+        // it, so the completion rule has to.
+        service.handleInbound(chunk('x0-again', 0, 'abc'));
+        assert.equal(events.filter((event) => event.type === 'file-ready').length, 0, 'not complete on a duplicate');
+
+        service.handleInbound(chunk('x1', 1, 'def'));
+        assert.equal(events.filter((event) => event.type === 'file-ready').length, 1);
+    } finally {
+        globalThis.URL.createObjectURL = previousCreate;
+    }
+});

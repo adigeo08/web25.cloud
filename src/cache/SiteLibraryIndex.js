@@ -47,10 +47,89 @@ function decodeHead(content) {
     }
 }
 
-/** @param {string} html @param {RegExp} pattern */
-function firstMatch(html, pattern) {
-    const match = pattern.exec(html);
-    return match ? `${match[1]}`.trim().replace(/\s+/g, ' ').slice(0, 300) : '';
+/** The entities that actually turn up in a title or a description. */
+const NAMED_ENTITIES = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    nbsp: ' ',
+    hellip: '…',
+    mdash: '—',
+    ndash: '–'
+};
+
+/**
+ * Turn entity references back into the text the author wrote.
+ *
+ * A title reading `Mara &amp; Co` is a title about two people, not about an
+ * ampersand entity, and the library shows it to a person.
+ *
+ * @param {string} text
+ */
+function decodeEntities(text) {
+    return `${text}`.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z][a-z0-9]*);/gi, (match, entity) => {
+        const token = `${entity}`.toLowerCase();
+        if (token.startsWith('#x')) {
+            const code = Number.parseInt(token.slice(2), 16);
+            return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+        }
+        if (token.startsWith('#')) {
+            const code = Number.parseInt(token.slice(1), 10);
+            return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+        }
+        return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, token) ? NAMED_ENTITIES[token] : match;
+    });
+}
+
+/** One value, tidied for display and bounded. */
+function clean(value) {
+    return decodeEntities(`${value || ''}`)
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 300);
+}
+
+/**
+ * Read a tag's attributes, in whatever order they were written.
+ *
+ * HTML puts no order on attributes, so `<meta content="…" name="description">`
+ * is as valid as the other way round; a single regex expecting `name` before
+ * `content` simply misses half the web. `DOMParser` would be the obvious tool
+ * and is not used on purpose: this module is exercised in Node, where it does
+ * not exist, and parsing attributes is the whole of what is needed.
+ *
+ * @param {string} tag the full tag, angle brackets included
+ * @returns {Record<string, string>}
+ */
+function tagAttributes(tag) {
+    /** @type {Record<string, string>} */
+    const attributes = {};
+    const pattern = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+    for (const match of `${tag}`.matchAll(pattern)) {
+        attributes[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? '';
+    }
+    return attributes;
+}
+
+/**
+ * The `content` of the first `<meta>` whose `name` matches.
+ * @param {string} html
+ * @param {string} name
+ */
+function metaContent(html, name) {
+    for (const match of `${html}`.matchAll(/<meta\b[^>]*>/gi)) {
+        const attributes = tagAttributes(match[0]);
+        if ((attributes.name || '').toLowerCase() === name) return clean(attributes.content);
+    }
+    return '';
+}
+
+/** @param {string} html */
+function documentTitle(html) {
+    const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(`${html}`);
+    return match ? clean(match[1]) : '';
 }
 
 /**
@@ -79,9 +158,9 @@ export function buildLibraryEntry({ hash, siteData, signatureState = null, times
     const entryPath = findEntryPath(data);
     const head = entryPath ? decodeHead(data[entryPath]?.content) : '';
 
-    const title = firstMatch(head, /<title[^>]*>([\s\S]*?)<\/title>/i);
-    const description = firstMatch(head, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i);
-    const keywords = firstMatch(head, /<meta[^>]+name=["']keywords["'][^>]+content=["']([^"']*)["']/i);
+    const title = documentTitle(head);
+    const description = metaContent(head, 'description');
+    const keywords = metaContent(head, 'keywords');
 
     const size = Object.values(data).reduce((total, file) => total + (Number(file?.size) || 0), 0);
 

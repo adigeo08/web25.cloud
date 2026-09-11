@@ -146,3 +146,84 @@ test('the deadline hands the load to the mirror exactly once', async () => {
     clearP2PDeadline.call(context);
     assert.equal(context._p2pDeadlineTimer, null);
 });
+
+test('a hash-only failure is reported once, with the deadline cleared', async () => {
+    const { loadSite, handleTerminalP2PFailure, clearP2PDeadline, releaseLoadTorrent } = await torrentLoader();
+    const events = [];
+    const context = baseContext(events, clearP2PDeadline);
+    context.handleTerminalP2PFailure = handleTerminalP2PFailure;
+    context.releaseLoadTorrent = releaseLoadTorrent;
+    context._activeLoadTorrent = null;
+
+    const alerts = [];
+    const previousAlert = globalThis.alert;
+    globalThis.alert = (message) => alerts.push(message);
+
+    try {
+        // No locator, and the transport fails immediately.
+        context.client = {
+            add() {
+                events.push('p2p');
+                throw new Error('WebTorrent could not add the torrent');
+            }
+        };
+
+        await loadSite.call(context, { torrentHash: HASH, gofileLocator: null });
+
+        assert.equal(alerts.length, 1, 'the failure is reported once');
+        // The 8-second deadline used to survive the no-mirror early return and
+        // call straight back in, alerting a second time minutes later.
+        assert.equal(context._p2pDeadlineTimer, null, 'the attempt deadline is cleared');
+
+        // A second entry for the same hash changes nothing.
+        await handleTerminalP2PFailure.call(context, HASH, null, new Error('again'), null, null);
+        assert.equal(alerts.length, 1);
+    } finally {
+        globalThis.alert = previousAlert;
+    }
+});
+
+test('a site this browser is already seeding loads from it instead of adding a duplicate', async () => {
+    const { loadSite, clearP2PDeadline } = await torrentLoader();
+    const events = [];
+    const context = baseContext(events, clearP2PDeadline);
+
+    const seeded = {
+        infoHash: HASH,
+        name: 'my-site',
+        files: [],
+        length: 0,
+        done: true,
+        progress: 1,
+        on() {},
+        once() {},
+        destroy() {
+            events.push('destroyed');
+        }
+    };
+    context._seedingTorrents = new Map([[HASH, seeded]]);
+    context.isSeedingTorrent = (torrent) => torrent === seeded;
+    context.client = {
+        get: () => seeded,
+        add() {
+            events.push('p2p');
+        }
+    };
+    context.registerLoadTorrent = () => events.push('registered');
+    context.verifyTorrentChainBeforeDownload = async () => {
+        events.push('gate');
+        return { ok: false };
+    };
+    context.updatePeerStats = () => {};
+
+    await loadSite.call(context, { torrentHash: HASH, gofileLocator: null });
+    clearP2PDeadline.call(context);
+
+    // WebTorrent refuses a second torrent for the same info hash, so adding one
+    // would fail the load outright — and the seeding torrent must not be
+    // registered as the load's own, or the next load would destroy it.
+    assert.ok(!events.includes('p2p'), 'no duplicate add');
+    assert.ok(!events.includes('registered'), 'the seeding torrent is borrowed, not owned');
+    assert.ok(!events.includes('destroyed'), 'and never destroyed by the load');
+    assert.ok(events.includes('gate'), 'the load goes on to verify it like any other');
+});
