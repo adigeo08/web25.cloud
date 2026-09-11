@@ -4053,14 +4053,76 @@ input[type='checkbox'] {
     display: none !important;
 }
 
+/* The viewer chrome.
+   This used to be a bare black strip with one green chip floating in it, which
+   read as browser furniture rather than as part of the console. It now uses the
+   same surface, hairline and chip vocabulary as every other header here, and
+   carries the way back out. */
 .site-viewer-header,
 .viewer-header {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.6rem 1rem;
+    padding: 0.55rem 0.9rem;
     border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+
+.viewer-back {
+    flex: 0 0 auto;
+}
+
+.viewer-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 0.26rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
     background: var(--surface);
+}
+
+.viewer-brand {
+    font-size: 0.85rem;
+}
+
+.viewer-hash {
+    color: var(--text-dim);
+    font-size: 0.76rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Where the site came from is information, not a verdict: it gets a quiet
+   chip so the signature chip next to it stays the one that means something. */
+.status-neutral {
+    border-color: var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+}
+
+.site-viewer-header .viewer-info {
+    margin-left: auto;
+    align-items: center;
+}
+
+@media (max-width: 640px) {
+    .site-viewer-header {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .site-viewer-header .viewer-info {
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .viewer-identity {
+        flex: 1 1 auto;
+    }
 }
 
 .viewer-info {
@@ -4226,6 +4288,347 @@ select,
     .console-heading {
         flex-direction: column;
     }
+}
+
+/* ── Pages tab ─────────────────────────────────────────────────────────────
+   One card per site this browser is seeding. Collapsed, a card is the single
+   line that matters — what is live and who is pulling it; open, it is the whole
+   deployment record as it stood when it went live. */
+
+.pages-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.pages-intro {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+    line-height: 1.55;
+}
+
+.pages-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.page-card {
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface-2);
+    overflow: hidden;
+    transition: border-color 0.15s ease;
+}
+
+.page-card:hover {
+    border-color: var(--border-strong);
+}
+
+.page-card-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.page-card-summary::-webkit-details-marker {
+    display: none;
+}
+
+/* The disclosure caret is drawn rather than inherited, so it can sit at the end
+   of the row and turn with the card. */
+.page-card-summary::after {
+    content: '▾';
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 0.8rem;
+    transition: transform 0.15s ease;
+}
+
+.page-card-shell[open] > .page-card-summary::after {
+    transform: rotate(180deg);
+}
+
+.page-card-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.page-card-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.page-card-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.page-card-hash {
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
+.page-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 0 1rem 1rem;
+    border-top: 1px solid var(--border-soft);
+    padding-top: 0.9rem;
+}
+
+.page-card-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.6rem;
+}
+
+.page-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r);
+    background: var(--surface);
+}
+
+.page-stat-value {
+    font-size: 1.05rem;
+    font-weight: 650;
+    line-height: 1.2;
+}
+
+.page-stat-label {
+    color: var(--muted);
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.page-card-facts {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.page-fact {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+    font-size: 0.82rem;
+}
+
+.page-fact-label {
+    flex: 0 0 11rem;
+    color: var(--muted);
+}
+
+.page-fact-value {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.page-card-error {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--err);
+    border-radius: var(--r);
+    background: var(--err-soft);
+    color: var(--text);
+    font-size: 0.82rem;
+}
+
+.page-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.modal-narrow {
+    width: min(460px, 100%);
+}
+
+@media (max-width: 640px) {
+    .page-card-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .page-fact {
+        flex-direction: column;
+        gap: 0.1rem;
+    }
+
+    .page-fact-label {
+        flex: none;
+    }
+
+    .page-card-actions .btn {
+        flex: 1 1 auto;
+    }
+}
+
+/* The one sentence the unlock screen owes a user whose session a reload ended. */
+.session-resume-notice {
+    display: flex;
+    gap: 0.55rem;
+    align-items: flex-start;
+    margin: 0;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r);
+    background: var(--accent-soft);
+    color: var(--text);
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+
+.session-resume-notice.hidden {
+    display: none !important;
+}
+
+/* Links inside chat messages. Peer-written text, so the anchor is built as a
+   DOM node with a checked http(s) href — never injected markup. */
+.channels-message-link {
+    color: var(--accent-hi);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+}
+
+.channels-message-link:hover {
+    color: var(--accent);
+}
+
+.file-transfer.is-error span {
+    color: var(--err);
+}
+
+/* ── Local library ─────────────────────────────────────────────────────────
+   Cached sites, searchable by what they call themselves. */
+
+.library {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.library.hidden {
+    display: none !important;
+}
+
+.library-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.library-search .gateway-search-icon {
+    position: absolute;
+    left: 0.75rem;
+    color: var(--muted);
+    pointer-events: none;
+}
+
+.library-search .hash-input {
+    width: 100%;
+    padding-left: 2.3rem;
+}
+
+.library-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
+.library-empty.hidden {
+    display: none !important;
+}
+
+.library-results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.6rem;
+}
+
+.library-result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface-2);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+        border-color 0.15s ease,
+        transform 0.15s ease;
+}
+
+.library-result:hover {
+    border-color: var(--accent-line);
+    transform: translateY(-1px);
+}
+
+.library-result:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.library-result-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.library-result-title {
+    font-weight: 600;
+    font-size: 0.92rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.library-result-desc {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.library-result-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.deploy-advanced-note {
+    margin: 0.65rem 0 0;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    line-height: 1.55;
 }
 
 @media (max-width: 640px) {

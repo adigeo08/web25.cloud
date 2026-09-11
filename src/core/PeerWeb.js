@@ -8,6 +8,7 @@ import * as serviceWorker from './serviceworker/ServiceWorkerBridge.js';
 import * as torrentLoader from './torrent/TorrentLoader.js';
 import * as preferredSiteLoader from './torrent/PreferredSiteLoader.js';
 import * as torrentUploader from './torrent/TorrentUploader.js';
+import * as seedingSessions from './torrent/SeedingSessions.js';
 import * as torrentCreator from './torrent/TorrentCreator.js';
 import * as siteRenderer from './renderer/SiteRenderer.js';
 import * as debugPanel from '../ui/DebugPanel.js';
@@ -36,6 +37,15 @@ class PeerWeb {
         this.processingTimeout = null;
         /** @type {{ torrent: any, guard: { stop: () => void } } | null} the torrent the current load owns */
         this._activeLoadTorrent = null;
+        /**
+         * Sites this browser hosts, by info hash. These outlive signing out and
+         * cache clearing on purpose: a visitor pulling a site from here has
+         * nothing to do with whether its publisher is signed in.
+         * @type {Map<string, any>}
+         */
+        this._seedingTorrents = new Map();
+        /** @type {Map<string, string>} sessions that failed to resume, by hash */
+        this._seedingErrors = new Map();
         this.signedTorrentMetadata = new Map();
         this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
         const overrideTrackers =
@@ -55,9 +65,10 @@ Object.assign(
     serviceWorker,
     torrentLoader,
     // Override TorrentLoader.loadSite only; the rest of the torrent helpers stay
-    // on the prototype and are reused by the preferred cache → GoFile → P2P flow.
+    // on the prototype and are reused by the preferred cache → P2P → GoFile flow.
     preferredSiteLoader,
     torrentUploader,
+    seedingSessions,
     torrentCreator,
     siteRenderer,
     debugPanel,

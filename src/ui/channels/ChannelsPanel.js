@@ -267,6 +267,75 @@ export function clearDmSearch() {
     setDmError('dm-choose-role-error', '');
 }
 
+/** Where a link is allowed to point. Everything else stays plain text. */
+const LINKABLE_PROTOCOLS = new Set(['http:', 'https:']);
+
+/** Matches a bare http(s) URL inside ordinary prose. */
+const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
+
+/**
+ * Trailing punctuation belongs to the sentence, not to the URL.
+ * `(see https://example.com/a).` should not link the closing bracket.
+ * @param {string} candidate
+ */
+function trimUrlTail(candidate) {
+    let url = candidate;
+    while (url.length > 0 && '.,;:!?'.includes(url[url.length - 1])) url = url.slice(0, -1);
+    // Balance brackets rather than counting them: only a trailing one that was
+    // never opened inside the URL is punctuation.
+    while (url.endsWith(')') && (url.match(/\(/g) || []).length < (url.match(/\)/g) || []).length) {
+        url = url.slice(0, -1);
+    }
+    return url;
+}
+
+/**
+ * Render message text with its links clickable.
+ *
+ * A message is written by the peer, so this never touches `innerHTML`: the text
+ * is split, the pieces are appended as text nodes, and a link is a real element
+ * whose `href` was parsed and checked first. Only `http:` and `https:` survive
+ * that check — a `javascript:` or `data:` URL is left as the plain text it is.
+ *
+ * Links open in a new tab, with `rel="noopener noreferrer"` so the opened page
+ * gets neither a handle on this one nor a referrer naming the gateway.
+ *
+ * @param {HTMLElement} target
+ * @param {string} text
+ */
+export function renderMessageText(target, text) {
+    const value = `${text || ''}`;
+    let lastIndex = 0;
+
+    for (const match of value.matchAll(URL_PATTERN)) {
+        const raw = match[0];
+        const index = match.index ?? 0;
+        const href = trimUrlTail(raw);
+
+        let parsed = null;
+        try {
+            parsed = new URL(href);
+        } catch (_) {
+            parsed = null;
+        }
+        if (!parsed || !LINKABLE_PROTOCOLS.has(parsed.protocol)) continue;
+
+        if (index > lastIndex) target.appendChild(document.createTextNode(value.slice(lastIndex, index)));
+
+        const link = document.createElement('a');
+        link.href = parsed.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.className = 'channels-message-link';
+        link.textContent = href;
+        target.appendChild(link);
+
+        lastIndex = index + href.length;
+    }
+
+    if (lastIndex < value.length) target.appendChild(document.createTextNode(value.slice(lastIndex)));
+}
+
 export function appendChannelsMessage(message, isOwn = false) {
     const container = document.getElementById('channels-messages');
     if (!container) return;
@@ -281,7 +350,7 @@ export function appendChannelsMessage(message, isOwn = false) {
 
     const body = document.createElement('div');
     body.className = 'channels-message-body';
-    body.textContent = message.text || '';
+    renderMessageText(body, message.text || '');
 
     item.appendChild(meta);
     item.appendChild(body);
@@ -307,7 +376,28 @@ export function bindFileInput(onFile) {
     });
 }
 
-export function appendFileTransfer({ fileId, fileName, fileSize, url = null, received = 0 }) {
+/**
+ * One row per transfer, in either direction.
+ *
+ * Over the relay a transfer takes seconds per megabyte rather than an instant,
+ * so the row has to be honest while it runs: the sender sees its own progress,
+ * the receiver sees a name and a percentage instead of a stuck placeholder, and
+ * a transfer that dies mid-way says so rather than freezing at 94%.
+ *
+ * @param {{ fileId: string, fileName?: string, fileSize?: number, url?: string|null,
+ *           received?: number, direction?: 'in'|'out', state?: 'active'|'error',
+ *           overRelay?: boolean }} transfer
+ */
+export function appendFileTransfer({
+    fileId,
+    fileName = '',
+    fileSize = 0,
+    url = null,
+    received = 0,
+    direction = 'in',
+    state = 'active',
+    overRelay = false
+}) {
     const container = document.getElementById('channels-files');
     if (!container) return;
     let item = document.getElementById(`file-transfer-${fileId}`);
@@ -316,19 +406,34 @@ export function appendFileTransfer({ fileId, fileName, fileSize, url = null, rec
         item.id = `file-transfer-${fileId}`;
         item.className = 'file-transfer';
         container.appendChild(item);
+        item.dataset.fileName = fileName;
     }
-    const progress = fileSize > 0 ? Math.round((received / fileSize) * 100) : 0;
+    // Progress events carry less than the first event did; whatever the row was
+    // named when it opened is what it stays called.
+    if (fileName) item.dataset.fileName = fileName;
+    const label = item.dataset.fileName || fileName || 'file';
+
     item.textContent = '';
+    item.classList.toggle('is-error', state === 'error');
+
     if (url) {
         const link = document.createElement('a');
         link.href = url;
-        link.download = fileName;
+        link.download = label;
         link.className = 'btn btn-secondary btn-sm';
-        link.textContent = `💾 ${fileName}`;
+        link.textContent = `💾 ${label}`;
         item.appendChild(link);
-    } else {
-        const span = document.createElement('span');
-        span.textContent = `📥 ${fileName} — ${progress}%`;
-        item.appendChild(span);
+        return;
     }
+
+    const span = document.createElement('span');
+    if (state === 'error') {
+        span.textContent = `⚠️ ${label} — transfer interrupted`;
+    } else {
+        const progress = fileSize > 0 ? Math.round((received / fileSize) * 100) : 0;
+        const arrow = direction === 'out' ? '📤' : '📥';
+        const via = overRelay ? ' · over relay' : '';
+        span.textContent = `${arrow} ${label} — ${progress}%${via}`;
+    }
+    item.appendChild(span);
 }

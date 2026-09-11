@@ -100,5 +100,33 @@ export const NOSTR_CONFIG = Object.freeze({
      * Grace period for a transient `disconnected` ICE state. WebRTC recovers
      * from these routinely, so the fallback is not armed until it elapses.
      */
-    WEBRTC_DISCONNECT_GRACE_MS: 12000
+    WEBRTC_DISCONNECT_GRACE_MS: 12000,
+
+    /**
+     * Payload bytes per file chunk when the conversation is on the relay.
+     *
+     * A chunk is base64'd, signed, ECIES-encrypted and then wrapped twice by
+     * NIP-59 — a seal inside a gift wrap — and each of those layers is itself
+     * base64 with padding. The stack multiplies the payload by roughly five
+     * before it reaches the relay, and NIP-44 refuses a plaintext over 65535
+     * bytes, so the DataChannel's 16 KiB chunk would fail at the outer wrap.
+     * 8 KiB leaves comfortable headroom at every layer.
+     */
+    RELAY_FILE_CHUNK_BYTES: 8 * 1024,
+
+    /**
+     * How large a file may be before the relay path refuses it outright.
+     *
+     * Public relays are somebody else's disk and somebody else's bandwidth,
+     * donated for messages. A few hundred chunks is a courteous use of that; a
+     * video is not. Past this, the honest answer is to say so rather than to
+     * spend two minutes being rate-limited into a partial transfer.
+     */
+    RELAY_FILE_MAX_BYTES: 2 * 1024 * 1024,
+
+    /**
+     * Pause between relayed chunks. Relays rate-limit bursts, and a dropped
+     * chunk fails the whole transfer, so the slower send is the faster one.
+     */
+    RELAY_FILE_CHUNK_PAUSE_MS: 120
 });

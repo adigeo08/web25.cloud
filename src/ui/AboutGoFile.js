@@ -11,16 +11,17 @@ export function installGoFileAboutCopy() {
         article.id = 'about-gofile-transport';
         article.className = 'about-card';
         article.innerHTML = `
-            <h3>⚡ GoFile: ephemeral HTTP acceleration</h3>
+            <h3>⚡ GoFile: ephemeral HTTP fallback</h3>
             <p>
-                WEB25 loads sites in the order <strong>local cache → GoFile → WebTorrent</strong>.
-                A GoFile mirror is a CDN-like fast path after a cache miss, not the source of truth:
-                the client still verifies the mirrored torrent locally before anything renders.
+                WEB25 loads sites in the order <strong>local cache → WebTorrent → GoFile</strong>.
+                The swarm is what a deployment <em>is</em>, so it goes first and gets one short attempt;
+                a GoFile mirror is the HTTP fallback for when nobody answers it, never the source of
+                truth. The client verifies mirrored bytes against the torrent before anything renders.
             </p>
             <div class="feature-grid">
                 <div class="feature">💾 Cache first for instant repeat loads</div>
-                <div class="feature">⚡ GoFile second for fast HTTP delivery when a mirror locator exists</div>
-                <div class="feature">🌐 WebTorrent / P2P remains the resilient fallback</div>
+                <div class="feature">🌐 WebTorrent second — one attempt, 8 seconds, no retry ladder</div>
+                <div class="feature">⚡ GoFile third: fast HTTP bytes when the swarm is quiet</div>
                 <div class="feature">🧪 Mirror bytes are verified against torrent metadata and pieces</div>
                 <div class="feature">🕒 Guest mirrors are best-effort and intentionally ephemeral</div>
                 <div class="feature">🔐 Guest account tokens are stored only as wallet-encrypted local ciphertext</div>
@@ -40,15 +41,15 @@ export function installGoFileAboutCopy() {
         aboutGrid.appendChild(article);
     }
 
-    // The old static copy predates the preferred loader. Correct it in the UI
-    // so Browse describes the same cache → mirror → P2P behavior as the runtime.
+    // Keep the Browse copy describing the same cache → P2P → mirror behaviour
+    // as the runtime, without editing the large static template for it.
     const browsePanel = document.getElementById('tab-browse');
     if (browsePanel) {
         for (const paragraph of browsePanel.querySelectorAll('p')) {
             if (paragraph.textContent?.includes('P2P is always tried first')) {
                 paragraph.innerHTML =
                     '🎯 Enter a hash, <code>hash&amp;GoFileLocator</code>, or a complete WEB25 URL. ' +
-                    'Resolution order is <strong>local cache → GoFile mirror → WebTorrent / P2P</strong>.';
+                    'Resolution order is <strong>local cache → WebTorrent / P2P → GoFile mirror</strong>.';
                 break;
             }
         }

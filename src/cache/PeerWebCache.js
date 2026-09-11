@@ -1,11 +1,21 @@
 // @ts-check
 
 import { PEERWEB_CONFIG } from '../config/peerweb.config.js';
+import { buildLibraryEntry, searchLibrary } from './SiteLibraryIndex.js';
 
 class PeerWebCache {
     constructor() {
         this.dbName = 'PeerWebCache';
         this.storeName = 'sites';
+        /**
+         * A second, tiny store holding only what a site can be searched by.
+         *
+         * The cached sites themselves are whole websites — reading them all
+         * back to answer "which of these mentions photography?" would pull
+         * every byte of every site into memory for a keystroke. The index row
+         * is a few hundred bytes: title, file names, publisher, hash.
+         */
+        this.libraryStore = 'library';
         this.maxAge = PEERWEB_CONFIG.CACHE_MAX_AGE;
     }
 
@@ -22,7 +32,7 @@ class PeerWebCache {
     async openDB() {
         if (this._db) return this._db;
         const db = await this._open();
-        if (db.objectStoreNames.contains(this.storeName)) {
+        if (db.objectStoreNames.contains(this.storeName) && db.objectStoreNames.contains(this.libraryStore)) {
             this._db = db;
             return db;
         }
@@ -59,6 +69,9 @@ class PeerWebCache {
                     const store = db.createObjectStore(this.storeName, { keyPath: 'hash' });
                     store.createIndex('timestamp', 'timestamp');
                 }
+                if (!db.objectStoreNames.contains(this.libraryStore)) {
+                    db.createObjectStore(this.libraryStore, { keyPath: 'hash' });
+                }
             };
         });
     }
@@ -80,6 +93,7 @@ class PeerWebCache {
     }
 
     async set(hash, siteData, metadata = {}) {
+        const timestamp = Date.now();
         try {
             const db = await this.openDB();
             const transaction = db.transaction([this.storeName], 'readwrite');
@@ -89,14 +103,124 @@ class PeerWebCache {
                 hash,
                 data: siteData,
                 signatureState: metadata.signatureState || null,
-                timestamp: Date.now()
+                timestamp
             };
 
             await this._request(store.put(record));
             console.log(`[PeerWebCache] Cached site: ${hash}`);
         } catch (error) {
             console.error('[PeerWebCache] Error caching site:', error);
+            return;
         }
+
+        // Indexing is a separate transaction on purpose: a site that is cached
+        // but unsearchable is a small loss, and must not become a site that
+        // failed to cache.
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.libraryStore], 'readwrite');
+            await this._request(
+                transaction.objectStore(this.libraryStore).put(
+                    buildLibraryEntry({
+                        hash,
+                        siteData,
+                        signatureState: metadata.signatureState || null,
+                        timestamp,
+                        url: metadata.url || ''
+                    })
+                )
+            );
+        } catch (error) {
+            console.warn('[PeerWebCache] Site cached but not indexed:', error);
+        }
+    }
+
+    /**
+     * Index the sites that were cached before the library existed.
+     *
+     * Adding the store does not populate it, so without this every site a
+     * visitor had already loaded would be missing from the library until they
+     * happened to open it again — which is exactly the case the library is for.
+     * Runs once per page, reads one site at a time rather than pulling every
+     * cached website into memory at once, and never blocks a search: a
+     * half-finished backfill just means fewer results this time.
+     *
+     * @returns {Promise<number>} how many rows were added
+     */
+    async backfillLibrary() {
+        if (this._backfilled) return 0;
+        this._backfilled = true;
+
+        try {
+            const db = await this.openDB();
+            const cached = await this._request(
+                db.transaction([this.storeName], 'readonly').objectStore(this.storeName).getAllKeys()
+            );
+            const hashes = Array.isArray(cached) ? cached : [];
+            if (hashes.length === 0) return 0;
+
+            const existing = await this._request(
+                db.transaction([this.libraryStore], 'readonly').objectStore(this.libraryStore).getAllKeys()
+            );
+            const indexed = new Set(Array.isArray(existing) ? existing : []);
+            const missing = hashes.filter((hash) => !indexed.has(hash));
+            if (missing.length === 0) return 0;
+
+            let added = 0;
+            for (const hash of missing) {
+                const record = await this._request(
+                    db.transaction([this.storeName], 'readonly').objectStore(this.storeName).get(hash)
+                );
+                if (!record?.data) continue;
+                await this._request(
+                    db
+                        .transaction([this.libraryStore], 'readwrite')
+                        .objectStore(this.libraryStore)
+                        .put(
+                            buildLibraryEntry({
+                                hash,
+                                siteData: record.data,
+                                signatureState: record.signatureState || null,
+                                timestamp: record.timestamp || Date.now()
+                            })
+                        )
+                );
+                added += 1;
+            }
+            if (added > 0) console.log(`[PeerWebCache] Indexed ${added} previously cached site(s)`);
+            return added;
+        } catch (error) {
+            console.warn('[PeerWebCache] Could not index previously cached sites:', error);
+            return 0;
+        }
+    }
+
+    /**
+     * Every indexed site in this browser, newest first.
+     * @returns {Promise<any[]>}
+     */
+    async listLibrary() {
+        await this.backfillLibrary();
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.libraryStore], 'readonly');
+            const rows = await this._request(transaction.objectStore(this.libraryStore).getAll());
+            const entries = Array.isArray(rows) ? rows : [];
+            // An index row outliving its site would open onto a cache miss.
+            const fresh = entries.filter((entry) => Date.now() - (entry.savedAt || 0) < this.maxAge);
+            return searchLibrary(fresh, '');
+        } catch (error) {
+            console.error('[PeerWebCache] Error listing the local library:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Free-text search across the local library.
+     * @param {string} query
+     */
+    async searchLibrary(query) {
+        return searchLibrary(await this.listLibrary(), query);
     }
 
     async getEntry(hash) {
@@ -134,6 +258,13 @@ class PeerWebCache {
         } catch (error) {
             console.error('[PeerWebCache] Error deleting from cache:', error);
         }
+        // The index follows the site: a row pointing at bytes that are gone
+        // would offer the user a result that opens onto a cache miss.
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.libraryStore], 'readwrite');
+            await this._request(transaction.objectStore(this.libraryStore).delete(hash));
+        } catch (_) {}
     }
 
     async clear() {
@@ -146,6 +277,11 @@ class PeerWebCache {
         } catch (error) {
             console.error('[PeerWebCache] Error clearing cache:', error);
         }
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.libraryStore], 'readwrite');
+            await this._request(transaction.objectStore(this.libraryStore).clear());
+        } catch (_) {}
     }
 }
 

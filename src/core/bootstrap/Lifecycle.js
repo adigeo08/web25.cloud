@@ -22,6 +22,8 @@ import { verifyNostrEvent, normalizeNostrPublicKey, npubEncode, shortNpub } from
 import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
 import { DEFAULT_NOSTR_DM_RELAYS, NOSTR_CONFIG } from '../../config/nostr.config.js';
 import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
+import { rememberTab, readResumeHint } from '../../auth/SessionResumeHint.js';
+import { bindLibraryPanel, renderLibrary } from '../../ui/browse/LibraryPanel.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -89,10 +91,24 @@ export async function init() {
         await this.registerServiceWorker();
         this.setupEventListeners();
         this.setupCleanupHandlers();
+        // Hosting comes back before anything asks who the user is: re-seeding
+        // needs no key, so a locked wallet keeps every published site up.
+        //
+        // It also has to happen before `checkURL()` dispatches a load. Somebody
+        // reloading the link to their own site would otherwise have the load
+        // add that info hash first, and the resume would adopt that empty,
+        // still-downloading torrent instead of seeding the bytes it holds —
+        // leaving the only copy of the site unshared, on the one page that has
+        // it.
+        this.initPagesPanel?.();
+        await this.restoreSeedingSessions?.();
         this.checkURL();
         this.updateDebugToggle();
         await this.initAuth();
         await this.restoreDeploySession();
+        // Last, so it lands on a page whose tabs have finished deciding
+        // whether they exist.
+        this.applyResumeHint();
     } catch (error) {
         console.error('PeerWeb initialization failed:', error);
         this.showError('Failed to initialize PeerWeb: ' + error.message);
@@ -316,9 +332,24 @@ export function setupChannels() {
             appendFileTransfer({
                 fileId: event.fileId,
                 fileName: event.fileName,
-                fileSize: event.fileSize || 0,
-                received: event.received || 0
+                fileSize: event.fileSize || event.total || 0,
+                received: event.received || 0,
+                direction: 'in'
             });
+        } else if (event.type === 'file-send-start' || event.type === 'file-send-progress') {
+            // The sender needs its own row: over the relay a file is paced
+            // chunk by chunk, and a send with no feedback looks like nothing
+            // happened at all.
+            appendFileTransfer({
+                fileId: event.fileId,
+                fileName: event.fileName,
+                fileSize: event.fileSize || event.total || 0,
+                received: event.sent || 0,
+                direction: 'out',
+                overRelay: event.overRelay === true
+            });
+        } else if (event.type === 'file-send-error') {
+            appendFileTransfer({ fileId: event.fileId, direction: 'out', state: 'error' });
         } else if (event.type === 'file-ready') {
             appendFileTransfer({
                 fileId: event.fileId,
@@ -1217,9 +1248,12 @@ export async function signStagedPayload() {
     const createdAt = new Date().toISOString();
     updateDeployProgress({ label: 'Normalizing bundle paths', percent: 25, state: 'running' });
 
-    if (this.lastPublishCandidate?.torrent?.destroy) {
+    // Staging the next deployment must not take the previous one off the air:
+    // once it is live it belongs to the seeding store, not to this screen.
+    const stagedOver = this.lastPublishCandidate?.torrent;
+    if (stagedOver && !this.isSeedingTorrent?.(stagedOver)) {
         try {
-            this.lastPublishCandidate.torrent.destroy();
+            stagedOver.destroy?.();
         } catch (_) {}
     }
 
@@ -1453,6 +1487,27 @@ export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorSt
 
     this.lastDeployResult = { hash, url, signedBy: identity.address, mirror, mirrorState };
     this.persistDeploySession();
+    // The payload is copied out of this page and into the seeding store, which
+    // is what lets the site keep being served after a reload — and with the
+    // wallet locked, since nothing about seeding needs a key.
+    void this.recordSeedingSession?.({
+        hash,
+        torrent: this.lastPublishCandidate.torrent,
+        torrentFile: this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
+        payloadFiles: this.lastPublishCandidate.payloadFiles || null,
+        siteName: this.lastPublishCandidate.siteName || '',
+        createdAt: this.lastPublishCandidate.createdAt || new Date().toISOString(),
+        deploy: {
+            url,
+            signedBy: identity.address,
+            signature: this.lastSignature.signature,
+            signatureAlgorithm: this.lastSignature.signatureAlgorithm || 'EVM_SECP256K1',
+            signedAt: this.lastSignature.signedAt || null,
+            signatureStatus: 'VERIFIED',
+            mirror: mirror || null,
+            mirrorState
+        }
+    });
     this.refreshDeployUiState();
     return url;
 }
@@ -1902,13 +1957,10 @@ export function setupEventListeners() {
         });
     }
 
-    // Clear cache
-    const clearCache = document.getElementById('clear-cache');
-    if (clearCache) {
-        clearCache.addEventListener('click', () => {
-            this.clearCache();
-        });
-    }
+    // There is deliberately no "clear cache" control here any more. It used to
+    // take every live deployment down with the cache, which is not a thing an
+    // advanced-tools drawer should be able to do by accident. A session now
+    // ends only from its own card in Pages, behind a confirmation.
 
     // Create torrent
     const createTorrent = document.getElementById('create-torrent');
@@ -1994,6 +2046,9 @@ export function setupEventListeners() {
         });
     }
 
+    this.setupTabMemory();
+    this.initLibraryPanel();
+
     // Setup drag and drop and quick upload
     this.setupDragAndDrop();
     this.setupQuickUpload();
@@ -2033,6 +2088,74 @@ export function setupEventListeners() {
             }
         }
     });
+}
+
+/**
+ * Wire the local library search and fill it in for the first time.
+ */
+export function initLibraryPanel() {
+    bindLibraryPanel({
+        onSearch: (query) => void this.refreshLibrary(query),
+        onOpen: (hash) => {
+            if (hash) this.loadSite(hash);
+        }
+    });
+    void this.refreshLibrary('');
+}
+
+/**
+ * Run one library query against the local index.
+ *
+ * The total is passed alongside the matches so the panel can tell "you have no
+ * cached sites" from "none of your cached sites match this".
+ *
+ * @param {string} [query] omit to repeat whatever was last typed
+ */
+export async function refreshLibrary(query) {
+    const next = query === undefined ? this._libraryQuery || '' : query;
+    this._libraryQuery = next;
+    try {
+        const all = await this.cache.listLibrary();
+        const matches = next ? await this.cache.searchLibrary(next) : all;
+        renderLibrary(matches, { query: next, total: all.length });
+    } catch (error) {
+        this.log(`Local library unavailable: ${error.message}`);
+    }
+}
+
+/**
+ * Remember which tab the user is on.
+ *
+ * The tab switcher itself is inline in the template and owns the visual state;
+ * this only listens, so there is still one place that decides what "active"
+ * means.
+ */
+export function setupTabMemory() {
+    document.querySelectorAll('.tab-btn').forEach((button) => {
+        button.addEventListener('click', () => {
+            rememberTab(button.getAttribute('data-tab') || '');
+        });
+    });
+}
+
+/**
+ * Put the user back where they were, when that tab still exists.
+ *
+ * A remembered tab that is hidden on this load — Pages with nothing seeding,
+ * Account or Chat with the wallet locked — is skipped rather than forced open:
+ * the breadcrumb is a convenience and never overrides what the page is allowed
+ * to show.
+ */
+export function applyResumeHint() {
+    const hint = readResumeHint();
+    if (!hint) return null;
+
+    const button = document.querySelector(`.tab-nav .tab-btn[data-tab="${hint.tab}"]`);
+    if (!(button instanceof HTMLElement)) return hint;
+    if (button.style.display === 'none' || button.classList.contains('active')) return hint;
+
+    button.click();
+    return hint;
 }
 
 export function persistDeploySession() {
@@ -2126,8 +2249,13 @@ export async function restoreDeploySession() {
                 : 'Signed bundle restored. You can deploy now.'
         );
 
+        // A deployment that is already seeding from the seeding store needs no
+        // second torrent for the same hash — WebTorrent refuses duplicates, and
+        // the live one is the one actually serving bytes.
+        const alreadySeeding = this._seedingTorrents?.get(`${savedSession.hash}`.toLowerCase()) || null;
+
         await new Promise((resolve, reject) => {
-            this.client.add(signedTorrentBytes, { announce: this.trackers }, (torrent) => {
+            const onTorrent = (torrent) => {
                 this.lastPublishCandidate.torrent = torrent;
                 this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
 
@@ -2164,8 +2292,14 @@ export async function restoreDeploySession() {
                     });
                 }
                 resolve();
-            });
+            };
 
+            if (alreadySeeding) {
+                onTorrent(alreadySeeding);
+                return;
+            }
+
+            this.client.add(signedTorrentBytes, { announce: this.trackers }, onTorrent);
             setTimeout(() => reject(new Error('Timed out while restoring deploy session')), 12000);
         });
 
@@ -2234,9 +2368,13 @@ export function calculateFileTimeout(file) {
 }
 
 export function clearInMemoryStreamingState({ resetDeploySession = false } = {}) {
-    if (this.lastPublishCandidate?.torrent?.destroy) {
+    // Signing out and clearing the cache both land here. Neither is a reason to
+    // stop hosting: a live seeding session is the publisher's site being served
+    // to other people, and it survives both.
+    const candidateTorrent = this.lastPublishCandidate?.torrent;
+    if (candidateTorrent && !this.isSeedingTorrent?.(candidateTorrent)) {
         try {
-            this.lastPublishCandidate.torrent.destroy();
+            candidateTorrent.destroy?.();
         } catch (_) {}
     }
 

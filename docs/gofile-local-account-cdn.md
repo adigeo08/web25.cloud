@@ -3,20 +3,20 @@
 This document describes the **current WEB25.cloud GoFile design**.
 
 GoFile is not the source of truth for a WEB25 site and it is not treated as
-durable storage. It is an **ephemeral HTTP acceleration layer** used after the
-local browser cache and before WebTorrent/P2P when a WEB25 address carries a
-GoFile mirror locator.
+durable storage. It is an **ephemeral HTTP fallback transport**, used after the
+local browser cache and after a single, time-boxed WebTorrent attempt, when a
+WEB25 address carries a GoFile mirror locator.
 
 The design goal is simple:
 
 ```text
-fastest / cheapest path first
+identity first, then whatever is still standing
 
 local cache
     ↓ miss
+WebTorrent / P2P            one attempt, 8 s deadline
+    ↓ no peer answered in time
 GoFile ephemeral mirror
-    ↓ absent / unavailable / invalid
-WebTorrent / P2P
 ```
 
 The torrent hash and the normal WEB25 verification path remain the trust anchor.
@@ -29,8 +29,8 @@ GoFile only changes **how bytes arrive**, never what bytes are accepted.
 The preferred load order is:
 
 1. **Local WEB25 cache**
-2. **GoFile mirror**, only when the WEB25 URL contains a mirror locator
-3. **WebTorrent / P2P**
+2. **WebTorrent / P2P** — one attempt, bounded by `P2P_ATTEMPT_TIMEOUT_MS` (8 s)
+3. **GoFile mirror**, only when the WEB25 URL contains a mirror locator
 
 This is implemented by `src/core/torrent/PreferredSiteLoader.js`.
 
@@ -38,18 +38,19 @@ This is implemented by `src/core/torrent/PreferredSiteLoader.js`.
 
 **Cache first** requires no network and is therefore the fastest possible path.
 
-**GoFile second** acts as a CDN-like HTTP accelerator. When a deployment has a
-working mirror, a new visitor does not need to wait for peer discovery before
-receiving the site bytes.
+**WebTorrent second**, because the swarm is the deployment. A visitor served
+from the mirror never joins it, so a mirror that goes first quietly drains the
+network it is meant to insure. What the swarm does not get is unlimited time:
+peer discovery works in seconds or not at all, so the attempt is one short
+window rather than a retry ladder a visitor has to sit through.
 
-**WebTorrent third** remains the decentralized fallback and the long-term
-transport model. A missing or expired GoFile mirror must never make a valid
-WEB25 deployment unavailable while peers still serve it.
+**GoFile third** is the HTTP fallback for a quiet swarm — a new visitor whose
+announce finds nobody still gets the site, instead of an error.
 
 The important distinction is:
 
 ```text
-GoFile = acceleration / availability hint
+GoFile = availability fallback / HTTP transport
 Torrent = identity of the deployment + integrity boundary
 ```
 
@@ -76,8 +77,10 @@ It is deliberately **not** treated like a conventional authoritative CDN:
 - WEB25 does not depend on a paid or permanent GoFile account;
 - losing the mirror does not invalidate the WEB25 deployment.
 
-For product language, **"ephemeral CDN-like mirror"** or **"HTTP acceleration
-mirror"** is more accurate than calling GoFile the hosting layer.
+For product language, **"ephemeral fallback mirror"** or **"HTTP fallback
+transport"** is more accurate than calling GoFile the hosting layer — and more
+accurate than calling it an accelerator, since it is only reached once the
+swarm has been given its attempt.
 
 ---
 
@@ -184,8 +187,8 @@ uses **disposable guest accounts**, not a valuable Premium account.
 ## 5. Uploading a mirror
 
 A GoFile mirror is optional per deployment, but the deploy UI **preselects the
-mirror option by default** so a normal deployment gets the HTTP acceleration
-path without requiring an extra click. The publisher can uncheck the option
+mirror option by default** so a normal deployment stays reachable on a quiet
+swarm without requiring an extra click. The publisher can uncheck the option
 before deploying.
 
 This is a UX default only. GoFile remains optional at the protocol level:
@@ -346,7 +349,7 @@ untrusted transport
         +
 client-side content verification
         =
-replaceable acceleration layer
+replaceable fallback transport
 ```
 
 ---
@@ -419,8 +422,8 @@ The implementation should continue to preserve these invariants:
 | --- | --- |
 | Fast HTTP delivery | Yes |
 | Preselected by default for new deploys | Yes; user can uncheck it |
-| Used immediately after local cache | Yes |
-| Used before P2P when locator exists | Yes |
+| Used immediately after local cache | No; P2P gets one 8 s attempt first |
+| Used after P2P when locator exists | Yes |
 | Durable source of truth | No |
 | Required for a deployment | No |
 | Trusted to define site identity | No |

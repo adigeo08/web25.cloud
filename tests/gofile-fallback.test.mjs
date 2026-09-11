@@ -343,51 +343,39 @@ function loaderContext({ onAdd, contacted, handleTerminalP2PFailure, releaseLoad
     };
 }
 
-test('the mirror is only reached after the WebRTC tracker budget is spent', async () => {
-    const { loadSite, handleTerminalP2PFailure, releaseLoadTorrent, registerLoadTorrent } = await loader();
+test('the mirror is reached on the first failed P2P attempt, with no retry ladder', async () => {
+    const { loadSite, handleTerminalP2PFailure, releaseLoadTorrent, registerLoadTorrent, clearP2PDeadline } =
+        await loader();
     const previousAlert = globalThis.alert;
-    const previousTimeout = globalThis.setTimeout;
     globalThis.alert = () => {};
 
-    let firstFallbackAttempt = null;
-    const scheduledRetries = [];
+    const contacted = [];
+    const magnets = [];
     try {
-        for (let attempt = 0; attempt < 10 && firstFallbackAttempt === null; attempt += 1) {
-            const contacted = [];
-            const magnets = [];
-            let scheduled = 0;
-            globalThis.setTimeout = (fn, delay) => {
-                scheduled += 1;
-                return previousTimeout(() => {}, 0);
-            };
-            const context = loaderContext({
-                contacted,
-                handleTerminalP2PFailure,
-                releaseLoadTorrent,
-                registerLoadTorrent,
-                onAdd: (magnetURI) => {
-                    magnets.push(magnetURI);
-                    throw new Error('WebTorrent could not add the torrent');
-                }
-            });
+        const context = loaderContext({
+            contacted,
+            handleTerminalP2PFailure,
+            releaseLoadTorrent,
+            registerLoadTorrent,
+            onAdd: (magnetURI) => {
+                magnets.push(magnetURI);
+                throw new Error('WebTorrent could not add the torrent');
+            }
+        });
+        context.clearP2PDeadline = clearP2PDeadline;
 
-            await loadSite.call(context, `${HASH}&Mirror123`, attempt);
+        await loadSite.call(context, `${HASH}&Mirror123`);
+        clearP2PDeadline.call(context);
 
-            assert.equal(magnets.length, 1, 'every attempt really tries the torrent transport first');
-            assert.match(magnets[0], /^magnet:\?xt=urn:btih:/);
-            assert.match(magnets[0], /tr=wss%3A%2F%2Ftracker/, 'the WebRTC tracker is in the magnet');
-            if (contacted.length > 0) firstFallbackAttempt = attempt;
-            else scheduledRetries.push(scheduled);
-        }
+        // P2P is still what a load tries first, tracker and all.
+        assert.equal(magnets.length, 1, 'the torrent transport is tried first, exactly once');
+        assert.match(magnets[0], /^magnet:\?xt=urn:btih:/);
+        assert.match(magnets[0], /tr=wss%3A%2F%2Ftracker/, 'the WebRTC tracker is in the magnet');
+
+        // And the mirror is what happens the moment that one attempt fails,
+        // rather than five backed-off announces later.
+        assert.equal(contacted.length, 1, 'the mirror is contacted on the first failure');
     } finally {
         globalThis.alert = previousAlert;
-        globalThis.setTimeout = previousTimeout;
     }
-
-    assert.notEqual(firstFallbackAttempt, null, 'the mirror is eventually reached');
-    assert.ok(firstFallbackAttempt >= 5, `the mirror waited for the retry budget, not attempt ${firstFallbackAttempt}`);
-    assert.ok(
-        scheduledRetries.every((count) => count >= 1),
-        'each earlier attempt schedules another torrent attempt instead of falling back'
-    );
 });

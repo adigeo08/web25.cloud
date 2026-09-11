@@ -751,42 +751,141 @@ export default class ChannelsService {
         if (payload.type === 'system') this.emit({ type: 'system', payload, local: isLocal, source });
 
         if (payload.type === 'file-info') {
-            if (!this._fileBuffers) this._fileBuffers = {};
-            if (!this._fileInfos) this._fileInfos = {};
-            this._fileInfos[payload.fileId] = { fileName: payload.fileName, fileSize: payload.fileSize };
-            this._fileBuffers[payload.fileId] = { chunks: [], receivedSize: 0 };
-            this.emit({ type: 'file-incoming', fileId: payload.fileId, fileName: payload.fileName, fileSize: payload.fileSize, local: isLocal });
+            this._beginFileTransfer(payload, isLocal);
         }
 
         if (payload.type === 'file-chunk') {
+            // A DataChannel is ordered, so the announcement always arrived
+            // first there. Relays are not: each chunk is its own published
+            // event, and one can be delivered before the `file-info` that
+            // introduced it. Dropping those chunks meant a transfer that could
+            // never reach its size and hung forever, so a chunk carries enough
+            // to open the transfer by itself.
+            const info = this._beginFileTransfer(payload, isLocal);
             const buf = this._fileBuffers?.[payload.fileId];
-            const info = this._fileInfos?.[payload.fileId];
             if (!buf || !info) return;
+
             const bytes = Uint8Array.from(atob(payload.chunk), (c) => c.charCodeAt(0));
-            buf.chunks[payload.chunkIndex] = bytes;
-            buf.receivedSize += bytes.length;
-            this.emit({ type: 'file-progress', fileId: payload.fileId, received: buf.receivedSize, total: info.fileSize });
-            if (buf.receivedSize >= info.fileSize) {
-                const blob = new Blob(buf.chunks);
-                const url = URL.createObjectURL(blob);
-                this.emit({ type: 'file-ready', fileId: payload.fileId, fileName: info.fileName, url });
-                delete this._fileBuffers[payload.fileId];
-                delete this._fileInfos[payload.fileId];
+            // Count each index once: the same chunk arriving from two relays
+            // must not push the byte count past the real size.
+            if (!buf.received.has(payload.chunkIndex)) {
+                buf.chunks[payload.chunkIndex] = bytes;
+                buf.received.add(payload.chunkIndex);
+                buf.receivedSize += bytes.length;
             }
+            if (Number.isInteger(payload.totalChunks) && payload.totalChunks > 0) {
+                buf.totalChunks = payload.totalChunks;
+            }
+
+            // The name and size ride along: a progress event is the only thing
+            // the receiving UI has between "incoming" and "ready", and over the
+            // relay that gap is seconds long rather than instant.
+            this.emit({
+                type: 'file-progress',
+                fileId: payload.fileId,
+                fileName: info.fileName,
+                fileSize: info.fileSize,
+                received: buf.receivedSize,
+                total: info.fileSize
+            });
+
+            // Complete means every chunk is here, not merely enough bytes: with
+            // out-of-order delivery a byte count can reach the total while an
+            // earlier index is still missing, and assembling then would write a
+            // hole into the file.
+            const complete = buf.totalChunks
+                ? buf.received.size === buf.totalChunks
+                : info.fileSize > 0 && buf.receivedSize >= info.fileSize;
+            if (!complete) return;
+
+            const blob = new Blob(buf.chunks);
+            const url = URL.createObjectURL(blob);
+            this.emit({ type: 'file-ready', fileId: payload.fileId, fileName: info.fileName, url });
+            delete this._fileBuffers[payload.fileId];
+            delete this._fileInfos[payload.fileId];
         }
     }
 
     /**
-     * Send a File object over the DataChannel in chunks.
+     * Open a transfer, from whichever of its events arrived first.
+     *
+     * Called for both `file-info` and `file-chunk`, and deliberately does not
+     * reset an open transfer: a `file-info` that overtakes its own chunks would
+     * otherwise throw away everything already buffered.
+     *
+     * @param {any} payload
+     * @param {boolean} isLocal
+     * @returns {{ fileName: string, fileSize: number }|null}
+     */
+    _beginFileTransfer(payload, isLocal = false) {
+        if (!this._fileBuffers) this._fileBuffers = {};
+        if (!this._fileInfos) this._fileInfos = {};
+
+        const existing = this._fileInfos[payload.fileId];
+        if (existing) {
+            // A late announcement can still fill in what a chunk could not.
+            if (!existing.fileName && payload.fileName) existing.fileName = payload.fileName;
+            if (!existing.fileSize && payload.fileSize) existing.fileSize = Number(payload.fileSize) || 0;
+            return existing;
+        }
+
+        const fileSize = Number(payload.fileSize) || 0;
+        if (!payload.fileName && !fileSize) return null;
+
+        const info = { fileName: `${payload.fileName || 'file'}`, fileSize };
+        this._fileInfos[payload.fileId] = info;
+        this._fileBuffers[payload.fileId] = {
+            chunks: [],
+            received: new Set(),
+            receivedSize: 0,
+            totalChunks: Number.isInteger(payload.totalChunks) && payload.totalChunks > 0 ? payload.totalChunks : 0
+        };
+        this.emit({
+            type: 'file-incoming',
+            fileId: payload.fileId,
+            fileName: info.fileName,
+            fileSize: info.fileSize,
+            local: isLocal
+        });
+        return info;
+    }
+
+    /**
+     * Send a File object in chunks, over whichever transport the conversation
+     * is actually using.
+     *
+     * This used to require an open DataChannel and refuse everything else, on
+     * the grounds that chunking over public relays would be abusive. Refusing
+     * outright turned out to be the wrong shape of that argument: a
+     * conversation carried by the relay is a working conversation, and a file
+     * that cannot be sent in it is a feature that silently stops existing for
+     * the people whose WebRTC never connects — exactly the people with the
+     * least control over why.
+     *
+     * So the relay path exists, with the restraint expressed as limits rather
+     * than as a refusal: smaller chunks that survive the NIP-59 layers, a cap
+     * on the total size, and a pause between chunks. Everything else is
+     * identical — same envelope, same per-chunk signature, same ECIES — because
+     * `transmit()` already treats the transport as a detail. WebRTC still wins
+     * whenever it is up; the relay is what happens instead of nothing.
+     *
      * @param {File} file
      * @param {{ address?: string } | null} identity
      */
     async sendFile(file, identity) {
-        // File transfer stays on the DataChannel: chunked transfers over public
-        // relays would be abusive and are deliberately not offered.
-        if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Connection is not ready yet.');
+        if (!this.canSend()) throw new Error('Connection is not ready yet.');
 
-        const CHUNK_SIZE = 16 * 1024;
+        const overRelay = this.dataChannel?.readyState !== 'open';
+        const CHUNK_SIZE = overRelay ? this._transportConfig.RELAY_FILE_CHUNK_BYTES : 16 * 1024;
+
+        if (overRelay && file.size > this._transportConfig.RELAY_FILE_MAX_BYTES) {
+            const limitMb = Math.round(this._transportConfig.RELAY_FILE_MAX_BYTES / (1024 * 1024));
+            throw new Error(
+                `This conversation is running over public relays, which carry files up to ${limitMb} MB. ` +
+                    'Wait for the direct connection to come up, or send something smaller.'
+            );
+        }
+
         const fileId = generateHexKey(8);
         const from = identity?.address || this.identityAddress || 'anonymous';
 
@@ -801,9 +900,11 @@ export default class ChannelsService {
             fileSize: file.size
         };
         this.handleInbound(infoPayload, true);
-        await this.transmit(infoPayload);
+        if (!(await this.transmit(infoPayload))) {
+            throw new Error('The file could not be announced to the peer.');
+        }
 
-        this.emit({ type: 'file-send-start', fileId, fileName: file.name, fileSize: file.size });
+        this.emit({ type: 'file-send-start', fileId, fileName: file.name, fileSize: file.size, overRelay });
 
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
         for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
@@ -819,10 +920,33 @@ export default class ChannelsService {
                 timestamp: new Date().toISOString(),
                 fileId,
                 chunkIndex,
+                // Enough to open the transfer on its own. Relays publish each
+                // chunk as its own event and do not promise to deliver them in
+                // order, so a chunk that arrives before the announcement has to
+                // be usable rather than dropped.
+                fileName: file.name,
+                fileSize: file.size,
+                totalChunks,
                 chunk: b64
             };
-            await this.transmit(chunkPayload);
-            this.emit({ type: 'file-send-progress', fileId, sent: Math.min((chunkIndex + 1) * CHUNK_SIZE, file.size), total: file.size });
+            // A chunk that no transport accepted leaves the receiver with a
+            // gap it can never fill, and it reassembles by total size — so the
+            // transfer stops here and says so, rather than hanging at 94%.
+            if (!(await this.transmit(chunkPayload))) {
+                this.emit({ type: 'file-send-error', fileId, chunkIndex });
+                throw new Error(`The file stopped sending at chunk ${chunkIndex + 1} of ${totalChunks}.`);
+            }
+            this.emit({
+                type: 'file-send-progress',
+                fileId,
+                sent: Math.min((chunkIndex + 1) * CHUNK_SIZE, file.size),
+                total: file.size,
+                overRelay
+            });
+
+            if (overRelay && chunkIndex + 1 < totalChunks) {
+                await new Promise((resolve) => setTimeout(resolve, this._transportConfig.RELAY_FILE_CHUNK_PAUSE_MS));
+            }
         }
 
         this.emit({ type: 'file-send-done', fileId });

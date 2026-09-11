@@ -93,6 +93,9 @@
                     🔍 Search
                 </button>
                 <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">🚀 Deploy</button>
+                <button class="tab-btn" data-tab="pages" role="tab" aria-selected="false" style="display: none">
+                    📄 Pages
+                </button>
                 <button class="tab-btn" data-tab="auth" role="tab" aria-selected="false" style="display: none">
                     👤 Account
                 </button>
@@ -296,6 +299,21 @@
                             <p>Choose how you want to continue.</p>
                         </div>
 
+                        <!--
+                            Shown only when this browser was in an unlocked
+                            session that the page teardown ended. AuthPanel.js
+                            toggles it from the localStorage breadcrumb, which
+                            holds a tab name and a boolean — no key material,
+                            no address, nothing that identifies anyone.
+                        -->
+                        <p id="session-resume-notice" class="session-resume-notice hidden">
+                            <span aria-hidden="true">🔄</span>
+                            You were signed in before this page reloaded. The key only ever lives in the signing
+                            worker, so it went with the page — unlock again to carry on where you left off. Sites you
+                            were seeding started again on their own when this page loaded, and did not need the
+                            wallet to do it.
+                        </p>
+
                         <div class="button-group">
                             <button id="unlock-wallet-btn" class="btn btn-primary">🔓 Unlock Wallet</button>
                             <button id="register-wallet-btn" class="btn btn-secondary">✨ Create Wallet</button>
@@ -497,12 +515,40 @@
                             <summary>🛠️ Advanced Tools</summary>
                             <section class="controls">
                                 <div class="button-group">
-                                    <button id="clear-cache" class="btn btn-clear">🗑️ Clear Cache</button>
                                     <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
                                 </div>
+                                <p class="deploy-advanced-note">
+                                    Live deployments are managed from the <strong>Pages</strong> tab. Seeding keeps
+                                    running while this tab is open, resumes by itself after a reload — with the wallet
+                                    locked — and only ever stops when you stop it there.
+                                </p>
                             </section>
                         </details>
                     </div>
+                </div>
+
+                <!-- ── PAGES TAB ── -->
+                <!--
+                    Only rendered when this browser is actually hosting
+                    something: PagesPanel.js shows the tab button and this panel
+                    together, and hides both again when the last session stops.
+                -->
+                <div id="tab-pages" class="tab-panel" role="tabpanel" style="display: none">
+                    <section class="pages-shell card-base">
+                        <div class="console-heading">
+                            <div>
+                                <span class="section-kicker">PAGES / SEEDING</span>
+                                <h3>Sites you are hosting</h3>
+                            </div>
+                            <p id="pages-count" class="status-chip status-success">0 sites</p>
+                        </div>
+                        <p class="pages-intro">
+                            Every card below is a live deployment served from this browser. Seeding resumes on its own
+                            when you come back — with the wallet locked — and keeps running when you sign out. Stopping
+                            a session from its card is the only thing that ends it.
+                        </p>
+                        <div id="pages-list" class="pages-list"></div>
+                    </section>
                 </div>
 
                 <!-- ── DIRECT MESSENGER TAB ── -->
@@ -689,6 +735,34 @@
                             <span class="gateway-meta-item">Sandboxed, opaque-origin frame</span>
                             <span class="gateway-meta-item">Local cache first</span>
                         </div>
+                    </section>
+
+                    <!--
+                        The local library. Rendered by LibraryPanel.js from the
+                        cache's own index, and hidden entirely until this
+                        browser has loaded at least one site. Nothing here
+                        queries the network: it searches what is already local.
+                    -->
+                    <section id="site-library" class="library card-base hidden">
+                        <div class="console-heading">
+                            <div>
+                                <span class="section-kicker">LIBRARY / THIS BROWSER</span>
+                                <h3>Sites you have opened</h3>
+                            </div>
+                            <p id="library-count" class="status-chip status-pending">0 sites</p>
+                        </div>
+                        <div class="library-search">
+                            <span class="gateway-search-icon" aria-hidden="true">🔎</span>
+                            <input
+                                type="search"
+                                id="library-search"
+                                class="hash-input"
+                                placeholder="Search by title, keyword, file name, publisher or hash"
+                                aria-label="Search the sites cached in this browser"
+                            />
+                        </div>
+                        <p id="library-empty" class="library-empty hidden"></p>
+                        <div id="library-results" class="library-results"></div>
                     </section>
 
                     <section class="gateway-facts">
@@ -1210,8 +1284,23 @@
 
         <!-- Site Viewer -->
         <div id="site-viewer" class="site-viewer hidden">
+            <!--
+                The viewer chrome. It is the only WEB25 UI on screen while a
+                peer-hosted site is rendered, so it carries the way back out as
+                well as what was verified about what you are looking at.
+            -->
             <div class="site-viewer-header">
-                <span id="site-signature-status" class="status-chip status-pending">Publisher: unverified</span>
+                <button id="back-to-peerweb" type="button" class="btn btn-secondary btn-sm viewer-back">
+                    ← Back
+                </button>
+                <div class="viewer-identity">
+                    <span class="viewer-brand" aria-hidden="true">☁️</span>
+                    <code id="current-hash" class="viewer-hash"></code>
+                </div>
+                <div class="viewer-info">
+                    <span id="cache-status" class="status-chip status-neutral"></span>
+                    <span id="site-signature-status" class="status-chip status-pending">Publisher: unverified</span>
+                </div>
             </div>
             <!--
                 Torrent sites are untrusted code. `allow-same-origin` is
@@ -1225,6 +1314,35 @@
                 class="site-frame"
                 sandbox="allow-scripts allow-forms allow-modals allow-popups"
             ></iframe>
+        </div>
+
+        <!-- Stop seeding confirmation -->
+        <div
+            id="stop-seeding-modal"
+            class="modal hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="stop-seeding-title"
+            aria-describedby="stop-seeding-description"
+        >
+            <div class="modal-content modal-narrow">
+                <div class="modal-header">
+                    <h3 id="stop-seeding-title">⏹ Stop seeding</h3>
+                    <button id="stop-seeding-close" class="close-btn" aria-label="Cancel">×</button>
+                </div>
+                <div class="modal-body">
+                    <p id="stop-seeding-description">Stop seeding <strong id="stop-seeding-name">this site</strong>?</p>
+                    <p>
+                        Visitors will no longer be able to load it from this browser, and it will not come back after a
+                        reload. The WEB25 link keeps working only for as long as another peer — or a GoFile mirror —
+                        still serves the same bytes.
+                    </p>
+                    <div class="button-group">
+                        <button id="stop-seeding-confirm" class="btn btn-clear">Yes, stop seeding</button>
+                        <button id="stop-seeding-cancel" class="btn btn-secondary">Keep seeding</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Torrent Creator Modal -->
