@@ -1,25 +1,30 @@
 // @ts-check
+/**
+ * The one place that decides where a site's bytes come from.
+ *
+ * Resolution order:
+ *   1. local cache
+ *   2. WebTorrent / P2P — one attempt, bounded by `P2P_ATTEMPT_TIMEOUT_MS`
+ *   3. GoFile mirror, when the WEB25 address carries a locator
+ *
+ * P2P is first because it is what the deployment *is*: the torrent hash is the
+ * identity of the site and the swarm is what keeps it alive. A visitor served
+ * from the mirror is not a peer, so a mirror that goes first quietly drains the
+ * swarm it is supposed to be insurance for.
+ *
+ * What P2P is not allowed to be is slow. Peer discovery either works within a
+ * few seconds or it is not going to, so the attempt gets one short window and
+ * the mirror takes over the moment it closes — the whole fallback lives in
+ * `TorrentLoader.handleTerminalP2PFailure`, which is also where a failed
+ * announce, a dead tracker set and a torrent error already end up.
+ *
+ * This module is therefore only the cache half: it answers from the cache
+ * before WebTorrent is even ready, and otherwise hands the load straight to the
+ * torrent loader with the locator intact.
+ */
 
 import { parseWeb25Address } from '../../gofile/Web25Url.js';
-import { GoFileService } from '../../gofile/GoFileService.js';
-import {
-    createMirrorTorrentAdapter,
-    decodeGoFileMirror,
-    gofileMirrorFilename,
-    verifyGoFileMirror
-} from '../../gofile/GoFileMirrorCodec.js';
 import * as torrentLoader from './TorrentLoader.js';
-
-async function readerCredential(service, store) {
-    try {
-        const credential = await store?.read();
-        if (credential?.token) return credential.token;
-    } catch (_) {
-        // A visitor does not need an unlocked wallet to resolve a public mirror.
-    }
-    const account = await service.createGuestAccount();
-    return account.token;
-}
 
 function initializeSignatureState(hash) {
     const knownSignature = this.signedTorrentMetadata.get(hash);
@@ -41,65 +46,11 @@ function initializeSignatureState(hash) {
           });
 }
 
-async function tryGoFileMirrorFirst(hash, gofileLocator, loadGeneration) {
-    const isActiveLoad = () => this._loadGeneration === loadGeneration && this.currentHash === hash;
-    const controller = new AbortController();
-    this._gofileFallbackController = controller;
-
-    try {
-        this.log(`Cache miss. Trying GoFile mirror before P2P for ${hash}.`);
-        this.showLoadingOverlay();
-
-        const service = this.gofileService || new GoFileService();
-        const wireBytes = await service.downloadPublicMirror(gofileLocator, {
-            token: await readerCredential(service, this.gofileCredentialStore),
-            expectedFilename: gofileMirrorFilename(hash),
-            signal: controller.signal
-        });
-        if (!isActiveLoad()) return true;
-
-        const decoded = decodeGoFileMirror(wireBytes);
-        const verified = await verifyGoFileMirror(decoded, hash);
-        if (!isActiveLoad()) return true;
-
-        const adapter = createMirrorTorrentAdapter(verified);
-        const chainGate = await this.verifyTorrentChainBeforeDownload(adapter, hash);
-        if (!isActiveLoad()) return true;
-        if (!chainGate.ok) throw new Error('GoFile mirror failed TorrentChain verification.');
-
-        this.processingInProgress = true;
-        const processed = await this.processTorrent(adapter, hash);
-        if (!isActiveLoad()) return true;
-        if (processed === false) throw new Error('GoFile mirror failed the WEB25 render verification gate.');
-
-        this.log(`Site loaded through preferred GoFile mirror transport for ${hash}.`);
-        return true;
-    } catch (error) {
-        if (!isActiveLoad()) return true;
-        this.processingInProgress = false;
-        this.hideLoadingOverlay();
-        this.log(`Preferred GoFile mirror unavailable: ${error.message}. Falling back to P2P.`);
-        this.toast?.info?.('GoFile mirror unavailable. Falling back to P2P…', 'Fallback transport');
-        return false;
-    } finally {
-        if (this._gofileFallbackController === controller) this._gofileFallbackController = null;
-    }
-}
-
 /**
- * Preferred website resolution order:
- *   1. local cache
- *   2. GoFile mirror, when the WEB25 address includes a locator
- *   3. WebTorrent / P2P
- *
- * P2P retries delegate straight to the existing TorrentLoader so a failed
- * GoFile mirror is not retried before every torrent retry.
+ * @param {string|{ torrentHash: string, gofileLocator?: string|null }} addressInput
+ * @param {string|null} [retryLocator] a mirror locator recovered separately from the address
  */
-export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = null) {
-    if (_retryAttempt > 0) {
-        return torrentLoader.loadSite.call(this, addressInput, _retryAttempt, retryLocator);
-    }
-
+export async function loadSite(addressInput, retryLocator = null) {
     let address;
     try {
         address =
@@ -140,22 +91,8 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
         return;
     }
 
-    if (gofileLocator) {
-        const loadedFromMirror = await tryGoFileMirrorFirst.call(
-            this,
-            sanitizedHash,
-            gofileLocator,
-            loadGeneration
-        );
-        if (this._loadGeneration !== loadGeneration || loadedFromMirror) return;
-    }
-
-    // GoFile was absent or failed. Hand off to the existing P2P loader without
-    // the locator so its terminal P2P failure does not loop back to GoFile.
-    return torrentLoader.loadSite.call(
-        this,
-        { torrentHash: sanitizedHash, gofileLocator: null },
-        0,
-        null
-    );
+    // Straight to the swarm. The locator rides along so the torrent loader can
+    // fall back to the mirror on its own, once — and only once — the single
+    // P2P attempt has genuinely failed or run out of time.
+    return torrentLoader.loadSite.call(this, { torrentHash: sanitizedHash, gofileLocator }, 0, null);
 }

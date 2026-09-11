@@ -29,6 +29,9 @@ export function createAuthState() {
         npub: null,
         // Whether this identity is reachable over Nostr. The key always exists
         // — this is the user's Add/Delete choice on the Identity page.
-        nostrEnabled: true
+        nostrEnabled: true,
+        // Where the user was before the page reloaded, and whether a session
+        // was live then. Public breadcrumb only; see SessionResumeHint.js.
+        resumeHint: null
     };
 }

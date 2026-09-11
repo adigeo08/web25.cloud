@@ -26,10 +26,17 @@ The UI is organized into:
   - Sign payload with local EVM identity
   - Seed signed output
   - Create an ephemeral GoFile HTTP mirror by default; the option is preselected but can be unchecked before deploy
+- **Pages**
+  - One card per site this browser is seeding, with live peer and upload counters
+  - Seeding survives a reload and resumes with the wallet still locked
+  - Signing out never stops a session; only Stop seeding does, behind a confirmation
+  - The tab appears only while at least one site is being hosted
 - **Browse / Load**
   - Load by torrent hash or complete WEB25 URL
-  - Resolution order: local cache → GoFile mirror, when present → WebTorrent/P2P
-  - GoFile failure transparently falls back to P2P
+  - Resolution order: local cache → WebTorrent/P2P → GoFile mirror, when the link carries one
+  - P2P gets one attempt with an 8-second deadline; there is no retry ladder
+  - A quiet swarm transparently falls through to the mirror
+  - Free-text search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -37,7 +44,8 @@ The UI is organized into:
   - Trusted contacts, encrypted with your wallet identity, reconnect directly
   - One connection indicator: `Connected · WebRTC` or `Connected · Nostr`, green either way
   - Identity-bound encrypted/signed message exchange
-  - Nostr relay fallback when WebRTC cannot be established
+  - Nostr relay fallback when WebRTC cannot be established, for files as well as messages
+  - Links in messages are clickable and open in a new tab; only `http(s)` is ever linked
 
 ### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault + IndexedDB)
 
@@ -199,28 +207,46 @@ To avoid regressions from verified → pending after refresh:
 
 ---
 
-### 6) Signed deploy session persistence (refresh-safe)
+### 6) Seeding that outlives the page
 
-- Signed deploy artifacts are persisted in `localStorage` (`web25.deploy.session.v1`)
-- On refresh, UI/deploy state can be restored and reseeded
-- Helps continue normal seeding/deploy flow without repeating steps
+A deployment used to exist only for as long as the tab that made it. The payload was seeded from an in-memory bundle, so a reload ended the only copy of the site that existed, and `localStorage` held the signed `.torrent` but never the bytes — what came back after a refresh announced a deployment it could not serve.
+
+The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds every stored session on start:
+
+- Resuming needs **no key**: re-seeding is handing the same bytes back to WebTorrent, so it happens with the wallet locked
+- The resumed torrent must hash to the same info hash — the stored name and piece length are what guarantee it — and is dropped rather than announced if it does not
+- Signing out, clearing the site cache and staging the next deployment all leave live sessions alone
+- A session ends when the publisher presses **Stop seeding** on its card in **Pages**, behind a confirmation; closing the tab only pauses it until the next visit
+- The advanced-tools "Clear Cache" button, which used to take every live deployment down with it, is gone
+
+Signed-but-not-yet-deployed artifacts are still kept in `localStorage` (`web25.deploy.session.v1`) so the deploy screen survives a refresh mid-flow.
 
 ---
 
-### 6b) Ephemeral GoFile mirrors — cache → HTTP → P2P
+### 6a) Session breadcrumb (`web25.session.tab.v1`)
 
-GoFile is used as an optional **CDN-like acceleration layer**, not as the source of truth for a WEB25 deployment.
+The wallet session lives in the signing worker and dies with the page, by design. What the user should not also lose is their place, or an explanation.
 
-For new deploys, the GoFile mirror option is **preselected by default** because a working HTTP mirror improves first-load latency after a local cache miss. Publishers can explicitly uncheck it before deployment. This is a UX default, not a protocol requirement: deployment still succeeds without GoFile and WebTorrent/P2P remains the resilient fallback.
+A single `localStorage` entry records **which tab was open** and **whether a session was live** — no address, no public key, no npub, no hash, nothing derived from any of them. On the next load the tab is restored when it still exists, and the sign-in wall says the session ended with the page and needs unlocking again. It cannot unlock anything and cannot identify whose browser it is.
+
+---
+
+### 6b) Ephemeral GoFile mirrors — cache → P2P → HTTP
+
+GoFile is used as an optional **HTTP fallback transport**, not as the source of truth for a WEB25 deployment.
+
+WebTorrent goes first because the swarm is what a deployment *is*: the torrent hash is its identity, and a visitor served from the mirror never becomes a peer. What P2P does not get is unlimited time — peer discovery either works within a few seconds or it does not, so the attempt is a single 8-second window (`P2P_ATTEMPT_TIMEOUT_MS`) with no retries. The mirror takes over the moment that window closes, an announce comes back empty, every tracker gives up, or the torrent errors.
+
+For new deploys, the GoFile mirror option is **preselected by default** because it is what keeps a site reachable when nobody is seeding it. Publishers can explicitly uncheck it before deployment. This is a UX default, not a protocol requirement: deployment still succeeds without GoFile.
 
 Preferred load order:
 
 ```text
 local cache
     ↓ miss
+WebTorrent / P2P          one attempt, 8 s
+    ↓ no peer answered in time
 GoFile mirror
-    ↓ unavailable / expired / invalid
-WebTorrent / P2P
 ```
 
 A successful mirror load is cached normally, so later visits can load entirely from the local browser cache.
@@ -461,9 +487,11 @@ src/
 │   ├── SeedPhraseService.js
 │   ├── PasskeyVault.js
 │   ├── SecureKeyStore.js
+│   ├── SessionResumeHint.js
 │   └── SigningService.js
 ├── cache/
-│   └── PeerWebCache.js
+│   ├── PeerWebCache.js
+│   └── SiteLibraryIndex.js
 ├── channels/
 │   ├── ChannelsService.js
 │   ├── DirectMessageBootstrapCore.js
@@ -490,9 +518,13 @@ src/
 │   │   └── SignatureStateVersion.js
 │   └── torrent/
 │       ├── PreferredSiteLoader.js
+│       ├── SeedingSessionStore.js
+│       ├── SeedingSessions.js
 │       └── TorrentLoader.js
 ├── ui/
 │   ├── auth/
+│   ├── browse/
+│   ├── pages/
 │   ├── publish/
 │   └── channels/
 └── torrent/

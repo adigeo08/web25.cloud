@@ -8,9 +8,10 @@ export function bindPublishActions({ onSign, onPublish }) {
     if (signBtn) signBtn.addEventListener('click', onSign);
     if (publishBtn) publishBtn.addEventListener('click', onPublish);
 
-    // GoFile is the preferred acceleration path after local cache, so new
-    // deploys opt in by default. The publisher can still explicitly uncheck it;
-    // nothing here re-enables the option after user interaction.
+    // The mirror is the fallback transport, and a deployment that has one stays
+    // reachable on a quiet swarm — so new deploys opt in by default. The
+    // publisher can still explicitly uncheck it; nothing here re-enables the
+    // option after user interaction.
     if (gofileMirror) gofileMirror.checked = true;
 
     // Keep the About copy aligned with the deploy default without duplicating
@@ -21,7 +22,7 @@ export function bindPublishActions({ onSign, onPublish }) {
         const note = document.createElement('p');
         note.dataset.gofileDefaultNote = 'true';
         note.innerHTML =
-            'The optional GoFile mirror is <strong>preselected by default</strong> for new deploys because WEB25 uses it as an ephemeral HTTP acceleration layer after local cache and before WebTorrent/P2P. You can uncheck it before deployment; P2P remains the fallback either way.';
+            'The optional GoFile mirror is <strong>preselected by default</strong> for new deploys because it is what keeps a site reachable when no peer answers. WEB25 loads in the order local cache → WebTorrent/P2P → GoFile: the swarm gets one 8-second attempt first, and the mirror only ever serves what that attempt could not. You can uncheck it before deployment.';
         publishingCard.appendChild(note);
     }
 }

@@ -20,21 +20,31 @@ import {
 } from '../../gofile/GoFileMirrorCodec.js';
 import { attachTrackerConnectionGuard } from './TrackerConnectionGuard.js';
 
-/** Maximum number of retry attempts per site load triggered by noPeers or torrent error. */
-const LOAD_RETRY_MAX = 5;
-/** Base delay (ms) for exponential-backoff retry of site loads. */
-const LOAD_RETRY_BASE_MS = 2000;
+/**
+ * The whole budget for the P2P attempt, from magnet to first bytes.
+ *
+ * There is exactly one attempt. Peer discovery over WebRTC trackers either
+ * works in a few seconds or it does not work at all, and the retry ladder this
+ * replaced — five attempts with exponential backoff — could keep a visitor
+ * watching a spinner for well over a minute before the mirror was even tried.
+ * A single short window is both faster to fail and honest about what it is
+ * testing: whether anyone is actually seeding this site right now.
+ *
+ * Nothing is aborted mid-render: the deadline only fires while the load is
+ * still trying to obtain content, never once processing has begun.
+ */
+export const P2P_ATTEMPT_TIMEOUT_MS = 8000;
 
 /**
- * Exponential backoff with jitter, capped at 30 s.
- * @param {number} attempt - zero-based attempt index
- * @param {number} baseMs
+ * Stop the single-attempt P2P deadline, whatever it was waiting for.
  */
-function calcRetryDelay(attempt, baseMs) {
-    return Math.min(30000, baseMs * Math.pow(2, attempt) + Math.random() * 1000);
+export function clearP2PDeadline() {
+    if (!this._p2pDeadlineTimer) return;
+    clearTimeout(this._p2pDeadlineTimer);
+    this._p2pDeadlineTimer = null;
 }
 
-export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = null) {
+export async function loadSite(addressInput, retryLocator = null) {
     let address;
     try {
         address =
@@ -60,7 +70,8 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
     // The torrent phase is over once the mirror fallback has taken this hash
     // over: its late events must not touch the loading state any more.
     const isTorrentPhase = () => isActiveLoad() && this._gofileFallbackStarted !== sanitizedHash;
-    if (_retryAttempt === 0) this._gofileFallbackStarted = null;
+    this._gofileFallbackStarted = null;
+    this.clearP2PDeadline?.();
     this.log(`Loading site with hash: ${sanitizedHash}`);
 
     if (!this.serviceWorkerReady) {
@@ -102,17 +113,28 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
               torrentHash: sanitizedHash
           });
 
-    // Check cache first
-    const cachedEntry = await this.cache.getEntry(sanitizedHash);
-    if (this._loadGeneration !== loadGeneration) return;
-    if (cachedEntry?.data) {
-        this.log('Loading from cache...');
-        this.applyCachedSignatureState(cachedEntry.signatureState, sanitizedHash);
-        this.displayCachedSite(cachedEntry.data, sanitizedHash);
-        return;
-    }
-
+    // The cache is `PreferredSiteLoader`'s job, and it has already answered by
+    // the time a load reaches here: it is the entry point for every site load
+    // and only delegates on a miss. Re-reading it here would be a second
+    // IndexedDB round trip for a question already asked.
     this.showLoadingOverlay();
+
+    // The single attempt starts here. Whatever happens — an announce nobody
+    // answers, a tracker set that never connects, metadata that never arrives —
+    // this is what guarantees the visitor is not left waiting on the swarm.
+    this._p2pDeadlineTimer = setTimeout(() => {
+        this._p2pDeadlineTimer = null;
+        if (this.processingInProgress) return;
+        if (this._loadGeneration !== loadGeneration || this.currentHash !== sanitizedHash) return;
+        this.log(`No content from the swarm within ${P2P_ATTEMPT_TIMEOUT_MS / 1000}s; giving up on P2P for this load.`);
+        void this.handleTerminalP2PFailure(
+            sanitizedHash,
+            gofileLocator,
+            new Error(`No peer served this site within ${P2P_ATTEMPT_TIMEOUT_MS / 1000} seconds.`),
+            this._activeLoadTorrent?.torrent || null,
+            loadGeneration
+        );
+    }, P2P_ATTEMPT_TIMEOUT_MS);
 
     const trackerList = (this.trackers || [])
         .filter((trackerUrl) => this.isBrowserSupportedTracker(trackerUrl))
@@ -204,6 +226,7 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
                     expectedSize: torrent.length || null
                 });
                 this.processingInProgress = true;
+                this.clearP2PDeadline?.();
                 if (this.processingTimeout) {
                     clearTimeout(this.processingTimeout);
                     this.processingTimeout = null;
@@ -214,6 +237,9 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
 
             torrent.on('download', () => {
                 if (!isTorrentPhase()) return;
+                // Bytes are arriving, so the swarm answered: the attempt
+                // deadline has done its job and must not cut a live download.
+                this.clearP2PDeadline?.();
                 this.updateProgress(torrent);
                 this.updatePeerStats(torrent);
 
@@ -256,24 +282,9 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
                     magnetURI,
                     expectedSize: torrent.length || null
                 });
-                if (
-                    !this.processingInProgress &&
-                    this.currentHash === sanitizedHash &&
-                    _retryAttempt < LOAD_RETRY_MAX
-                ) {
-                    const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
-                    this.log(
-                        `Torrent error, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
-                    );
-                    if (this.processingTimeout) {
-                        clearTimeout(this.processingTimeout);
-                        this.processingTimeout = null;
-                    }
-                    setTimeout(() => {
-                        if (this.currentHash !== sanitizedHash) return;
-                        this.loadSite(sanitizedHash, _retryAttempt + 1, gofileLocator);
-                    }, delay);
-                } else if (!this.processingInProgress) {
+                // One attempt: a torrent that errors out has spent it, and the
+                // mirror is what is left.
+                if (!this.processingInProgress) {
                     void this.handleTerminalP2PFailure(sanitizedHash, gofileLocator, error, torrent, loadGeneration);
                 }
             });
@@ -281,32 +292,17 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
             torrent.on('noPeers', () => {
                 if (this.processingInProgress) return;
                 if (!isTorrentPhase()) return;
-                if (_retryAttempt >= LOAD_RETRY_MAX) {
-                    this.log(`No peers found after ${LOAD_RETRY_MAX} retries, giving up`);
-                    void this.handleTerminalP2PFailure(
-                        sanitizedHash,
-                        gofileLocator,
-                        new Error(`No torrent peers found after ${LOAD_RETRY_MAX} retries.`),
-                        torrent,
-                        loadGeneration
-                    );
-                    return;
-                }
-                const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
-                this.log(
-                    `No peers found, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
+                // An announce that found nobody is the answer, not a reason to
+                // ask again: nothing about announcing a second time makes a
+                // seeder appear. The mirror takes over from here.
+                this.log('No peers answered the announce; giving up on P2P for this load.');
+                void this.handleTerminalP2PFailure(
+                    sanitizedHash,
+                    gofileLocator,
+                    new Error('No torrent peers answered the announce.'),
+                    torrent,
+                    loadGeneration
                 );
-                if (this.processingTimeout) {
-                    clearTimeout(this.processingTimeout);
-                    this.processingTimeout = null;
-                }
-                setTimeout(() => {
-                    if (this.currentHash !== sanitizedHash) return;
-                    torrent.destroy(() => {
-                        if (this.currentHash !== sanitizedHash) return;
-                        this.loadSite(sanitizedHash, _retryAttempt + 1, gofileLocator);
-                    });
-                }, delay);
             });
 
             // Select all files for download after .torrentchain verification.
@@ -396,22 +392,10 @@ export async function loadSite(addressInput, _retryAttempt = 0, retryLocator = n
             }, dynamicTimeout);
         });
     } catch (error) {
-        // A synchronous add failure is still a P2P failure, and it must spend
-        // the same retry budget as any other before the mirror is considered.
-        // WebRTC over the trackers is the transport; GoFile is what is left
-        // once that has genuinely been tried.
+        // A synchronous add failure is still a P2P failure, and it spends the
+        // one attempt like any other. WebRTC over the trackers is the
+        // transport; GoFile is what is left once that has been tried.
         this.log(`Error adding torrent: ${error.message}`);
-        if (_retryAttempt < LOAD_RETRY_MAX) {
-            const delay = calcRetryDelay(_retryAttempt, LOAD_RETRY_BASE_MS);
-            this.log(
-                `Torrent transport unavailable, retrying in ${(delay / 1000).toFixed(1)}s (attempt ${_retryAttempt + 1}/${LOAD_RETRY_MAX})`
-            );
-            setTimeout(() => {
-                if (!isActiveLoad()) return;
-                this.loadSite(sanitizedHash, _retryAttempt + 1, gofileLocator);
-            }, delay);
-            return;
-        }
         await this.handleTerminalP2PFailure(sanitizedHash, gofileLocator, error, null, loadGeneration);
     }
 }
@@ -436,6 +420,7 @@ export function registerLoadTorrent(torrent, { onTrackersExhausted = () => {} } 
 
 /** Destroy the torrent (and stop the tracker guard) of the load that just ended. */
 export function releaseLoadTorrent() {
+    this.clearP2PDeadline?.();
     const active = this._activeLoadTorrent;
     if (!active) return;
     this._activeLoadTorrent = null;
@@ -481,6 +466,7 @@ export async function handleTerminalP2PFailure(
         return;
     }
     this._gofileFallbackStarted = hash;
+    this.clearP2PDeadline?.();
     const isActiveLoad = () =>
         loadGeneration === null || (this._loadGeneration === loadGeneration && this.currentHash === hash);
     if (!isActiveLoad()) return;
@@ -862,6 +848,8 @@ export async function processTorrentEarly(torrent, hash) {
 
     // Cache the site (even if incomplete)
     await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+    // Newly cached means newly findable by name.
+    void this.refreshLibrary?.();
 
     // Display the site
     this.displaySite(siteData, hash);
@@ -958,6 +946,8 @@ export async function processTorrent(torrent, hash) {
 
     // Cache the site
     await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+    // Newly cached means newly findable by name.
+    void this.refreshLibrary?.();
 
     // Display the site
     this.displaySite(siteData, hash);
@@ -1040,6 +1030,8 @@ export async function processTorrentGzipBundle(torrent, hash) {
         this.attachSignatureManifest(siteData, hash);
         this.validateReceivedManifest(siteData, hash);
         await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+        // Newly cached means newly findable by name.
+        void this.refreshLibrary?.();
         this.displaySite(siteData, hash);
         this.hideLoadingOverlay();
         return true;

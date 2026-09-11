@@ -765,7 +765,17 @@ export default class ChannelsService {
             const bytes = Uint8Array.from(atob(payload.chunk), (c) => c.charCodeAt(0));
             buf.chunks[payload.chunkIndex] = bytes;
             buf.receivedSize += bytes.length;
-            this.emit({ type: 'file-progress', fileId: payload.fileId, received: buf.receivedSize, total: info.fileSize });
+            // The name and size ride along: a progress event is the only thing
+            // the receiving UI has between "incoming" and "ready", and over the
+            // relay that gap is seconds long rather than instant.
+            this.emit({
+                type: 'file-progress',
+                fileId: payload.fileId,
+                fileName: info.fileName,
+                fileSize: info.fileSize,
+                received: buf.receivedSize,
+                total: info.fileSize
+            });
             if (buf.receivedSize >= info.fileSize) {
                 const blob = new Blob(buf.chunks);
                 const url = URL.createObjectURL(blob);
@@ -777,16 +787,41 @@ export default class ChannelsService {
     }
 
     /**
-     * Send a File object over the DataChannel in chunks.
+     * Send a File object in chunks, over whichever transport the conversation
+     * is actually using.
+     *
+     * This used to require an open DataChannel and refuse everything else, on
+     * the grounds that chunking over public relays would be abusive. Refusing
+     * outright turned out to be the wrong shape of that argument: a
+     * conversation carried by the relay is a working conversation, and a file
+     * that cannot be sent in it is a feature that silently stops existing for
+     * the people whose WebRTC never connects — exactly the people with the
+     * least control over why.
+     *
+     * So the relay path exists, with the restraint expressed as limits rather
+     * than as a refusal: smaller chunks that survive the NIP-59 layers, a cap
+     * on the total size, and a pause between chunks. Everything else is
+     * identical — same envelope, same per-chunk signature, same ECIES — because
+     * `transmit()` already treats the transport as a detail. WebRTC still wins
+     * whenever it is up; the relay is what happens instead of nothing.
+     *
      * @param {File} file
      * @param {{ address?: string } | null} identity
      */
     async sendFile(file, identity) {
-        // File transfer stays on the DataChannel: chunked transfers over public
-        // relays would be abusive and are deliberately not offered.
-        if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Connection is not ready yet.');
+        if (!this.canSend()) throw new Error('Connection is not ready yet.');
 
-        const CHUNK_SIZE = 16 * 1024;
+        const overRelay = this.dataChannel?.readyState !== 'open';
+        const CHUNK_SIZE = overRelay ? this._transportConfig.RELAY_FILE_CHUNK_BYTES : 16 * 1024;
+
+        if (overRelay && file.size > this._transportConfig.RELAY_FILE_MAX_BYTES) {
+            const limitMb = Math.round(this._transportConfig.RELAY_FILE_MAX_BYTES / (1024 * 1024));
+            throw new Error(
+                `This conversation is running over public relays, which carry files up to ${limitMb} MB. ` +
+                    'Wait for the direct connection to come up, or send something smaller.'
+            );
+        }
+
         const fileId = generateHexKey(8);
         const from = identity?.address || this.identityAddress || 'anonymous';
 
@@ -801,9 +836,11 @@ export default class ChannelsService {
             fileSize: file.size
         };
         this.handleInbound(infoPayload, true);
-        await this.transmit(infoPayload);
+        if (!(await this.transmit(infoPayload))) {
+            throw new Error('The file could not be announced to the peer.');
+        }
 
-        this.emit({ type: 'file-send-start', fileId, fileName: file.name, fileSize: file.size });
+        this.emit({ type: 'file-send-start', fileId, fileName: file.name, fileSize: file.size, overRelay });
 
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
         for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
@@ -821,8 +858,26 @@ export default class ChannelsService {
                 chunkIndex,
                 chunk: b64
             };
-            await this.transmit(chunkPayload);
-            this.emit({ type: 'file-send-progress', fileId, sent: Math.min((chunkIndex + 1) * CHUNK_SIZE, file.size), total: file.size });
+            // A chunk that no transport accepted leaves the receiver with a
+            // gap it can never fill, and it reassembles by total size — so the
+            // transfer stops here and says so, rather than hanging at 94%.
+            if (!(await this.transmit(chunkPayload))) {
+                this.emit({ type: 'file-send-error', fileId, chunkIndex });
+                throw new Error(`The file stopped sending at chunk ${chunkIndex + 1} of ${totalChunks}.`);
+            }
+            this.emit({
+                type: 'file-send-progress',
+                fileId,
+                sent: Math.min((chunkIndex + 1) * CHUNK_SIZE, file.size),
+                total: file.size,
+                overRelay
+            });
+
+            if (overRelay && chunkIndex + 1 < totalChunks) {
+                await new Promise((resolve) =>
+                    setTimeout(resolve, this._transportConfig.RELAY_FILE_CHUNK_PAUSE_MS)
+                );
+            }
         }
 
         this.emit({ type: 'file-send-done', fileId });

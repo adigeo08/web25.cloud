@@ -14,6 +14,7 @@ import {
     registerLocalWalletFromSeed
 } from './LocalWalletService.js';
 import { addAlternatePasskey, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
+import { markSessionLocked, markSessionUnlocked, readResumeHint } from './SessionResumeHint.js';
 import {
     clearNostrIdentityPreference,
     isNostrIdentityEnabled,
@@ -40,6 +41,9 @@ export default class AuthController {
         onWalletLocked(() => {
             void this.handleWorkerLock();
         });
+        // Read before anything renders: the unlock screen is the one place
+        // where "you were signed in a moment ago" is worth saying out loud.
+        this.state.resumeHint = readResumeHint();
         await this.refreshLocalWalletState();
 
         bindRegisterWallet(() => this.registerLocal());
@@ -86,6 +90,9 @@ export default class AuthController {
 
     /** Worker-side TTL expiry or crash: drop back to the locked UI state. */
     async handleWorkerLock() {
+        // The session ended without the user asking, so the unlock screen says
+        // so — the same sentence a reload earns.
+        this.state.resumeHint = readResumeHint();
         await this.refreshLocalWalletState();
         this.render();
         this.notify();
@@ -172,6 +179,12 @@ export default class AuthController {
         return true;
     }
 
+    /** One place to record that a live session exists in this page. */
+    rememberUnlockedSession() {
+        markSessionUnlocked();
+        this.state.resumeHint = readResumeHint();
+    }
+
     async registerLocal() {
         try {
             const result = await registerLocalWallet();
@@ -182,6 +195,7 @@ export default class AuthController {
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             this.state.localWalletExists = true;
             this.state.localWalletUnlocked = true;
+            this.rememberUnlockedSession();
             this.state.passkeyProtected = passkeySupported();
             showSeedPhrase(result.seedPhrase);
             this.toast.warning(
@@ -212,6 +226,7 @@ export default class AuthController {
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             this.state.localWalletExists = true;
             this.state.localWalletUnlocked = true;
+            this.rememberUnlockedSession();
             this.state.passkeyProtected = passkeySupported();
             this.render();
             this.notify();
@@ -231,6 +246,7 @@ export default class AuthController {
             this.state.identityType = 'local';
             this.state.address = result.address;
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
+            this.rememberUnlockedSession();
             this.state.localWalletUnlocked = true;
             this.render();
             this.notify();
@@ -275,6 +291,7 @@ export default class AuthController {
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             this.state.localWalletExists = true;
             this.state.localWalletUnlocked = true;
+            this.rememberUnlockedSession();
             this.state.passkeyProtected = passkeySupported();
             this.render();
             this.notify();
@@ -286,6 +303,9 @@ export default class AuthController {
 
     async lockAndDisconnect() {
         try {
+            // Locking up on purpose is not an interruption: the place is still
+            // remembered, the "unlock again" notice is not.
+            markSessionLocked();
             await clearLocalWalletSession();
             // Terminating the worker guarantees nothing survives the disconnect.
             destroyLocalWalletSession();
@@ -309,6 +329,7 @@ export default class AuthController {
         if (!confirmed) return;
         try {
             const address = this.state.address;
+            markSessionLocked();
             await removeLocalWallet();
             // The wallet is gone, so its Nostr reachability preference is too.
             clearNostrIdentityPreference(address);

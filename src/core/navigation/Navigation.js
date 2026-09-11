@@ -221,4 +221,8 @@ export function showMainContent() {
 
     // Update URL
     window.history.pushState({}, '', window.location.pathname);
+
+    // Coming back from a site is exactly when the library has something new in
+    // it: the site just rendered was cached on the way in.
+    void this.refreshLibrary?.();
 }

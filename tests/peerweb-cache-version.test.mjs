@@ -68,7 +68,7 @@ function fakeIndexedDB(state) {
 }
 
 test('a database that is already past version 1 opens without a VersionError', async () => {
-    const idb = fakeIndexedDB({ version: 2, stores: ['sites'] });
+    const idb = fakeIndexedDB({ version: 2, stores: ['sites', 'library'] });
     global.indexedDB = idb;
 
     const cache = new PeerWebCache();
@@ -79,7 +79,7 @@ test('a database that is already past version 1 opens without a VersionError', a
 });
 
 test('the open handle is reused instead of reopened per operation', async () => {
-    const idb = fakeIndexedDB({ version: 5, stores: ['sites'] });
+    const idb = fakeIndexedDB({ version: 5, stores: ['sites', 'library'] });
     global.indexedDB = idb;
 
     const cache = new PeerWebCache();
@@ -99,7 +99,7 @@ test('a missing object store is added in one upgrade, at the version that exists
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 4], 'one probe, then one upgrade above the existing version');
-    assert.deepEqual(state.stores, ['sites']);
+    assert.deepEqual(state.stores, ['sites', 'library']);
 });
 
 test('a fresh browser creates the database and its store', async () => {
@@ -111,7 +111,7 @@ test('a fresh browser creates the database and its store', async () => {
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 1]);
-    assert.deepEqual(state.stores, ['sites']);
+    assert.deepEqual(state.stores, ['sites', 'library']);
 });
 
 test('a read that cannot open the database reports null instead of throwing', async () => {
@@ -129,4 +129,18 @@ test('a read that cannot open the database reports null instead of throwing', as
     const cache = new PeerWebCache();
     assert.equal(await cache.getEntry('0123'), null);
     assert.equal(await cache.get('0123'), null);
+});
+
+test('a cache from before the library index gains it in one upgrade', async () => {
+    // Every existing visitor is in exactly this state: sites cached, nothing
+    // indexed. The search index has to arrive without disturbing them.
+    const state = { version: 2, stores: ['sites'] };
+    const idb = fakeIndexedDB(state);
+    global.indexedDB = idb;
+
+    const cache = new PeerWebCache();
+    await cache.openDB();
+
+    assert.deepEqual(idb.opens, [undefined, 3]);
+    assert.deepEqual(state.stores, ['sites', 'library'], 'the cached sites are left exactly where they are');
 });

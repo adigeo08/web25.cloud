@@ -35,8 +35,28 @@ function renderNostrIdentitySection({ npub, nostrPublicKey, nostrEnabled, unlock
     if (deleteBtn) deleteBtn.classList.toggle('hidden', !unlocked || !nostrEnabled);
 }
 
+/**
+ * Say why the session is gone, when there was one.
+ *
+ * The key lives in the signing worker and nowhere else, so a reload ends the
+ * session by design. Without a word about it that reads as the app forgetting
+ * the user; with one, it reads as the guarantee it is.
+ *
+ * @param {{ localWalletExists: boolean, localWalletUnlocked: boolean, resumeHint: any }} state
+ */
+function renderResumeNotice(state) {
+    const notice = document.getElementById('session-resume-notice');
+    if (!notice) return;
+
+    const interrupted = Boolean(
+        state.localWalletExists && !state.localWalletUnlocked && state.resumeHint?.wasUnlocked
+    );
+    notice.classList.toggle('hidden', !interrupted);
+}
+
 export function renderAuthPanel(state) {
     renderIdentityBadge(state);
+    renderResumeNotice(state);
 
     const status = document.getElementById('auth-status');
     if (status) {
