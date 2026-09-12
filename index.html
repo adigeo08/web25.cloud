@@ -296,23 +296,17 @@
                     <section id="deploy-auth-wall" class="quick-upload card-base">
                         <div>
                             <h3>🔐 Welcome back</h3>
-                            <p>Choose how you want to continue.</p>
+                            <!--
+                                One line, and it changes: normally it offers the
+                                three ways in, and when this browser was in a
+                                session the page teardown ended it says so and
+                                names the tab unlocking will return you to.
+                                AuthPanel.js writes it from the localStorage
+                                breadcrumb — a tab name and a boolean, nothing
+                                that identifies anyone.
+                            -->
+                            <p id="deploy-wall-intro">Choose how you want to continue.</p>
                         </div>
-
-                        <!--
-                            Shown only when this browser was in an unlocked
-                            session that the page teardown ended. AuthPanel.js
-                            toggles it from the localStorage breadcrumb, which
-                            holds a tab name and a boolean — no key material,
-                            no address, nothing that identifies anyone.
-                        -->
-                        <p id="session-resume-notice" class="session-resume-notice hidden">
-                            <span aria-hidden="true">🔄</span>
-                            You were signed in before this page reloaded. The key only ever lives in the signing
-                            worker, so it went with the page — unlock again to carry on where you left off. Sites you
-                            were seeding started again on their own when this page loaded, and did not need the
-                            wallet to do it.
-                        </p>
 
                         <div class="button-group">
                             <button id="unlock-wallet-btn" class="btn btn-primary">🔓 Unlock Wallet</button>
@@ -511,19 +505,17 @@
                             </section>
                         </details>
 
-                        <details class="deploy-advanced-details">
-                            <summary>🛠️ Advanced Tools</summary>
-                            <section class="controls">
-                                <div class="button-group">
-                                    <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
-                                </div>
-                                <p class="deploy-advanced-note">
-                                    Live deployments are managed from the <strong>Pages</strong> tab. Seeding keeps
-                                    running while this tab is open, resumes by itself after a reload — with the wallet
-                                    locked — and only ever stops when you stop it there.
-                                </p>
-                            </section>
-                        </details>
+                        <!--
+                            The torrent creator is a tool, not a drawer of
+                            advice: everything the old "Advanced Tools" note
+                            explained about live deployments now belongs to the
+                            Pages tab, where those deployments actually are.
+                        -->
+                        <div class="deploy-tools">
+                            <button id="create-torrent" class="btn btn-secondary btn-sm">
+                                📦 Advanced Torrent Creator
+                            </button>
+                        </div>
                     </div>
                 </div>
 

@@ -401,13 +401,10 @@ export async function restoreSeedingSessions() {
     };
     await Promise.all(Array.from({ length: Math.min(RESUME_CONCURRENCY, records.length) }, worker));
 
-    const resumed = this.seedingTorrents().size;
-    if (resumed > 0) {
-        this.toast?.info?.(
-            `${resumed} ${resumed === 1 ? 'site is' : 'sites are'} seeding again from this browser.`,
-            'Pages resumed'
-        );
-    }
+    // No toast for this. Resuming is the normal state of affairs, the Pages tab
+    // already shows exactly which sites came back, and an announcement on every
+    // single load is noise rather than news.
+    this.log(`Resumed ${this.seedingTorrents().size} of ${records.length} seeding session(s).`);
     this.refreshPagesPanel();
     this.startSeedingStatsTimer();
     return records;
@@ -608,7 +605,9 @@ export function initPagesPanel() {
 /** Rebuild the Pages tab from the store plus whatever is live. */
 export async function refreshPagesPanel() {
     const sessions = await this.listSeedingSessionViews();
-    renderPages(sessions);
+    // Seeding is not gated on the wallet, but managing it is: with no identity
+    // unlocked the tab is not offered at all, the same way Chat is not.
+    renderPages(sessions, { visible: this._pagesTabAllowed === true });
     if (sessions.some((session) => session.state === 'seeding')) this.startSeedingStatsTimer();
     return sessions;
 }

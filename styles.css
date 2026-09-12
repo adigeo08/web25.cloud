@@ -4479,23 +4479,11 @@ select,
     }
 }
 
-/* The one sentence the unlock screen owes a user whose session a reload ended. */
-.session-resume-notice {
+/* The torrent creator, as a quiet action under the deploy pipeline. */
+.deploy-tools {
     display: flex;
-    gap: 0.55rem;
-    align-items: flex-start;
-    margin: 0;
-    padding: 0.7rem 0.85rem;
-    border: 1px solid var(--accent-line);
-    border-radius: var(--r);
-    background: var(--accent-soft);
-    color: var(--text);
-    font-size: 0.85rem;
-    line-height: 1.55;
-}
-
-.session-resume-notice.hidden {
-    display: none !important;
+    justify-content: flex-end;
+    margin-top: 0.75rem;
 }
 
 /* Links inside chat messages. Peer-written text, so the anchor is built as a
@@ -4624,12 +4612,6 @@ select,
     font-size: 0.72rem;
 }
 
-.deploy-advanced-note {
-    margin: 0.65rem 0 0;
-    color: var(--text-dim);
-    font-size: 0.82rem;
-    line-height: 1.55;
-}
 
 @media (max-width: 640px) {
     body {

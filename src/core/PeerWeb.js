@@ -46,6 +46,12 @@ class PeerWeb {
         this._seedingTorrents = new Map();
         /** @type {Map<string, string>} sessions that failed to resume, by hash */
         this._seedingErrors = new Map();
+        /**
+         * Whether the Pages tab may be shown. Starts closed: sessions are
+         * restored before the page knows whether anybody is signed in, and a
+         * tab that flashes into view and back out is worse than one that waits.
+         */
+        this._pagesTabAllowed = false;
         this.signedTorrentMetadata = new Map();
         this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
         const overrideTrackers =

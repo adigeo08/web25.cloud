@@ -50,7 +50,7 @@ import { PendingInvitations } from '../../channels/PendingInvitations.js';
 import { GoFileService } from '../../gofile/GoFileService.js';
 import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
 import { encodeGoFileMirror, gofileMirrorFilename } from '../../gofile/GoFileMirrorCodec.js';
-import { formatWeb25Url, parseWeb25Address } from '../../gofile/Web25Url.js';
+import { formatWeb25Url } from '../../gofile/Web25Url.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /** How long a searched address shows "checking" before it is called offline. */
@@ -1371,54 +1371,6 @@ export async function signStagedPayload() {
     this.refreshDeployUiState();
 }
 
-/** What the mirror row says, per state. An absent mirror is never rendered as an empty value. */
-const MIRROR_ROW_TEXT = {
-    pending: 'Creating…',
-    unavailable: 'Not created — WebTorrent only'
-};
-
-const TRANSPORT_TEXT = {
-    disabled: 'Live and seeding over WebTorrent',
-    pending: 'Live and seeding over WebTorrent · creating optional mirror',
-    available: 'Live and seeding over WebTorrent · GoFile fallback mirror available',
-    unavailable: 'Live and seeding over WebTorrent · no fallback mirror'
-};
-
-export function renderDeploymentSummary({
-    hash,
-    url,
-    signedBy,
-    signature,
-    signatureStatus,
-    mirror = null,
-    mirrorState = 'disabled'
-}) {
-    const resultEl = document.getElementById('upload-result');
-    const hashEl = document.getElementById('result-hash');
-    const urlEl = document.getElementById('result-url');
-    const signedByEl = document.getElementById('result-signed-by');
-    const signatureEl = document.getElementById('result-signature-preview');
-    const signatureStatusEl = document.getElementById('result-signature-status');
-    const transportEl = document.getElementById('result-transport');
-    const mirrorEl = document.getElementById('result-gofile-mirror');
-    const mirrorRow = document.getElementById('result-gofile-row');
-
-    if (hashEl) hashEl.textContent = hash;
-    if (urlEl) urlEl.textContent = url;
-    if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
-    if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
-    if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
-    if (transportEl) transportEl.textContent = TRANSPORT_TEXT[mirrorState] || TRANSPORT_TEXT.disabled;
-
-    // The locator addresses this deployment's mirror only; the folder page it
-    // lives in is never surfaced or shared. A mirror nobody asked for gets no
-    // row at all, rather than an empty or null-looking value.
-    if (mirrorEl) mirrorEl.textContent = mirror?.locator || MIRROR_ROW_TEXT[mirrorState] || 'Not created';
-    if (mirrorRow) mirrorRow.classList.toggle('hidden', mirrorState === 'disabled' || mirrorState === 'idle');
-
-    if (resultEl) resultEl.classList.remove('hidden');
-}
-
 /** The mirror is opt-in per deployment and nothing remembers the choice. */
 export function isGoFileMirrorRequested() {
     const toggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
@@ -1426,20 +1378,19 @@ export function isGoFileMirrorRequested() {
 }
 
 /**
- * Render the deployment as it currently stands. Called once the torrent is
- * live, and again if an optional mirror later succeeds or fails, so the result
- * on screen is never waiting on GoFile to become true.
+ * Record the deployment. Called once the torrent is live, and again if an
+ * optional mirror later succeeds or fails, so the stored record ends up with
+ * whatever actually became of the mirror.
+ *
+ * Nothing is rendered onto the Deploy page any more. A deployment that exists
+ * belongs to Pages — that is where its link, its stats and its Stop seeding
+ * button live — and the Deploy page goes back to being a place to deploy
+ * something else.
+ *
  * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
- *           mirrorRequested?: boolean, mirrorError?: Error|null }} state
+ *           mirrorState?: string }} state
  */
 export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorState = 'disabled' }) {
-    this.showUploadResult(
-        hash,
-        this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
-        this.lastPublishCandidate.torrent,
-        mirror?.locator || null
-    );
-
     const url = formatWeb25Url({
         torrentHash: hash,
         gofileLocator: mirror?.locator || null,
@@ -1447,46 +1398,7 @@ export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorSt
         pathname: window.location.pathname
     });
 
-    const temporaryMirror = mirror
-        ? { status: 'available', locator: mirror.locator, filename: mirror.filename }
-        : { status: mirrorState, ...(mirrorState === 'unavailable' ? { error: this._lastMirrorError || null } : {}) };
-
-    const output = document.getElementById('publish-output');
-    if (output) {
-        output.textContent = JSON.stringify(
-            {
-                deploymentStatus: 'completed',
-                torrentHash: hash,
-                primaryTransport: 'webtorrent',
-                temporaryMirror,
-                artifactMode: 'in-memory-bundle',
-                signedBy: identity.address,
-                signature: this.lastSignature.signature,
-                signatureAlgorithm: this.lastSignature.signatureAlgorithm || 'EVM_SECP256K1',
-                signedAt: this.lastSignature.signedAt,
-                authenticity: {
-                    integrity: 'Torrent hash guarantees content integrity',
-                    authorship: 'Wallet signature is embedded in .torrentchain and verified before site rendering'
-                },
-                signatureStorage: ['.torrentchain']
-            },
-            null,
-            2
-        );
-    }
-
-    this.renderDeploymentSummary({
-        hash,
-        url,
-        signedBy: identity.address,
-        signature: this.lastSignature.signature,
-        signatureStatus: 'VERIFIED',
-        mirror,
-        mirrorState
-    });
-
     this.lastDeployResult = { hash, url, signedBy: identity.address, mirror, mirrorState };
-    this.persistDeploySession();
     // The payload is copied out of this page and into the seeding store, which
     // is what lets the site keep being served after a reload — and with the
     // wallet locked, since nothing about seeding needs a key.
@@ -1605,6 +1517,7 @@ async function runSignedDeployment() {
         this.renderDeployedArtifact({ hash, identity, mirrorState: 'disabled' });
         updateDeployProgress({ label: 'Live and seeding', percent: 100, state: 'success' });
         renderDeployStage('Deployment complete', 'Live and seeding from memory');
+        await this.completeDeployment();
         return;
     }
 
@@ -1637,6 +1550,7 @@ async function runSignedDeployment() {
             `Site deployed successfully. The optional GoFile fallback mirror could not be created: ${error.message}`,
             'Fallback mirror unavailable'
         );
+        await this.completeDeployment();
         return;
     }
 
@@ -1644,6 +1558,66 @@ async function runSignedDeployment() {
     updateDeployProgress({ label: 'Live + temporary mirror', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live, seeding, and temporarily mirrored');
     this.toast?.success?.('Temporary GoFile fallback mirror created.', 'Mirror ready');
+    await this.completeDeployment();
+}
+
+/**
+ * Put the Deploy page back to where a deploy starts.
+ *
+ * Called when a deployment finishes, because at that point the Deploy page has
+ * nothing left to say: the site exists, and everything anyone wants to do with
+ * it — open it, copy its link, see who is pulling it, stop seeding it — is on
+ * its card in Pages. Leaving the finished deployment on screen only turned the
+ * page into a receipt that had to be dismissed before the next deploy.
+ */
+export function resetDeployPipeline() {
+    this.pendingDeployFiles = null;
+    this.lastPublishCandidate = null;
+    this.lastSignature = null;
+    this.lastSignedPublish = null;
+    this.lastDeployResult = null;
+    this._lastMirrorError = null;
+    this.clearDeploySession?.();
+
+    renderSignatureStatus(null);
+    renderPublishReview(null);
+    renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
+    hideDeployProgress();
+
+    const output = document.getElementById('publish-output');
+    if (output) output.textContent = 'No artifact staged. Drop a website folder to begin.';
+
+    const resultEl = document.getElementById('upload-result');
+    if (resultEl) resultEl.classList.add('hidden');
+
+    // The mirror is opt-in per deployment and the next one starts from the
+    // default, not from what the last publisher happened to choose.
+    const mirrorToggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+    if (mirrorToggle) {
+        mirrorToggle.disabled = false;
+        mirrorToggle.removeAttribute('title');
+        mirrorToggle.checked = true;
+    }
+
+    this.refreshDeployUiState();
+}
+
+/**
+ * Finish a deployment: clear the page down and show the publisher where the
+ * site now lives.
+ */
+export async function completeDeployment() {
+    // Pages has to exist before it can be opened: the tab only appears once
+    // there is a session to show, and this deployment is that session.
+    await this.refreshPagesPanel?.();
+    this.resetDeployPipeline();
+
+    // Duck-typed rather than `instanceof HTMLElement`: this runs against test
+    // doubles as well as a browser, and what matters is that it is clickable.
+    const pagesTab = document.querySelector('.tab-nav .tab-btn[data-tab="pages"]');
+    if (typeof pagesTab?.click === 'function' && pagesTab.style?.display !== 'none') {
+        pagesTab.click();
+    }
 }
 
 export function setupAuthAwareUi(state) {
@@ -1653,6 +1627,8 @@ export function setupAuthAwareUi(state) {
     const deployPanel = document.getElementById('deploy-panel');
     const channelsTabBtn = document.querySelector('[data-tab="channels"]');
     const channelsTabPanel = document.getElementById('tab-channels');
+    const pagesTabBtn = document.querySelector('[data-tab="pages"]');
+    const pagesTabPanel = document.getElementById('tab-pages');
     const hasIdentity = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const isAuthenticated = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const hasJustAuthenticated = !this._hadAuthenticatedIdentity && isAuthenticated;
@@ -1680,6 +1656,15 @@ export function setupAuthAwareUi(state) {
     if (channelsTabPanel) {
         channelsTabPanel.style.display = hasIdentity ? '' : 'none';
     }
+
+    // Pages is behind the wallet, exactly like Chat. The sites themselves go on
+    // seeding with the wallet locked — that is the whole point of the store —
+    // but managing them is the publisher's business, so the tab goes away with
+    // the session and comes back with it.
+    this._pagesTabAllowed = hasIdentity;
+    if (pagesTabBtn instanceof HTMLElement && !hasIdentity) pagesTabBtn.style.display = 'none';
+    if (pagesTabPanel instanceof HTMLElement && !hasIdentity) pagesTabPanel.style.display = 'none';
+    if (hasIdentity) void this.refreshPagesPanel?.();
 
     const deployTabBtn = document.querySelector('[data-tab="publish"]');
     if (deployTabBtn) {
@@ -1721,7 +1706,7 @@ export function setupAuthAwareUi(state) {
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
         const activeName = activeTab?.getAttribute('data-tab');
-        if (activeName === 'auth' || activeName === 'channels') {
+        if (activeName === 'auth' || activeName === 'channels' || activeName === 'pages') {
             const browseTab = document.querySelector('[data-tab="browse"]');
             if (browseTab instanceof HTMLElement) browseTab.click();
         }
@@ -1748,15 +1733,28 @@ export function setupAuthAwareUi(state) {
     }
 
     if (hasJustAuthenticated) {
-        const identityTab = document.querySelector('[data-tab="auth"]');
-        if (identityTab instanceof HTMLElement) {
-            identityTab.click();
-        }
-        // The wallet is unlocked exactly here, which is the only moment the
-        // credential can be encrypted or read. Provisioning now means a mirror
-        // never has to mint a credential mid-deploy, and a visitor who has
-        // signed in can authenticate a mirror read without ever deploying.
-        void this.ensureGoFileCredential();
+        void (async () => {
+            // Pages appears with the session, and it appears asynchronously:
+            // asking for the remembered tab before it exists would find it
+            // hidden and give up on it.
+            await this.refreshPagesPanel?.();
+
+            // Somebody coming back goes back to what they were doing. Only a
+            // first sign-in — nothing remembered at all — lands on Account,
+            // because that is the one time the identity itself is the news.
+            const resumed = this.applyResumeHint?.();
+            if (resumed === null) {
+                const identityTab = document.querySelector('[data-tab="auth"]');
+                if (typeof identityTab?.click === 'function') identityTab.click();
+            }
+
+            // The wallet is unlocked exactly here, which is the only moment the
+            // credential can be encrypted or read. Provisioning now means a
+            // mirror never has to mint a credential mid-deploy, and a visitor
+            // who has signed in can authenticate a mirror read without ever
+            // deploying.
+            void this.ensureGoFileCredential();
+        })();
     }
 }
 
@@ -2148,14 +2146,16 @@ export function setupTabMemory() {
  */
 export function applyResumeHint() {
     const hint = readResumeHint();
-    if (!hint) return null;
+    if (!hint?.tab) return null;
 
+    // Duck-typed rather than `instanceof HTMLElement`: what matters is that the
+    // tab is there and clickable, and this runs against test doubles too.
     const button = document.querySelector(`.tab-nav .tab-btn[data-tab="${hint.tab}"]`);
-    if (!(button instanceof HTMLElement)) return hint;
-    if (button.style.display === 'none' || button.classList.contains('active')) return hint;
-
-    button.click();
-    return hint;
+    if (typeof button?.click !== 'function' || button.style?.display === 'none') {
+        return { ...hint, restored: false };
+    }
+    if (!button.classList?.contains('active')) button.click();
+    return { ...hint, restored: true };
 }
 
 export function persistDeploySession() {
@@ -2164,19 +2164,13 @@ export function persistDeploySession() {
     }
 
     try {
-        const signedBy = this.lastSignature?.payload?.publisherAddress || this.lastDeployResult?.signedBy || null;
-        const persistedDeployResult =
-            this.lastDeployResult?.mirrorState === 'pending'
-                ? { ...this.lastDeployResult, mirror: null, mirrorState: 'unavailable' }
-                : this.lastDeployResult || null;
+        const signedBy = this.lastSignature?.payload?.publisherAddress || null;
         const payload = {
             hash: this.lastPublishCandidate.hash,
             siteName: this.lastPublishCandidate.siteName || 'website',
             createdAt: this.lastPublishCandidate.createdAt || null,
             signature: this.lastSignature,
             signedTorrentBase64: this.bytesToBase64(this.lastPublishCandidate.signedTorrentFile),
-            deployed: Boolean(persistedDeployResult),
-            deployResult: persistedDeployResult,
             signedBy,
             savedAt: Date.now()
         };
@@ -2239,15 +2233,9 @@ export async function restoreDeploySession() {
             mirrorToggle.disabled = true;
             mirrorToggle.title = 'GoFile mirroring is unavailable after restoring this deployment.';
         }
-        this.lastDeployResult = savedSession.deployResult || null;
         renderSignatureStatus(this.lastSignature);
         renderPublishReview(this.lastSignature.payload || null);
-        renderDeployStage(
-            savedSession.deployed ? 'Deployment restored' : 'Signature restored',
-            savedSession.deployed
-                ? 'Reconnected to previous signed deployment after refresh'
-                : 'Signed bundle restored. You can deploy now.'
-        );
+        renderDeployStage('Signature restored', 'Signed bundle restored. You can deploy now.');
 
         // A deployment that is already seeding from the seeding store needs no
         // second torrent for the same hash — WebTorrent refuses duplicates, and
@@ -2255,42 +2243,11 @@ export async function restoreDeploySession() {
         const alreadySeeding = this._seedingTorrents?.get(`${savedSession.hash}`.toLowerCase()) || null;
 
         await new Promise((resolve, reject) => {
+            // Only a signature comes back: a deployment that already happened
+            // is a session in Pages, not something the Deploy page restores.
             const onTorrent = (torrent) => {
                 this.lastPublishCandidate.torrent = torrent;
                 this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
-
-                if (savedSession.deployed) {
-                    const savedAddress = savedSession.deployResult?.url
-                        ? parseWeb25Address(savedSession.deployResult.url)
-                        : { torrentHash: savedSession.hash, gofileLocator: null };
-                    const url = formatWeb25Url({
-                        ...savedAddress,
-                        origin: window.location.origin,
-                        pathname: window.location.pathname
-                    });
-                    this.lastDeployResult = savedSession.deployResult || {
-                        hash: savedSession.hash,
-                        url,
-                        signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
-                    };
-                    this.showUploadResult(
-                        savedSession.hash,
-                        signedTorrentBuffer,
-                        torrent,
-                        this.lastDeployResult.mirror?.locator || null
-                    );
-                    this.renderDeploymentSummary({
-                        hash: savedSession.hash,
-                        url: this.lastDeployResult.url,
-                        signedBy: this.lastDeployResult.signedBy,
-                        signature: this.lastSignature.signature,
-                        signatureStatus: 'VERIFIED',
-                        mirror: this.lastDeployResult.mirror || null,
-                        mirrorState:
-                            this.lastDeployResult.mirrorState ||
-                            (this.lastDeployResult.mirror ? 'available' : 'disabled')
-                    });
-                }
                 resolve();
             };
 

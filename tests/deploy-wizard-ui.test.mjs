@@ -51,14 +51,22 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
         : null;
 
     const toasts = [];
+    const recorded = [];
     const context = {
         deploySignedArtifact: lifecycle.deploySignedArtifact,
         renderDeployedArtifact: lifecycle.renderDeployedArtifact,
         createGoFileMirror: lifecycle.createGoFileMirror,
         isGoFileMirrorRequested: lifecycle.isGoFileMirrorRequested,
-        renderDeploymentSummary: lifecycle.renderDeploymentSummary,
+        completeDeployment: lifecycle.completeDeployment,
+        resetDeployPipeline: lifecycle.resetDeployPipeline,
+        refreshPagesPanel: async () => {},
+        clearDeploySession() {},
+        // The deploy page hands a finished deployment to Pages and clears
+        // itself, so what it recorded is where the result now lives.
+        recordSeedingSession: async (params) => {
+            recorded.push(params);
+        },
         refreshDeployUiState: lifecycle.refreshDeployUiState,
-        showUploadResult: uploader.showUploadResult,
         setupQuickUpload: uploader.setupQuickUpload,
         sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
         createTrackedObjectURL: () => 'blob:stub',
@@ -85,7 +93,7 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
         gofileCredentialStore: { read: async () => null, write: async () => {}, clearInvalidToken: async () => {} }
     };
     context.setupQuickUpload();
-    return { dom, context, toasts };
+    return { dom, context, toasts, recorded, deployUrl: () => recorded.at(-1)?.deploy?.url };
 }
 
 const progress = (dom) => ({
@@ -250,11 +258,28 @@ test('the wizard walks 1 → 4 → 5 and never presents the mirror step as requi
     );
 });
 
-// ── 3. WebTorrent-only deployment ───────────────────────────────────────────
+// ── 3. What a finished deployment leaves behind ─────────────────────────────
+//
+// It used to leave a result panel: a link, a mirror row, identity rows, and a
+// "Deploy another site" button to dismiss it with. All of that is now a card in
+// Pages, which is where the site can also be opened, copied, and stopped. So
+// what these pin is the hand-off — the record the deploy page passes on — and
+// that the page itself goes back to being ready for the next deployment.
 
-test('a WebTorrent-only deployment skips the mirror step and finishes at 100%', async () => {
+/** The deploy page as somebody arriving at it would find it. */
+const isReadyForNextDeploy = (dom, context) => ({
+    stage: stage(dom).label,
+    screen: dom.activeScreen(),
+    step: dom.chipStates().indexOf('active') + 1,
+    files: context.pendingDeployFiles,
+    signature: context.lastSignature,
+    deployResult: context.lastDeployResult,
+    resultHidden: dom.get('upload-result').classList.contains('hidden')
+});
+
+test('a WebTorrent-only deployment skips the mirror and hands the site to Pages', async () => {
     let contacted = 0;
-    const { dom, context, toasts } = await deployHarness({
+    const { dom, context, toasts, recorded } = await deployHarness({
         mirrorEnabled: false,
         gofileService: {
             upload: async () => {
@@ -267,21 +292,10 @@ test('a WebTorrent-only deployment skips the mirror step and finishes at 100%', 
     await context.deploySignedArtifact();
 
     assert.equal(contacted, 0, 'GoFile is never contacted');
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'skipped', 'active']);
-    assert.equal(dom.chipNote(6), 'Skipped');
-    assert.equal(dom.chipText(7), '7. Live and seeding', 'the final step does not claim a mirror that was never made');
-    assert.deepEqual(progress(dom), {
-        percent: 100,
-        width: '100%',
-        label: 'Live and seeding',
-        state: 'progress-success'
-    });
-    assert.deepEqual(stage(dom), { label: 'Deployment complete', detail: 'Live and seeding from memory' });
-    assert.equal(dom.text('result-transport'), 'Live and seeding over WebTorrent');
-    assert.equal(dom.get('result-gofile-row').classList.contains('hidden'), true, 'no empty mirror row');
-    assert.equal(dom.text('result-url'), `https://web25.cloud/?orc=${HASH}`);
-    assert.equal(dom.get('upload-result').classList.contains('hidden'), false);
-    assert.match(dom.text('deploy-wizard-next'), /live and seeding/i);
+    assert.equal(recorded.length, 1, 'the deployment is handed over exactly once');
+    assert.equal(recorded.at(-1).deploy.url, `https://web25.cloud/?orc=${HASH}`);
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'disabled');
+    assert.equal(recorded.at(-1).deploy.mirror, null);
     assert.equal(
         toasts.filter((toast) => toast.level === 'warning').length,
         0,
@@ -289,115 +303,54 @@ test('a WebTorrent-only deployment skips the mirror step and finishes at 100%', 
     );
 });
 
-// ── 4. Mirrored deployment ──────────────────────────────────────────────────
+test('a mirrored deployment publishes the locator with the link', async () => {
+    const { context, toasts, recorded } = await deployHarness({
+        mirrorEnabled: true,
+        gofileService: { upload: async () => ({ mirrorLocator: LOCATOR }) }
+    });
 
-test('a mirrored deployment moves through step 6 and lands on Live + mirrored', async () => {
-    const seen = [];
-    const { dom, context, toasts } = await deployHarness({
+    await context.deploySignedArtifact();
+
+    assert.equal(recorded.at(-1).deploy.url, `https://web25.cloud/?orc=${HASH}&${LOCATOR}`);
+    assert.equal(recorded.at(-1).deploy.mirror.locator, LOCATOR);
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'available');
+    assert.equal(toasts.at(-1).level, 'success');
+});
+
+test('the site is recorded as live before the mirror is even attempted', async () => {
+    let whileUploading = null;
+    const { dom, context, recorded } = await deployHarness({
         mirrorEnabled: true,
         gofileService: {
-            upload: async (_blob, options) => {
-                // Observed mid-flight: the torrent result is already published.
-                seen.push({
-                    chips: dom.chipStates(),
-                    progress: progress(dom),
-                    stage: stage(dom),
-                    url: dom.text('result-url'),
-                    resultVisible: !dom.get('upload-result').classList.contains('hidden'),
-                    mirrorRow: dom.text('result-gofile-mirror')
-                });
-                return { mirrorLocator: LOCATOR, filename: options.filename };
+            upload: async () => {
+                // Mid-deployment: the torrent is already seeding, so the record
+                // and the progress line must both say so rather than implying
+                // the deployment is still pending on an optional step.
+                whileUploading = {
+                    mirrorState: recorded.at(-1)?.deploy?.mirrorState,
+                    url: recorded.at(-1)?.deploy?.url,
+                    label: dom.text('upload-progress-text'),
+                    stage: stage(dom).label
+                };
+                return { mirrorLocator: LOCATOR };
             }
         }
     });
 
     await context.deploySignedArtifact();
 
-    assert.equal(seen.length, 1);
-    assert.deepEqual(seen[0].chips, ['done', 'done', 'done', 'done', 'done', 'active', 'locked']);
-    assert.equal(seen[0].progress.percent, 90);
-    assert.equal(seen[0].progress.label, 'Site live. Creating optional GoFile fallback mirror…');
-    assert.equal(seen[0].progress.state, 'progress-running');
-    assert.deepEqual(seen[0].stage, {
-        label: 'Site live',
-        detail: 'Deployed over WebTorrent. Creating the optional GoFile fallback mirror…'
-    });
-    assert.equal(seen[0].resultVisible, true, 'the successful torrent result is already on screen');
-    assert.equal(seen[0].url, `https://web25.cloud/?orc=${HASH}`);
-    assert.equal(seen[0].mirrorRow, 'Creating…');
-
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'done', 'active']);
-    assert.equal(dom.chipNote(6), 'Created');
-    assert.equal(dom.chipText(7), '7. Live + mirrored');
-    assert.deepEqual(progress(dom), {
-        percent: 100,
-        width: '100%',
-        label: 'Live + temporary mirror',
-        state: 'progress-success'
-    });
-    assert.deepEqual(stage(dom), { label: 'Deployment complete', detail: 'Live, seeding, and temporarily mirrored' });
-    assert.equal(dom.get('result-gofile-row').classList.contains('hidden'), false);
-    assert.equal(dom.text('result-gofile-mirror'), LOCATOR);
-    assert.equal(dom.text('result-url'), `https://web25.cloud/?orc=${HASH}&${LOCATOR}`);
-    assert.equal(dom.text('result-transport'), 'Live and seeding over WebTorrent · GoFile fallback mirror available');
-    assert.equal(toasts.at(-1).level, 'success');
+    assert.equal(whileUploading.mirrorState, 'pending');
+    assert.equal(whileUploading.url, `https://web25.cloud/?orc=${HASH}`);
+    assert.match(whileUploading.label, /site live/i);
+    assert.equal(whileUploading.stage, 'Site live');
 });
 
-test('Copy Link and Open Site use exactly the URL the panel shows', async () => {
-    const { dom, context } = await deployHarness({
-        mirrorEnabled: true,
-        gofileService: { upload: async () => ({ mirrorLocator: LOCATOR }) }
-    });
-    await context.deploySignedArtifact();
-
-    const shown = dom.text('result-url');
-    dom.get('open-site').dispatch('click');
-    dom.get('copy-link').dispatch('click');
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.equal(shown, `https://web25.cloud/?orc=${HASH}&${LOCATOR}`);
-    assert.deepEqual(dom.opened, [shown]);
-    assert.deepEqual(dom.copied, [shown]);
-});
-
-// ── 5. Slow mirror ──────────────────────────────────────────────────────────
-
-test('a slow mirror never implies the deployment itself is still pending', async () => {
-    let release;
-    const pending = new Promise((resolve) => {
-        release = resolve;
-    });
-    const { dom, context } = await deployHarness({
-        mirrorEnabled: true,
-        gofileService: { upload: () => pending.then(() => ({ mirrorLocator: LOCATOR })) }
-    });
-
-    const deploying = context.deploySignedArtifact();
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // While the mirror is in flight the site is already live and shareable.
-    assert.equal(dom.get('upload-result').classList.contains('hidden'), false);
-    assert.equal(dom.text('result-url'), `https://web25.cloud/?orc=${HASH}`);
-    assert.equal(dom.text('result-transport'), 'Live and seeding over WebTorrent · creating optional mirror');
-    assert.equal(stage(dom).label, 'Site live');
-    assert.notEqual(stage(dom).label, 'Deploying');
-    assert.match(dom.text('deploy-wizard-next'), /live and seeding/i);
-    assert.match(dom.text('deploy-wizard-next'), /optional fallback mirror/i);
-    assert.equal(dom.get('publish-btn').disabled, false, 'the interface stays usable');
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'active', 'locked']);
-    assert.equal(dom.chipNote(6), 'In progress');
-
-    release();
-    await deploying;
-    assert.equal(progress(dom).percent, 100);
-});
-
-// ── 6. Mirror timeout and failure ───────────────────────────────────────────
-
-test('a mirror timeout leaves a successful, complete, torrent-only deployment', async () => {
-    const { dom, context, toasts } = await deployHarness({ mirrorEnabled: true });
+test('a mirror that never arrives still leaves a successful deployment', async () => {
+    const { context, toasts, recorded } = await deployHarness({ mirrorEnabled: true });
+    // A GoFile that accepts the connection and then says nothing: the service's
+    // own deadline is what ends it, not the deployment waiting.
     context.gofileService = new GoFileService({
-        fetchImpl: (_url, init) =>
+        fetchImpl: (_endpoint, init) =>
             new Promise((_resolve, reject) => {
                 const socket = setTimeout(() => {}, 10000);
                 init.signal.addEventListener('abort', () => {
@@ -410,113 +363,61 @@ test('a mirror timeout leaves a successful, complete, torrent-only deployment', 
 
     await context.deploySignedArtifact();
 
-    assert.deepEqual(dom.chipStates(), ['done', 'done', 'done', 'done', 'done', 'failed', 'active']);
-    assert.equal(dom.chipNote(6), 'Not created');
-    assert.equal(dom.chipText(7), '7. Live and seeding');
-    assert.deepEqual(progress(dom), {
-        percent: 100,
-        width: '100%',
-        label: 'Live and seeding (no fallback mirror)',
-        state: 'progress-success'
-    });
-    assert.deepEqual(stage(dom), {
-        label: 'Deployment complete',
-        detail: 'Live and seeding. The optional GoFile fallback mirror could not be created.'
-    });
-    assert.equal(dom.text('result-url'), `https://web25.cloud/?orc=${HASH}`);
-    assert.equal(dom.text('result-gofile-mirror'), 'Not created — WebTorrent only');
-    assert.equal(dom.get('result-gofile-row').classList.contains('hidden'), false, 'the optional state is explained');
-    assert.equal(dom.text('result-transport'), 'Live and seeding over WebTorrent · no fallback mirror');
-
-    const warning = toasts.find((toast) => toast.level === 'warning');
-    assert.match(warning.message, /Site deployed successfully/);
-    assert.match(warning.message, /could not be created/);
-    assert.match(warning.message, /timed out/);
-    assert.match(JSON.parse(dom.text('publish-output')).temporaryMirror.error, /timed out/);
-    assert.equal(JSON.parse(dom.text('publish-output')).deploymentStatus, 'completed');
+    assert.equal(recorded.at(-1).deploy.url, `https://web25.cloud/?orc=${HASH}`, 'the torrent-only link is published');
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'unavailable');
+    const warnings = toasts.filter((toast) => toast.level === 'warning');
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0].message, /deployed successfully/i);
 });
 
-test('Copy Link and Open Site fall back to the torrent-only URL after a mirror failure', async () => {
-    const { dom, context } = await deployHarness({
-        mirrorEnabled: true,
-        gofileService: {
-            upload: async () => {
-                throw new Error('GoFile rejected the upload.');
-            }
-        }
-    });
+test('the identity and signature travel with the deployment', async () => {
+    const { context, recorded } = await deployHarness({ mirrorEnabled: false });
+
     await context.deploySignedArtifact();
 
-    dom.get('open-site').dispatch('click');
-    dom.get('copy-link').dispatch('click');
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.deepEqual(dom.opened, [`https://web25.cloud/?orc=${HASH}`]);
-    assert.deepEqual(dom.copied, [`https://web25.cloud/?orc=${HASH}`]);
+    const { deploy } = recorded.at(-1);
+    assert.equal(deploy.signedBy, '0xpublisher');
+    assert.equal(deploy.signature, `0x${'ab'.repeat(32)}`);
+    assert.equal(deploy.signatureAlgorithm, 'EVM_SECP256K1');
+    assert.equal(deploy.signatureStatus, 'VERIFIED');
 });
 
-// ── 7. Result panel content ─────────────────────────────────────────────────
-
-test('the result panel never renders an empty or null-looking mirror value', async () => {
-    for (const [enabled, service, expected] of [
-        [false, null, null],
-        [true, { upload: async () => ({ mirrorLocator: LOCATOR }) }, LOCATOR],
-        [
-            true,
-            {
+test('every deployment path leaves the page ready for the next one', async () => {
+    for (const scenario of [
+        { name: 'torrent only', mirrorEnabled: false, gofileService: null },
+        {
+            name: 'mirrored',
+            mirrorEnabled: true,
+            gofileService: { upload: async () => ({ mirrorLocator: LOCATOR }) }
+        },
+        {
+            name: 'mirror failed',
+            mirrorEnabled: true,
+            gofileService: {
                 upload: async () => {
                     throw new Error('nope');
                 }
-            },
-            'Not created — WebTorrent only'
-        ]
-    ]) {
-        const { dom, context } = await deployHarness({ mirrorEnabled: enabled, gofileService: service });
-        await context.deploySignedArtifact();
-        const hidden = dom.get('result-gofile-row').classList.contains('hidden');
-        const shown = dom.text('result-gofile-mirror');
-        assert.doesNotMatch(shown, /^(null|undefined|)$/, 'the mirror row is never empty or null');
-        if (expected === null) assert.equal(hidden, true);
-        else {
-            assert.equal(hidden, false);
-            assert.equal(shown, expected);
-        }
-        dom.restore();
-    }
-});
-
-test('every deployment fills the identity and signature rows', async () => {
-    const { dom, context } = await deployHarness();
-    await context.deploySignedArtifact();
-
-    assert.equal(dom.text('result-hash'), HASH);
-    assert.equal(dom.text('result-signed-by'), '0xpublisher');
-    assert.equal(dom.text('result-signature-preview'), `0x${'ab'.repeat(32)}`.slice(0, 24) + '...');
-    assert.equal(dom.text('result-signature-status'), 'VERIFIED');
-});
-
-// ── 8. No loading state outlives its promise ────────────────────────────────
-
-test('no deployment path leaves a running progress state behind', async () => {
-    const services = [
-        [false, null],
-        [true, { upload: async () => ({ mirrorLocator: LOCATOR, filename: gofileMirrorFilename(HASH) }) }],
-        [
-            true,
-            {
-                upload: async () => {
-                    throw new Error('mirror refused');
-                }
             }
-        ]
-    ];
-    for (const [enabled, service] of services) {
-        const { dom, context } = await deployHarness({ mirrorEnabled: enabled, gofileService: service });
+        }
+    ]) {
+        const { dom, context } = await deployHarness(scenario);
+
         await context.deploySignedArtifact();
-        const final = progress(dom);
-        assert.equal(final.state, 'progress-success', 'a settled deployment is never left running');
-        assert.equal(final.percent, 100);
-        assert.equal(stage(dom).label, 'Deployment complete');
-        dom.restore();
+
+        assert.deepEqual(
+            isReadyForNextDeploy(dom, context),
+            {
+                stage: 'Stage 1 · Select files',
+                screen: 'upload',
+                step: 1,
+                files: null,
+                signature: null,
+                deployResult: null,
+                resultHidden: true
+            },
+            `${scenario.name}: the deploy page goes back to the start`
+        );
+        // Nothing half-finished is left running on screen either.
+        assert.equal(dom.get('upload-progress').classList.contains('hidden'), true);
     }
 });

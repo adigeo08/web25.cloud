@@ -217,7 +217,11 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 - The resumed torrent must hash to the same info hash — the stored name and piece length are what guarantee it — and is dropped rather than announced if it does not
 - Signing out, clearing the site cache and staging the next deployment all leave live sessions alone
 - A session ends when the publisher presses **Stop seeding** on its card in **Pages**, behind a confirmation; closing the tab only pauses it until the next visit
-- The advanced-tools "Clear Cache" button, which used to take every live deployment down with it, is gone
+- The advanced-tools drawer that used to hold a "Clear Cache" button — and take every live deployment down with it — is gone from the Deploy page entirely
+
+A finished deployment therefore leaves the Deploy page rather than settling on it. When a deployment completes the page clears itself and opens **Pages**, where that site's link, live peer and upload counters, deployment record and Stop seeding button are. The Deploy page is for deploying; a site that exists is managed where it lives.
+
+**Pages** is gated on the wallet, exactly like **Chat**: with no identity unlocked the tab is not offered at all. The sites themselves go on seeding underneath — that is the whole point of the store — but managing them is the publisher's business.
 
 What "saved" means here is deliberately strict, because the promise is that the site is still there on the next load:
 
@@ -239,6 +243,8 @@ The wallet session lives in the signing worker and dies with the page, by design
 A single `localStorage` entry records **which tab was open** and **whether a session was live** — no address, no public key, no npub, no hash, nothing derived from any of them. On the next load the tab is restored when it still exists, and the sign-in wall says the session ended with the page and needs unlocking again. It cannot unlock anything and cannot identify whose browser it is.
 
 The two facts age separately, and for different reasons. The interrupted-session flag answers "did the page that just loaded take a live session with it", which is true of that load and of no later one, so it is read once and put down; moving between tabs no longer renews it, which it did while a single timestamp covered both. The remembered tab keeps its own timestamp and survives that.
+
+What the user sees of this is four words. The sign-in wall reads **"You've been signed out."** and the button becomes **Unlock to Resume**; unlocking then returns them to the tab they were on. Only a first sign-in — nothing remembered at all — lands on Account instead.
 
 ```json
 { "tab": "publish", "tabSavedAt": 1762000000000, "wasUnlocked": true, "sessionAt": 1762000000000 }

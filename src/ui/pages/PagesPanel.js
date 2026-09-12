@@ -275,16 +275,20 @@ function buildCard(session, openHashes) {
 
 /**
  * Render the whole tab, including whether it exists at all.
+ *
  * @param {any[]} sessions
+ * @param {{ visible?: boolean }} [options] `visible: false` keeps the tab away
+ *        entirely — what a locked wallet does, while the sites themselves go on
+ *        seeding underneath.
  */
-export function renderPages(sessions) {
+export function renderPages(sessions, { visible = true } = {}) {
     const entries = sessions || [];
     const tabBtn = document.querySelector('[data-tab="pages"]');
     const tabPanel = document.getElementById('tab-pages');
     const list = document.getElementById('pages-list');
     const count = document.getElementById('pages-count');
 
-    const hasSessions = entries.length > 0;
+    const hasSessions = visible && entries.length > 0;
     if (tabBtn instanceof HTMLElement) tabBtn.style.display = hasSessions ? 'inline-flex' : 'none';
     if (tabPanel instanceof HTMLElement) tabPanel.style.display = hasSessions ? '' : 'none';
     if (count) {

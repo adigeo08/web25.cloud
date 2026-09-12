@@ -70,6 +70,7 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
     const uploader = await import('../src/core/torrent/TorrentUploader.js');
 
     const warnings = [];
+    const recorded = [];
     const wrappedGoFileService = gofileService
         ? {
               ...gofileService,
@@ -87,10 +88,17 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
         renderDeployedArtifact: lifecycle.renderDeployedArtifact,
         createGoFileMirror: lifecycle.createGoFileMirror,
         isGoFileMirrorRequested: lifecycle.isGoFileMirrorRequested,
-        renderDeploymentSummary: lifecycle.renderDeploymentSummary,
+        completeDeployment: lifecycle.completeDeployment,
+        resetDeployPipeline: lifecycle.resetDeployPipeline,
+        refreshPagesPanel: async () => {},
+        clearDeploySession() {},
+        // The deploy page hands a finished deployment to Pages and clears
+        // itself, so what it recorded is where the result now lives.
+        recordSeedingSession: async (params) => {
+            recorded.push(params);
+        },
         ensureGoFileCredential: lifecycle.ensureGoFileCredential,
         refreshDeployUiState: lifecycle.refreshDeployUiState,
-        showUploadResult: uploader.showUploadResult,
         sanitizeHash: (value) => `${value}`.replace(/[^a-fA-F0-9]/g, '').toLowerCase(),
         createTrackedObjectURL: () => 'blob:stub',
         updateSeedingStats() {},
@@ -114,7 +122,9 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
             clearInvalidToken: async () => {}
         }
     };
-    return { context, elements, warnings, url: () => elements.get('result-url')?.textContent };
+    // The deploy page no longer shows a result: the URL it publishes is the one
+    // it hands to Pages along with the rest of the deployment record.
+    return { context, elements, warnings, recorded, url: () => recorded.at(-1)?.deploy?.url };
 }
 
 test('the deploy wizard ships the mirror checkbox unchecked', () => {
@@ -126,7 +136,7 @@ test('the deploy wizard ships the mirror checkbox unchecked', () => {
 
 test('an unchecked opt-in never touches GoFile and yields a plain ?orc= link', async () => {
     let contacted = 0;
-    const { context, url } = await deployContext({
+    const { context, url, recorded } = await deployContext({
         mirrorEnabled: false,
         gofileService: {
             upload: async () => {
@@ -140,13 +150,13 @@ test('an unchecked opt-in never touches GoFile and yields a plain ?orc= link', a
 
     assert.equal(contacted, 0, 'GoFile is never contacted for a P2P-only deployment');
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`);
-    assert.equal(context.lastDeployResult.mirror, null);
-    assert.match(document.getElementById('publish-output').textContent, /"status": "disabled"/);
+    assert.equal(recorded.at(-1).deploy.mirror, null);
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'disabled');
 });
 
 test('an opted-in deployment publishes ?orc=<hash>&<locator> after a successful mirror', async () => {
     const uploads = [];
-    const { context, url } = await deployContext({
+    const { context, url, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async (blob, options) => {
@@ -160,14 +170,14 @@ test('an opted-in deployment publishes ?orc=<hash>&<locator> after a successful 
 
     assert.deepEqual(uploads, [gofileMirrorFilename(HASH_ONE)], 'the mirror is named for this deployment');
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}&file_abc`);
-    assert.equal(context.lastDeployResult.mirror.locator, 'file_abc');
-    assert.match(document.getElementById('publish-output').textContent, /"status": "available"/);
+    assert.equal(recorded.at(-1).deploy.mirror.locator, 'file_abc');
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'available');
 });
 
 test('immediate duplicate deploy calls share one mirror operation', async () => {
     let uploads = 0;
     let release;
-    const { context } = await deployContext({
+    const { context, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async () => {
@@ -189,7 +199,7 @@ test('immediate duplicate deploy calls share one mirror operation', async () => 
 
 test('a stalled GoFile upload cannot hang or fail the deployment', async () => {
     let liveUrlWhileStalled = null;
-    const { context, warnings, url } = await deployContext({ mirrorEnabled: true });
+    const { context, warnings, url, recorded } = await deployContext({ mirrorEnabled: true });
     context.gofileService = new GoFileService({
         fetchImpl: (_endpoint, init) =>
             new Promise((_resolve, reject) => {
@@ -211,17 +221,18 @@ test('a stalled GoFile upload cannot hang or fail the deployment', async () => {
     assert.equal(liveUrlWhileStalled, `https://web25.cloud/?orc=${HASH_ONE}`);
     assert.ok(Date.now() - started < 5000, 'the deployment did not wait on GoFile indefinitely');
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`, 'the link falls back to the torrent-only address');
-    assert.equal(context.lastDeployResult.mirror, null);
-    assert.equal(document.getElementById('deploy-stage-label').textContent, 'Deployment complete');
-    assert.match(document.getElementById('publish-output').textContent, /"status": "unavailable"/);
-    assert.match(document.getElementById('publish-output').textContent, /timed out/i);
+    assert.equal(recorded.at(-1).deploy.mirror, null);
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'unavailable');
+    // The deployment is finished, so the page is back at the start rather than
+    // holding a receipt for a site that now lives in Pages.
+    assert.equal(document.getElementById('deploy-stage-label').textContent, 'Stage 1 · Select files');
     assert.equal(warnings.length, 1, 'the failure is reported without blocking');
     assert.match(warnings[0], /deployed successfully/i);
     assert.match(warnings[0], /could not be created/i);
 });
 
 test('a rejected GoFile upload leaves the deployment successful', async () => {
-    const { context, url, warnings } = await deployContext({
+    const { context, url, warnings, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async () => {
@@ -233,15 +244,15 @@ test('a rejected GoFile upload leaves the deployment successful', async () => {
     await context.deploySignedArtifact();
 
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`);
-    assert.equal(context.lastDeployResult.hash, HASH_ONE);
-    assert.equal(context.lastDeployResult.mirror, null);
+    assert.equal(recorded.at(-1).hash, HASH_ONE);
+    assert.equal(recorded.at(-1).deploy.mirror, null);
     assert.equal(warnings.length, 1);
 });
 
 test('a mirror that cannot be read back publicly is not published as a locator', async () => {
     // Uploading is not the same as being resolvable. A locator nobody else can
     // fetch is worse than no locator, so the read-back decides.
-    const { context, url, warnings } = await deployContext({
+    const { context, url, warnings, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async () => ({ mirrorLocator: 'file_unreadable' }),
@@ -252,13 +263,13 @@ test('a mirror that cannot be read back publicly is not published as a locator',
     await context.deploySignedArtifact();
 
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`, 'the unverified locator is never shared');
-    assert.equal(context.lastDeployResult.mirror, null);
-    assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
+    assert.equal(recorded.at(-1).deploy.mirror, null);
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'unavailable');
     assert.match(warnings[0], /read-back/i);
 });
 
 test('a mirror whose read-back fails outright leaves the deployment successful', async () => {
-    const { context, url } = await deployContext({
+    const { context, url, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async () => ({ mirrorLocator: 'file_gone' }),
@@ -271,15 +282,15 @@ test('a mirror whose read-back fails outright leaves the deployment successful',
     await context.deploySignedArtifact();
 
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`);
-    assert.equal(context.lastDeployResult.hash, HASH_ONE);
-    assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
+    assert.equal(recorded.at(-1).hash, HASH_ONE);
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'unavailable');
 });
 
 test('the upload authenticates with the freshly issued guest token', async () => {
     // The credential belongs to the upload. The read-back is the public route
     // a visitor uses, so it deliberately carries none.
     const reads = [];
-    const { context } = await deployContext({
+    const { context, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async (_blob, options) => {
@@ -309,14 +320,14 @@ test('the upload authenticates with the freshly issued guest token', async () =>
         [{ locator: 'file_fresh', token: 'brand-new-token' }],
         'the read-back authenticates with the credential that owns the upload'
     );
-    assert.equal(context.lastDeployResult.mirror.locator, 'file_fresh');
+    assert.equal(recorded.at(-1).deploy.mirror.locator, 'file_fresh');
 });
 
 test('the upload falls back to the stored credential when no new one is issued', async () => {
     const uploads = [];
     const reads = [];
     const uploaded = [];
-    const { context } = await deployContext({ mirrorEnabled: true });
+    const { context, recorded } = await deployContext({ mirrorEnabled: true });
     context.gofileCredentialStore = {
         read: async () => ({ token: 'stored-token' }),
         write: async () => {},
@@ -338,7 +349,7 @@ test('the upload falls back to the stored credential when no new one is issued',
 
     assert.deepEqual(uploads, ['stored-token']);
     assert.deepEqual(reads, ['stored-token'], 'the read-back reuses the credential that authenticated the upload');
-    assert.equal(context.lastDeployResult.mirrorState, 'available');
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'available');
 });
 
 test('a second mirrored deployment cannot change the first one', async () => {
@@ -353,22 +364,22 @@ test('a second mirrored deployment cannot change the first one', async () => {
     const first = await deployContext({ hash: HASH_ONE, mirrorEnabled: true, gofileService: service });
     await first.context.deploySignedArtifact();
     const firstUrl = first.url();
-    const firstResult = { ...first.context.lastDeployResult };
+    const firstResult = { ...first.recorded.at(-1).deploy };
 
     const second = await deployContext({ hash: HASH_TWO, mirrorEnabled: true, gofileService: service });
     await second.context.deploySignedArtifact();
 
     assert.equal(firstUrl, `https://web25.cloud/?orc=${HASH_ONE}&file_1`);
     assert.equal(second.url(), `https://web25.cloud/?orc=${HASH_TWO}&file_2`);
-    assert.notEqual(firstResult.mirror.locator, second.context.lastDeployResult.mirror.locator);
-    assert.notEqual(firstResult.mirror.filename, second.context.lastDeployResult.mirror.filename);
+    assert.notEqual(firstResult.mirror.locator, second.recorded.at(-1).deploy.mirror.locator);
+    assert.notEqual(firstResult.mirror.filename, second.recorded.at(-1).deploy.mirror.filename);
     assert.equal(firstResult.url, firstUrl, "the first deployment's link is untouched by the second");
 });
 
 test('an expired guest token is reset once and the retry keeps the same filename', async () => {
     const attempts = [];
     let cleared = 0;
-    const { context } = await deployContext({
+    const { context, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async (_blob, options) => {
@@ -397,11 +408,11 @@ test('an expired guest token is reset once and the retry keeps the same filename
     assert.equal(attempts[0].token, 'expired-token');
     assert.equal(attempts[1].token, null);
     assert.equal(attempts[0].filename, attempts[1].filename);
-    assert.equal(context.lastDeployResult.mirror.locator, 'file_retry');
+    assert.equal(recorded.at(-1).deploy.mirror.locator, 'file_retry');
 });
 
 test('signing in provisions a GoFile credential when the identity has none', async () => {
-    const { context } = await deployContext();
+    const { context, recorded } = await deployContext();
     const written = [];
     let stored = null;
     context.gofileCredentialStore = {
@@ -429,7 +440,7 @@ test('signing in provisions a GoFile credential when the identity has none', asy
 });
 
 test('a GoFile outage at sign-in is absorbed, never surfaced as a login failure', async () => {
-    const { context } = await deployContext();
+    const { context, recorded } = await deployContext();
     context.gofileCredentialStore = {
         read: async () => null,
         write: async () => {
@@ -447,7 +458,7 @@ test('a GoFile outage at sign-in is absorbed, never surfaced as a login failure'
 });
 
 test('a locked wallet at sign-in leaves the credential alone', async () => {
-    const { context } = await deployContext();
+    const { context, recorded } = await deployContext();
     let minted = 0;
     context.gofileCredentialStore = {
         read: async () => {
@@ -473,7 +484,7 @@ test('a deployment never replaces a credential that already works', async () => 
     const writes = [];
     const reads = [];
     const uploaded = [];
-    const { context } = await deployContext({ mirrorEnabled: true });
+    const { context, recorded } = await deployContext({ mirrorEnabled: true });
     context.gofileCredentialStore = {
         read: async () => ({ token: 'token-from-login' }),
         write: async ({ token }) => writes.push(token),
@@ -500,14 +511,14 @@ test('a deployment never replaces a credential that already works', async () => 
         ['uploaded']
     );
     assert.deepEqual(reads, ['token-from-login'], 'the read-back uses the credential that owns the upload');
-    assert.equal(context.lastDeployResult.mirrorState, 'available');
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'available');
 });
 
 test('a deployment does persist a credential when the identity holds none', async () => {
     const writes = [];
     const reads = [];
     const uploaded = [];
-    const { context } = await deployContext({ mirrorEnabled: true });
+    const { context, recorded } = await deployContext({ mirrorEnabled: true });
     context.gofileCredentialStore = {
         read: async () => null,
         write: async ({ token }) => writes.push(token),
@@ -537,7 +548,7 @@ test('a refused credential is replaced, not kept', async () => {
     const uploaded = [];
     let cleared = 0;
     let stored = { token: 'expired-token' };
-    const { context } = await deployContext({ mirrorEnabled: true });
+    const { context, recorded } = await deployContext({ mirrorEnabled: true });
     context.gofileCredentialStore = {
         read: async () => stored,
         write: async ({ token }) => writes.push(token),
@@ -578,7 +589,7 @@ test('the two-file deploy bundle survives the mirror round trip intact', async (
     const bundle = 'gzip-bytes-standing-in-for-site.bundle.json.gz';
 
     const uploaded = [];
-    const { context } = await deployContext({ mirrorEnabled: true });
+    const { context, recorded } = await deployContext({ mirrorEnabled: true });
     context.lastPublishCandidate.payloadFiles = [
         payloadFile('.torrentchain', manifest),
         payloadFile('site.bundle.json.gz', bundle)
@@ -598,7 +609,7 @@ test('the two-file deploy bundle survives the mirror round trip intact', async (
 
     await context.deploySignedArtifact();
 
-    assert.equal(context.lastDeployResult.mirrorState, 'available');
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'available');
     const decoded = decodeGoFileMirror(new Uint8Array(await uploaded[0].arrayBuffer()));
     assert.deepEqual(
         decoded.files.map((file) => file.path),
@@ -615,7 +626,7 @@ test('a share-code locator is read back through the Worker before it is publishe
     // will actually serve have been fetched back and matched.
     const events = [];
     const uploaded = [];
-    const { context, url } = await deployContext({ mirrorEnabled: true });
+    const { context, url, recorded } = await deployContext({ mirrorEnabled: true });
     context.gofileCredentialStore = {
         read: async () => ({ token: 'publisher-token' }),
         write: async () => {},
@@ -639,11 +650,11 @@ test('a share-code locator is read back through the Worker before it is publishe
 
     assert.deepEqual(events, ['upload', 'read:1J53t9zb:publisher-token', `url:https://web25.cloud/?orc=${HASH_ONE}`]);
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}&1J53t9zb`, 'exact share-code case in the link');
-    assert.equal(context.lastDeployResult.mirror.locator, '1J53t9zb');
+    assert.equal(recorded.at(-1).deploy.mirror.locator, '1J53t9zb');
 });
 
 test('a share-code mirror that does not read back is never published', async () => {
-    const { context, url } = await deployContext({
+    const { context, url, recorded } = await deployContext({
         mirrorEnabled: true,
         gofileService: {
             upload: async () => ({ mirrorLocator: '1J53t9zb' }),
@@ -654,5 +665,5 @@ test('a share-code mirror that does not read back is never published', async () 
     await context.deploySignedArtifact();
 
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`, 'the unverified share code is never shared');
-    assert.equal(context.lastDeployResult.mirrorState, 'unavailable');
+    assert.equal(recorded.at(-1).deploy.mirrorState, 'unavailable');
 });

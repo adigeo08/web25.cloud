@@ -13,7 +13,10 @@ import { readFileSync } from 'node:fs';
 const MARKUP = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
 const NAV = MARKUP.slice(MARKUP.indexOf('<nav id="primary-nav"'), MARKUP.indexOf('</nav>'));
-const PAGES = MARKUP.slice(MARKUP.indexOf('<!-- ── PAGES TAB ── -->'), MARKUP.indexOf('<!-- ── DIRECT MESSENGER TAB ── -->'));
+const PAGES = MARKUP.slice(
+    MARKUP.indexOf('<!-- ── PAGES TAB ── -->'),
+    MARKUP.indexOf('<!-- ── DIRECT MESSENGER TAB ── -->')
+);
 const VIEWER = MARKUP.slice(MARKUP.indexOf('<div id="site-viewer"'), MARKUP.indexOf('id="site-frame"'));
 
 test('Pages sits next to Deploy and starts hidden', () => {
@@ -32,7 +35,10 @@ test('the Pages panel carries the list and counter the panel renders into', () =
 });
 
 test('stopping a session is a confirmation, not a stray click', () => {
-    const modal = MARKUP.slice(MARKUP.indexOf('id="stop-seeding-modal"'), MARKUP.indexOf('<!-- Torrent Creator Modal -->'));
+    const modal = MARKUP.slice(
+        MARKUP.indexOf('id="stop-seeding-modal"'),
+        MARKUP.indexOf('<!-- Torrent Creator Modal -->')
+    );
 
     assert.match(modal, /class="modal hidden"/);
     assert.match(modal, /id="stop-seeding-name"/);
@@ -41,11 +47,15 @@ test('stopping a session is a confirmation, not a stray click', () => {
     assert.match(modal, /id="stop-seeding-close"/);
 });
 
-test('the advanced drawer can no longer take every deployment down with the cache', () => {
+test('the deploy page has no advanced drawer left to clear anything from', () => {
     assert.ok(!MARKUP.includes('id="clear-cache"'), 'the button that stopped every session is gone');
-    // What replaced it: the drawer points at where sessions are actually
-    // managed, one at a time and behind a confirmation.
-    assert.match(MARKUP, /deploy-advanced-note[\s\S]{0,400}Pages/);
+    // And the drawer that held it is gone too: a finished deployment is managed
+    // from Pages, so the Deploy page has nothing to explain in a footnote.
+    assert.ok(!MARKUP.includes('deploy-advanced-details'), 'no Advanced Tools drawer');
+    assert.ok(!MARKUP.includes('deploy-advanced-note'));
+    // The torrent creator it used to hide is still there, just not behind a
+    // disclosure triangle.
+    assert.match(MARKUP, /id="create-torrent"[\s\S]{0,160}Advanced Torrent Creator/);
 });
 
 test('the local library has a search field and a place for results', () => {
@@ -68,15 +78,22 @@ test('the viewer header carries a way back, the hash, the source and the signatu
     assert.ok(VIEWER.indexOf('back-to-peerweb') < VIEWER.indexOf('site-signature-status'));
 });
 
-test('the sign-in wall can say why a session ended', () => {
+test('the sign-in wall has one line to say why a session ended', () => {
     const wall = MARKUP.slice(MARKUP.indexOf('id="deploy-auth-wall"'), MARKUP.indexOf('id="deploy-panel"'));
 
-    assert.match(wall, /id="session-resume-notice"[^>]*class="session-resume-notice hidden"/);
-    assert.match(wall, /unlock again/i);
+    // One sentence in the place the user is already reading, rather than a
+    // banner to dismiss: AuthPanel.js swaps its text when a session was
+    // interrupted and names the tab unlocking will return to.
+    assert.match(wall, /id="deploy-wall-intro"/);
+    assert.match(wall, /Choose how you want to continue\./);
+    assert.ok(!MARKUP.includes('session-resume-notice'), 'the banner is gone');
 });
 
 test('the stop confirmation is announced as a modal dialog', () => {
-    const modal = MARKUP.slice(MARKUP.indexOf('id="stop-seeding-modal"'), MARKUP.indexOf('<!-- Torrent Creator Modal -->'));
+    const modal = MARKUP.slice(
+        MARKUP.indexOf('id="stop-seeding-modal"'),
+        MARKUP.indexOf('<!-- Torrent Creator Modal -->')
+    );
 
     // Without these a screen-reader user is left on the card behind a
     // destructive prompt, with nothing saying a decision is being asked for.
@@ -88,11 +105,9 @@ test('the stop confirmation is announced as a modal dialog', () => {
     assert.match(modal, /id="stop-seeding-description"/);
 });
 
-test('the resume notice does not claim hosting continued while the page was gone', () => {
-    const wall = MARKUP.slice(MARKUP.indexOf('id="deploy-auth-wall"'), MARKUP.indexOf('id="deploy-panel"'));
-
-    // WebTorrent dies with the page; what the store buys is that seeding starts
-    // again by itself, which is a different promise and the true one.
-    assert.ok(!/kept running throughout/.test(wall));
-    assert.match(wall, /started again on their own/);
+test('Pages is gated on the wallet, like Chat', () => {
+    // Seeding does not stop when the wallet locks — managing it is what goes
+    // away — so the tab ships hidden and Lifecycle reveals it with the session.
+    assert.match(NAV, /data-tab="pages"[^>]*style="display: none"/);
+    assert.match(NAV, /data-tab="channels"[^>]*style="display: none"/);
 });
