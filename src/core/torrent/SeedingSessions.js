@@ -9,12 +9,14 @@
  * new deployment — because a visitor pulling a site from this browser has
  * nothing to do with whether its owner is signed in.
  *
- * Only two things end a session: the publisher pressing Stop seeding, and the
- * tab going away (and that one resumes by itself on the next visit).
+ * Three things take a site off the air, and only one of them is permanent: the
+ * publisher pressing Stop seeding (paused, and resumable), pressing Delete
+ * website (gone, payload and all), and the tab going away — and that last one
+ * resumes by itself on the next visit.
  */
 
 import SeedingSessionStore from './SeedingSessionStore.js';
-import { bindPagesPanel, confirmStopSeeding, renderPages, updatePagesLiveStats } from '../../ui/pages/PagesPanel.js';
+import { bindPagesPanel, confirmSeedingAction, renderPages, updatePagesLiveStats } from '../../ui/pages/PagesPanel.js';
 
 /** How often the Pages cards refresh their live peer/upload counters. */
 const SEEDING_STATS_INTERVAL_MS = 5000;
@@ -34,6 +36,9 @@ const RESUME_CONCURRENCY = 3;
 
 /** Channel name for telling other tabs of this browser what changed. */
 const SEEDING_CHANNEL = 'web25-seeding';
+
+/** The session changes worth telling the other tabs about. */
+const SEEDING_CHANGES = ['paused', 'resumed', 'deleted'];
 
 /**
  * Rebuild a payload file exactly as it was seeded, path and all.
@@ -261,9 +266,9 @@ export function watchSeedingTorrent(hash, torrent) {
 /**
  * An owned torrent died on its own. Stop claiming it is seeding.
  *
- * Deliberately a no-op when the registry has already moved on: `stopSeedingSession`
- * removes the entry before destroying the torrent, so the `close` that follows
- * an intentional stop is not reported as a failure.
+ * Deliberately a no-op when the registry has already moved on:
+ * `releaseSeedingTorrent` removes the entry before destroying the torrent, so
+ * the `close` that follows an intentional stop is not reported as a failure.
  *
  * @param {string} hash
  * @param {any} torrent
@@ -367,17 +372,22 @@ export async function resumeSeedingSession(record) {
 export async function restoreSeedingSessions() {
     if (!this.clientReady || !this.client) return [];
 
-    let records = [];
+    let stored = [];
     try {
-        records = await this.seedingStore().list();
+        stored = await this.seedingStore().list();
     } catch (error) {
         this.log(`Seeding sessions could not be read: ${error.message}`);
         return [];
     }
-    if (records.length === 0) {
+    if (stored.length === 0) {
         this.refreshPagesPanel();
         return [];
     }
+
+    // A paused site is still stored, and still has a card — it just is not
+    // announcing. Bringing it back here would undo the publisher's decision on
+    // every reload, which is the whole thing pausing was separated out to avoid.
+    const records = stored.filter((record) => record.paused !== true);
 
     this._seedingErrors = new Map();
 
@@ -404,38 +414,96 @@ export async function restoreSeedingSessions() {
     // No toast for this. Resuming is the normal state of affairs, the Pages tab
     // already shows exactly which sites came back, and an announcement on every
     // single load is noise rather than news.
-    this.log(`Resumed ${this.seedingTorrents().size} of ${records.length} seeding session(s).`);
+    this.log(
+        `Resumed ${this.seedingTorrents().size} of ${records.length} seeding session(s); ` +
+            `${stored.length - records.length} left paused.`
+    );
     this.refreshPagesPanel();
     this.startSeedingStatsTimer();
     return records;
 }
 
 /**
- * Stop one session for good: the torrent is destroyed and the record deleted,
- * so it does not come back on the next load.
+ * Stop announcing a site, without forgetting it.
+ *
+ * Stopping and deleting used to be the same button, which made stopping a
+ * decision nobody could take back: the only way to pause hosting was to throw
+ * the deployment away. They are separate now. This one takes the torrent down
+ * and marks the record paused — the card stays, with Resume in place of Stop,
+ * and a reload leaves it paused rather than quietly starting it again.
+ *
  * @param {string} hash
  */
-export async function stopSeedingSession(hash) {
+export async function pauseSeedingSession(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+
+    // The durable mark goes first, for the same reason a delete does: reporting
+    // "stopped" and then failing to write it would promise a pause that the
+    // next reload undoes.
+    try {
+        const paused = await this.seedingStore().patch(sanitized, { paused: true, pausedAt: Date.now() });
+        if (!paused) throw new Error('there is no stored session to pause');
+    } catch (error) {
+        this.log(`Seeding session ${sanitized} could not be paused: ${error.message}`);
+        throw new Error(`This site is still seeding: the change could not be saved (${error.message}).`);
+    }
+
+    this.releaseSeedingTorrent(sanitized);
+    this.broadcastSeedingChange('paused', sanitized);
+
+    this.log(`Paused seeding ${sanitized}.`);
+    await this.refreshPagesPanel();
+}
+
+/**
+ * Start announcing a paused site again.
+ * @param {string} hash
+ */
+export async function resumePausedSession(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+
+    const record = await this.seedingStore().get(sanitized);
+    if (!record) throw new Error('That site is no longer stored in this browser.');
+
+    // Seed first, mark second: a record that says it is seeding while nothing
+    // is announcing would be the same lie as the other way round.
+    await this.resumeSeedingSession({ ...record, paused: false });
+
+    try {
+        await this.seedingStore().patch(sanitized, { paused: false, pausedAt: null });
+    } catch (error) {
+        this.log(`Seeding session ${sanitized} resumed but could not be marked: ${error.message}`);
+    }
+
+    this._seedingErrors?.delete(sanitized);
+    this.broadcastSeedingChange('resumed', sanitized);
+    this.log(`Resumed seeding ${sanitized}.`);
+    await this.refreshPagesPanel();
+}
+
+/**
+ * Forget a site entirely: the torrent goes, and so does its stored copy.
+ *
+ * This is the irreversible one. The payload is deleted, so the deployment can
+ * only come back by being deployed again.
+ *
+ * @param {string} hash
+ */
+export async function deleteSeedingSession(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
 
     // The durable record goes first. Destroying the torrent and then failing to
-    // delete the record would report "stopped" for a site that comes straight
+    // delete the record would report "deleted" for a site that comes straight
     // back on the next reload — so a delete that fails leaves the session
     // exactly as it was, still live, and says so.
     try {
         await this.seedingStore().remove(sanitized);
     } catch (error) {
         this.log(`Seeding session ${sanitized} could not be deleted: ${error.message}`);
-        throw new Error(`This site is still seeding: its saved session could not be deleted (${error.message}).`);
+        throw new Error(`This site is still here: its saved session could not be deleted (${error.message}).`);
     }
 
-    const torrent = this.seedingTorrents().get(sanitized);
-    this.seedingTorrents().delete(sanitized);
-    this._seedingErrors?.delete(sanitized);
-
-    try {
-        torrent?.destroy?.();
-    } catch (_) {}
+    this.releaseSeedingTorrent(sanitized);
 
     // The deploy screen must not keep offering a deployment that is no longer
     // hosted from here.
@@ -444,14 +512,29 @@ export async function stopSeedingSession(hash) {
         this.clearDeploySession?.();
     }
 
-    // Other tabs of this browser hold their own torrent for the same record.
-    // The record is gone for all of them, so the torrents have to go too, or a
-    // site the publisher stopped goes on being served from the tab they were
-    // not looking at.
-    this.broadcastSeedingStopped(sanitized);
+    this.broadcastSeedingChange('deleted', sanitized);
 
-    this.log(`Stopped seeding ${sanitized}.`);
+    this.log(`Deleted ${sanitized}.`);
     await this.refreshPagesPanel();
+}
+
+/**
+ * Take one torrent off the air, whatever the reason.
+ *
+ * The registry entry goes before the torrent does, so the `close` that follows
+ * is recognised as intentional rather than reported as a session that died.
+ *
+ * @param {string} hash
+ */
+export function releaseSeedingTorrent(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    const torrent = this.seedingTorrents().get(sanitized);
+    this.seedingTorrents().delete(sanitized);
+    this._seedingErrors?.delete(sanitized);
+    try {
+        torrent?.destroy?.();
+    } catch (_) {}
+    return Boolean(torrent);
 }
 
 /**
@@ -472,8 +555,8 @@ export function initSeedingChannel() {
         const channel = new BroadcastChannel(SEEDING_CHANNEL);
         channel.onmessage = (event) => {
             const message = event?.data;
-            if (!message || message.type !== 'stopped') return;
-            this.applyRemoteSeedingStop(`${message.hash || ''}`.toLowerCase());
+            if (!message || !SEEDING_CHANGES.includes(message.type)) return;
+            void this.applyRemoteSeedingChange(message.type, `${message.hash || ''}`.toLowerCase());
         };
         // Node's BroadcastChannel keeps the event loop alive; a browser's has no
         // `unref` at all. Same reason every timer in this codebase is unref'd:
@@ -486,36 +569,52 @@ export function initSeedingChannel() {
     return this._seedingChannel;
 }
 
-/** @param {string} hash */
-export function broadcastSeedingStopped(hash) {
+/**
+ * @param {'paused'|'resumed'|'deleted'} kind
+ * @param {string} hash
+ */
+export function broadcastSeedingChange(kind, hash) {
     try {
-        this.initSeedingChannel()?.postMessage({ type: 'stopped', hash: `${hash || ''}`.toLowerCase() });
+        this.initSeedingChannel()?.postMessage({ type: kind, hash: `${hash || ''}`.toLowerCase() });
     } catch (error) {
-        this.log(`Could not tell other tabs that ${hash} stopped: ${error.message}`);
+        this.log(`Could not tell other tabs that ${hash} was ${kind}: ${error.message}`);
     }
 }
 
 /**
- * Another tab stopped this session. The record is already deleted there; this
- * tab only has to let go of its own torrent.
+ * Another tab changed this session. The stored record is already whatever it
+ * is going to be — IndexedDB is shared — so this tab only has to bring its own
+ * torrent into line with it.
+ *
+ * @param {'paused'|'resumed'|'deleted'} kind
  * @param {string} hash
+ * @returns {Promise<boolean>} whether anything changed here
  */
-export function applyRemoteSeedingStop(hash) {
+export async function applyRemoteSeedingChange(kind, hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
-    const torrent = this.seedingTorrents().get(sanitized);
-    if (!torrent) {
-        void this.refreshPagesPanel();
-        return false;
+
+    if (kind === 'resumed') {
+        if (this.seedingTorrents().has(sanitized)) return false;
+        try {
+            const record = await this.seedingStore().get(sanitized);
+            if (!record) return false;
+            await this.resumeSeedingSession(record);
+            this.log(`Another tab resumed seeding ${sanitized}; seeding it here too.`);
+            return true;
+        } catch (error) {
+            this.log(`Another tab resumed ${sanitized}, but it could not be seeded here: ${error.message}`);
+            return false;
+        } finally {
+            void this.refreshPagesPanel();
+        }
     }
 
-    this.seedingTorrents().delete(sanitized);
-    this._seedingErrors?.delete(sanitized);
-    try {
-        torrent.destroy?.();
-    } catch (_) {}
-    this.log(`Another tab stopped seeding ${sanitized}; letting go of it here too.`);
+    const released = this.releaseSeedingTorrent(sanitized);
+    if (released) {
+        this.log(`Another tab ${kind} ${sanitized}; letting go of it here too.`);
+    }
     void this.refreshPagesPanel();
-    return true;
+    return released;
 }
 
 /**
@@ -556,7 +655,10 @@ export async function listSeedingSessionViews() {
             mirror: record.deploy?.mirror || null,
             mirrorState: record.deploy?.mirrorState || 'disabled',
             hasTorrentFile: Boolean(record.torrentFile),
-            state: error ? 'error' : torrent ? 'seeding' : 'stopped',
+            paused: record.paused === true,
+            // Paused is a decision, not a failure: it reads differently on the
+            // card and it is the state a reload preserves.
+            state: error ? 'error' : torrent ? 'seeding' : record.paused === true ? 'paused' : 'stopped',
             error,
             peers: torrent ? Number(torrent.numPeers) || 0 : 0,
             uploaded: torrent ? Number(torrent.uploaded) || 0 : 0
@@ -598,7 +700,9 @@ export function initPagesPanel() {
         onOpen: (hash) => void this.openSeedingSession(hash),
         onCopy: (hash) => void this.copySeedingSessionLink(hash),
         onDownload: (hash) => void this.downloadSeedingSessionTorrent(hash),
-        onStop: (hash) => void this.confirmStopSeedingSession(hash)
+        onStop: (hash) => void this.confirmPauseSeedingSession(hash),
+        onResume: (hash) => void this.confirmResumeSeedingSession(hash),
+        onDelete: (hash) => void this.confirmDeleteSeedingSession(hash)
     });
 }
 
@@ -657,18 +761,54 @@ export async function downloadSeedingSessionTorrent(hash) {
     link.click();
 }
 
-/** @param {string} hash */
-export async function confirmStopSeedingSession(hash) {
+/**
+ * Ask, then act. One shape for all three card actions.
+ *
+ * Every one of them changes what the rest of the world can load from this
+ * browser, so none of them happens on a single click.
+ *
+ * @param {'pause'|'resume'|'delete'} action
+ * @param {string} hash
+ */
+async function confirmSeedingChange(action, hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
     const record = await this.seedingStore().get(sanitized);
-    const confirmed = await confirmStopSeeding({ siteName: record?.siteName || '', hash: sanitized });
-    if (!confirmed) return;
+    const confirmed = await confirmSeedingAction(action, { siteName: record?.siteName || '', hash: sanitized });
+    if (!confirmed) return false;
+
+    const run = {
+        pause: () => this.pauseSeedingSession(sanitized),
+        resume: () => this.resumePausedSession(sanitized),
+        delete: () => this.deleteSeedingSession(sanitized)
+    }[action];
+
     try {
-        await this.stopSeedingSession(sanitized);
+        await run();
     } catch (error) {
-        this.toast?.error?.(error.message, 'Still seeding');
+        this.toast?.error?.(error.message, action === 'resume' ? 'Not seeding' : 'Nothing changed');
         await this.refreshPagesPanel();
-        return;
+        return false;
     }
-    this.toast?.info?.('This site is no longer seeding from this browser.', 'Seeding stopped');
+    return true;
+}
+
+/** @param {string} hash */
+export async function confirmPauseSeedingSession(hash) {
+    if (!(await confirmSeedingChange.call(this, 'pause', hash))) return;
+    this.toast?.info?.(
+        'This site is no longer seeding from this browser. It is still saved here — resume it whenever you like.',
+        'Seeding stopped'
+    );
+}
+
+/** @param {string} hash */
+export async function confirmResumeSeedingSession(hash) {
+    if (!(await confirmSeedingChange.call(this, 'resume', hash))) return;
+    this.toast?.success?.('This site is seeding from this browser again.', 'Seeding resumed');
+}
+
+/** @param {string} hash */
+export async function confirmDeleteSeedingSession(hash) {
+    if (!(await confirmSeedingChange.call(this, 'delete', hash))) return;
+    this.toast?.info?.('The website and its stored copy are gone from this browser.', 'Website deleted');
 }

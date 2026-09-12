@@ -15,8 +15,52 @@
 
 const STATE_LABELS = {
     seeding: { text: 'Seeding', className: 'status-chip status-success' },
+    paused: { text: 'Paused', className: 'status-chip status-pending' },
     stopped: { text: 'Not announcing', className: 'status-chip status-pending' },
     error: { text: 'Could not resume', className: 'status-chip status-error' }
+};
+
+/**
+ * What the confirmation says, per action.
+ *
+ * Stopping and deleting are different decisions and the dialog has to say so:
+ * one is a pause the publisher can undo from the same card, the other throws
+ * the stored copy away. Resuming asks too, because it puts a site back on the
+ * air — which is not something to do by brushing a button.
+ */
+const ACTION_PROMPTS = {
+    pause: {
+        title: '⏹ Stop seeding',
+        prompt: 'Stop seeding',
+        detail:
+            'Visitors will no longer be able to load it from this browser. The site stays in Pages and keeps its ' +
+            'stored copy, so you can resume seeding it at any time.',
+        confirm: 'Yes, stop seeding',
+        confirmClass: 'btn btn-primary',
+        cancel: 'Keep seeding',
+        fallback: (name) => `Stop seeding ${name}? Visitors will no longer be able to load it from you.`
+    },
+    resume: {
+        title: '▶️ Resume seeding',
+        prompt: 'Resume seeding',
+        detail: 'The stored copy goes back on the air from this browser, under the same WEB25 link as before.',
+        confirm: 'Yes, resume seeding',
+        confirmClass: 'btn btn-primary',
+        cancel: 'Not now',
+        fallback: (name) => `Resume seeding ${name}?`
+    },
+    delete: {
+        title: '🗑️ Delete website',
+        prompt: 'Delete',
+        detail:
+            'This cannot be undone. The stored copy is erased from this browser, the card disappears, and the only ' +
+            'way to bring the site back is to deploy it again. The WEB25 link keeps working only for as long as ' +
+            'another peer — or a GoFile mirror — still serves the same bytes.',
+        confirm: 'Yes, delete it',
+        confirmClass: 'btn btn-clear',
+        cancel: 'Keep it',
+        fallback: (name) => `Delete ${name} from this browser? The stored copy is erased and cannot be recovered.`
+    }
 };
 
 const MIRROR_LABELS = {
@@ -72,9 +116,10 @@ function factRow(label, value, { code = false } = {}) {
  * listener is delegated from the list.
  *
  * @param {{ onOpen: (hash: string) => void, onCopy: (hash: string) => void,
- *           onDownload: (hash: string) => void, onStop: (hash: string) => void }} handlers
+ *           onDownload: (hash: string) => void, onStop: (hash: string) => void,
+ *           onResume: (hash: string) => void, onDelete: (hash: string) => void }} handlers
  */
-export function bindPagesPanel({ onOpen, onCopy, onDownload, onStop }) {
+export function bindPagesPanel({ onOpen, onCopy, onDownload, onStop, onResume, onDelete }) {
     const list = document.getElementById('pages-list');
     if (!list || list.dataset.bound) return;
     list.dataset.bound = '1';
@@ -98,6 +143,12 @@ export function bindPagesPanel({ onOpen, onCopy, onDownload, onStop }) {
             case 'stop':
                 onStop(hash);
                 break;
+            case 'resume':
+                onResume(hash);
+                break;
+            case 'delete':
+                onDelete(hash);
+                break;
             default:
                 break;
         }
@@ -105,29 +156,43 @@ export function bindPagesPanel({ onOpen, onCopy, onDownload, onStop }) {
 }
 
 /**
- * Ask before ending a session for good.
+ * Ask before changing what this browser serves.
  *
- * Stopping is not reversible from here — the record is deleted, so the site
- * does not come back on the next load — which is exactly the kind of thing
- * that deserves a sentence and two buttons rather than a stray click.
+ * One dialog, three questions. Stopping is a pause the publisher can undo from
+ * the same card; deleting erases the stored copy and cannot be undone; resuming
+ * puts a site back on the air. All three deserve a sentence and two buttons
+ * rather than a stray click, and the wording has to say which one is which —
+ * a single "are you sure?" for both stop and delete is how a pause becomes an
+ * accidental deletion.
  *
+ * @param {'pause'|'resume'|'delete'} action
  * @param {{ siteName?: string, hash?: string }} session
  * @returns {Promise<boolean>}
  */
-export function confirmStopSeeding({ siteName = '', hash = '' } = {}) {
+export function confirmSeedingAction(action, { siteName = '', hash = '' } = {}) {
+    const copy = ACTION_PROMPTS[action] || ACTION_PROMPTS.pause;
+    const name = siteName || shortHash(hash) || 'this site';
+
     const modal = document.getElementById('stop-seeding-modal');
+    const titleEl = document.getElementById('stop-seeding-title');
+    const promptEl = document.getElementById('stop-seeding-prompt');
     const nameEl = document.getElementById('stop-seeding-name');
+    const detailEl = document.getElementById('stop-seeding-detail');
     const confirmBtn = document.getElementById('stop-seeding-confirm');
     const cancelBtn = document.getElementById('stop-seeding-cancel');
     const closeBtn = document.getElementById('stop-seeding-close');
 
     if (!modal || !confirmBtn || !cancelBtn) {
-        return Promise.resolve(
-            window.confirm(`Stop seeding ${siteName || hash}? Visitors will no longer be able to load it from you.`)
-        );
+        return Promise.resolve(window.confirm(copy.fallback(name)));
     }
 
-    if (nameEl) nameEl.textContent = siteName || shortHash(hash);
+    if (titleEl) titleEl.textContent = copy.title;
+    if (promptEl) promptEl.textContent = `${copy.prompt} `;
+    if (nameEl) nameEl.textContent = name;
+    if (detailEl) detailEl.textContent = copy.detail;
+    confirmBtn.textContent = copy.confirm;
+    confirmBtn.className = copy.confirmClass;
+    cancelBtn.textContent = copy.cancel;
     modal.classList.remove('hidden');
 
     // Focus goes into the dialog and comes back out to whatever opened it.
@@ -136,6 +201,8 @@ export function confirmStopSeeding({ siteName = '', hash = '' } = {}) {
     // page rather than the two choices in front of them.
     const opener = document.activeElement;
     const focusable = () => [closeBtn, confirmBtn, cancelBtn].filter(Boolean);
+    // The safe button holds focus, so Enter on a dialog nobody read does
+    // nothing rather than the destructive thing.
     cancelBtn.focus?.();
 
     return new Promise((resolve) => {
@@ -262,10 +329,23 @@ function buildCard(session, openHashes) {
         actions.appendChild(download);
     }
 
-    const stop = el('button', 'btn btn-clear btn-sm', '⏹ Stop seeding');
-    stop.setAttribute('data-page-action', 'stop');
-    stop.setAttribute('data-page-hash', session.hash);
-    actions.appendChild(stop);
+    // Stop and Resume are the same slot: whichever one is not what the site is
+    // doing right now. Anything that is not announcing — paused on purpose, or
+    // stopped because a resume failed — can be put back on the air from here.
+    // Neither half of the toggle is the red one any more: red is reserved for
+    // the button that cannot be taken back.
+    const live = session.state === 'seeding';
+    const toggle = el('button', 'btn btn-secondary btn-sm', live ? '⏹ Stop seeding' : '▶️ Resume seeding');
+    toggle.setAttribute('data-page-action', live ? 'stop' : 'resume');
+    toggle.setAttribute('data-page-hash', session.hash);
+    actions.appendChild(toggle);
+
+    // Deleting is its own button, never the side-effect of stopping: stopping a
+    // site used to throw it away, which made a pause impossible to ask for.
+    const remove = el('button', 'btn btn-clear btn-sm', '🗑️ Delete website');
+    remove.setAttribute('data-page-action', 'delete');
+    remove.setAttribute('data-page-hash', session.hash);
+    actions.appendChild(remove);
 
     body.appendChild(actions);
     shell.appendChild(body);

@@ -45,6 +45,10 @@ test('stopping a session is a confirmation, not a stray click', () => {
     assert.match(modal, /id="stop-seeding-confirm"/);
     assert.match(modal, /id="stop-seeding-cancel"/);
     assert.match(modal, /id="stop-seeding-close"/);
+    // One dialog serves Stop, Resume and Delete, so the question, the
+    // explanation and the button labels are all written from JavaScript.
+    assert.match(modal, /id="stop-seeding-prompt"/);
+    assert.match(modal, /id="stop-seeding-detail"/);
 });
 
 test('the deploy page has no advanced drawer left to clear anything from', () => {

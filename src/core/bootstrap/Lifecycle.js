@@ -1383,9 +1383,9 @@ export function isGoFileMirrorRequested() {
  * whatever actually became of the mirror.
  *
  * Nothing is rendered onto the Deploy page any more. A deployment that exists
- * belongs to Pages — that is where its link, its stats and its Stop seeding
- * button live — and the Deploy page goes back to being a place to deploy
- * something else.
+ * belongs to Pages — that is where its link, its stats and the buttons that
+ * stop, resume or delete it live — and the Deploy page goes back to being a
+ * place to deploy something else.
  *
  * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
  *           mirrorState?: string }} state

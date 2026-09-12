@@ -29,7 +29,8 @@ The UI is organized into:
 - **Pages**
   - One card per site this browser is seeding, with live peer and upload counters
   - Seeding survives a reload and resumes with the wallet still locked
-  - Signing out never stops a session; only Stop seeding does, behind a confirmation
+  - **Stop seeding** takes a site off the air and keeps its card, with **Resume seeding** in its place; **Delete website** is the separate, permanent one. Both ask first
+  - Signing out never stops a session
   - The tab appears only while at least one site is being hosted
 - **Browse / Load**
   - Load by torrent hash or complete WEB25 URL
@@ -216,10 +217,12 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 - Resuming needs **no key**: re-seeding is handing the same bytes back to WebTorrent, so it happens with the wallet locked
 - The resumed torrent must hash to the same info hash — the stored name and piece length are what guarantee it — and is dropped rather than announced if it does not
 - Signing out, clearing the site cache and staging the next deployment all leave live sessions alone
-- A session ends when the publisher presses **Stop seeding** on its card in **Pages**, behind a confirmation; closing the tab only pauses it until the next visit
+- **Stop seeding** on a card in **Pages** takes that site off the air and marks the record paused: the card stays, offering **Resume seeding**, and a reload leaves it paused rather than quietly starting it again
+- **Delete website**, the separate button next to it, is the permanent one: the stored payload is erased and the card goes. Both actions ask first, and they ask different questions
+- Closing the tab only pauses a session until the next visit
 - The advanced-tools drawer that used to hold a "Clear Cache" button — and take every live deployment down with it — is gone from the Deploy page entirely
 
-A finished deployment therefore leaves the Deploy page rather than settling on it. When a deployment completes the page clears itself and opens **Pages**, where that site's link, live peer and upload counters, deployment record and Stop seeding button are. The Deploy page is for deploying; a site that exists is managed where it lives.
+A finished deployment therefore leaves the Deploy page rather than settling on it. When a deployment completes the page clears itself and opens **Pages**, where that site's link, live peer and upload counters, deployment record and Stop seeding / Delete website buttons are. The Deploy page is for deploying; a site that exists is managed where it lives.
 
 **Pages** is gated on the wallet, exactly like **Chat**: with no identity unlocked the tab is not offered at all. The sites themselves go on seeding underneath — that is the whole point of the store — but managing them is the publisher's business.
 

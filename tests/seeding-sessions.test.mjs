@@ -6,7 +6,8 @@
  * that existed, and signing out took it down too. These tests pin the new
  * contract — the payload is stored, it is re-seeded on start with the wallet
  * locked, a resumed torrent must hash to the same deployment, and the only
- * thing that ends a session is the publisher stopping it.
+ * thing that ends a session is the publisher — stopping it, which is a pause
+ * the card keeps offering to undo, or deleting it, which is not.
  */
 
 import test from 'node:test';
@@ -236,7 +237,7 @@ test('a session is owned by the registry, so page teardown cannot destroy it', a
     assert.equal(context.isSeedingTorrent.call(context, null), false);
 });
 
-test('stopping is the only thing that deletes a session', async () => {
+test('deleting is the only thing that removes a session', async () => {
     const { context } = await harness();
     const torrent = liveTorrent();
     await context.recordSeedingSession.call(context, {
@@ -248,11 +249,68 @@ test('stopping is the only thing that deletes a session', async () => {
         deploy: DEPLOY
     });
 
-    await context.stopSeedingSession.call(context, HASH);
+    await context.deleteSeedingSession.call(context, HASH);
 
     assert.equal(torrent.destroyed, true);
     assert.equal(await context._seedingStore.get(HASH), null, 'it does not come back on the next load');
     assert.equal(context._seedingTorrents.size, 0);
+});
+
+test('stopping takes the site off the air and keeps it', async () => {
+    const { context } = await harness();
+    const torrent = liveTorrent();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent,
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+
+    await context.pauseSeedingSession.call(context, HASH);
+
+    assert.equal(torrent.destroyed, true, 'nothing is announcing any more');
+    assert.equal(context._seedingTorrents.size, 0);
+
+    // The card stays, and says why it is quiet rather than disappearing.
+    const stored = await context._seedingStore.get(HASH);
+    assert.equal(stored.paused, true);
+    assert.equal(stored.files.length, 1, 'the payload is untouched');
+    const [view] = await context.listSeedingSessionViews.call(context);
+    assert.equal(view.state, 'paused');
+});
+
+test('a paused site stays paused across a reload, and resumes on request', async () => {
+    const { context, seeded } = await harness();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent: liveTorrent(),
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+    await context.pauseSeedingSession.call(context, HASH);
+
+    // The next page load must not put it back on the air behind the
+    // publisher's back: pausing is a decision, and restoring is not a vote.
+    await context.restoreSeedingSessions.call(context);
+    assert.equal(seeded.length, 0, 'restoring leaves a paused site alone');
+    assert.equal(context._seedingTorrents.size, 0);
+
+    await context.resumePausedSession.call(context, HASH);
+
+    assert.equal(seeded.length, 1);
+    assert.equal(context._seedingTorrents.size, 1);
+    assert.equal((await context._seedingStore.get(HASH)).paused, false);
+    assert.equal((await context.listSeedingSessionViews.call(context))[0].state, 'seeding');
+});
+
+test('resuming a session this browser no longer stores says so', async () => {
+    const { context } = await harness();
+
+    await assert.rejects(() => context.resumePausedSession.call(context, HASH), /no longer stored/);
 });
 
 test('a mirror that arrives later patches the record without touching the payload', async () => {
@@ -406,9 +464,9 @@ test('a stop that cannot be persisted keeps the session and says so', async () =
         }
     };
 
-    // Reporting "stopped" while the record survives would promise something the
+    // Reporting "deleted" while the record survives would promise something the
     // next reload immediately undoes.
-    await assert.rejects(() => context.stopSeedingSession.call(context, HASH), /still seeding/);
+    await assert.rejects(() => context.deleteSeedingSession.call(context, HASH), /still here/);
     assert.equal(torrent.destroyed, false, 'the site keeps being served');
     assert.equal(context._seedingTorrents.size, 1);
 });
@@ -576,15 +634,35 @@ test('another tab stopping a session takes it down here too', async () => {
     });
 
     // IndexedDB is shared between tabs; the live torrents are not. The tab that
-    // pressed Stop deleted the record — this one has to let go of its torrent.
-    const stopped = context.applyRemoteSeedingStop.call(context, HASH);
+    // pressed Stop marked the record paused — this one has to let go of its
+    // torrent.
+    const stopped = await context.applyRemoteSeedingChange.call(context, 'paused', HASH);
 
     assert.equal(stopped, true);
     assert.equal(torrent.destroyed, true);
     assert.equal(context._seedingTorrents.size, 0);
 });
 
-test('stopping broadcasts to the other tabs', async () => {
+test('another tab resuming a session seeds it here too', async () => {
+    const { context, seeded } = await harness();
+    await context.recordSeedingSession.call(context, {
+        hash: HASH,
+        torrent: liveTorrent(),
+        torrentFile: null,
+        payloadFiles: [payloadFile('index.html', 'x')],
+        siteName: 'my-site',
+        deploy: DEPLOY
+    });
+    await context.pauseSeedingSession.call(context, HASH);
+
+    const resumed = await context.applyRemoteSeedingChange.call(context, 'resumed', HASH);
+
+    assert.equal(resumed, true);
+    assert.equal(seeded.length, 1, 'this tab seeds its own copy of the same record');
+    assert.equal(context._seedingTorrents.size, 1);
+});
+
+test('stopping, resuming and deleting each broadcast to the other tabs', async () => {
     const { context } = await harness();
     const posted = [];
     context._seedingChannel = { postMessage: (message) => posted.push(message) };
@@ -597,9 +675,15 @@ test('stopping broadcasts to the other tabs', async () => {
         deploy: DEPLOY
     });
 
-    await context.stopSeedingSession.call(context, HASH);
+    await context.pauseSeedingSession.call(context, HASH);
+    await context.resumePausedSession.call(context, HASH);
+    await context.deleteSeedingSession.call(context, HASH);
 
-    assert.deepEqual(posted, [{ type: 'stopped', hash: HASH }]);
+    assert.deepEqual(posted, [
+        { type: 'paused', hash: HASH },
+        { type: 'resumed', hash: HASH },
+        { type: 'deleted', hash: HASH }
+    ]);
 });
 
 test('a write is only durable once the transaction commits', async () => {

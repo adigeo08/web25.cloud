@@ -1323,14 +1323,20 @@
                     <button id="stop-seeding-close" class="close-btn" aria-label="Cancel">×</button>
                 </div>
                 <div class="modal-body">
-                    <p id="stop-seeding-description">Stop seeding <strong id="stop-seeding-name">this site</strong>?</p>
-                    <p>
-                        Visitors will no longer be able to load it from this browser, and it will not come back after a
-                        reload. The WEB25 link keeps working only for as long as another peer — or a GoFile mirror —
-                        still serves the same bytes.
+                    <!-- One dialog for all three card actions; PagesPanel.js
+                         writes the question, the explanation and the buttons,
+                         because stopping, resuming and deleting are different
+                         decisions and must not read alike. -->
+                    <p id="stop-seeding-description">
+                        <span id="stop-seeding-prompt">Stop seeding </span
+                        ><strong id="stop-seeding-name">this site</strong>?
+                    </p>
+                    <p id="stop-seeding-detail">
+                        Visitors will no longer be able to load it from this browser. The site stays in Pages and keeps
+                        its stored copy, so you can resume seeding it at any time.
                     </p>
                     <div class="button-group">
-                        <button id="stop-seeding-confirm" class="btn btn-clear">Yes, stop seeding</button>
+                        <button id="stop-seeding-confirm" class="btn btn-primary">Yes, stop seeding</button>
                         <button id="stop-seeding-cancel" class="btn btn-secondary">Keep seeding</button>
                     </div>
                 </div>
