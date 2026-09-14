@@ -3019,6 +3019,44 @@ input[type='checkbox'] {
     padding: 0.55rem 1.3rem;
 }
 
+/* The one switch between resolving an address and searching what is here.
+   It sits under the pill, small and centred, so the search box keeps being the
+   thing the page is about. */
+.gateway-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+    padding: 0.3rem 0.8rem 0.3rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition:
+        border-color 0.15s ease,
+        color 0.15s ease;
+}
+
+.gateway-mode:hover {
+    border-color: var(--accent-line);
+    color: var(--text-dim);
+}
+
+.gateway-mode input {
+    width: 0.95rem;
+    height: 0.95rem;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.gateway-mode:focus-within {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
 .gateway-formats {
     display: flex;
     flex-wrap: wrap;
@@ -4516,100 +4554,152 @@ select,
     display: none !important;
 }
 
-.library-search {
-    position: relative;
+/* ── The results page ──────────────────────────────────────────────────────
+   Deliberately shaped like every other search result anyone has ever read:
+   where it is, what it is called, and a line of it. Left-aligned inside a
+   column narrow enough to read, under a centred search box. */
+.serp {
+    width: min(680px, 100%);
+    margin: 0 auto;
+    padding: 0 0.25rem clamp(1.5rem, 4vw, 2.5rem);
+    text-align: left;
+}
+
+.serp-head {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
     gap: 0.5rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
 }
 
-.library-search .gateway-search-icon {
-    position: absolute;
-    left: 0.75rem;
+.serp-stats,
+.serp-scope {
+    margin: 0;
     color: var(--muted);
-    pointer-events: none;
+    font-size: 0.78rem;
 }
 
-.library-search .hash-input {
-    width: 100%;
-    padding-left: 2.3rem;
+.serp-scope {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    opacity: 0.8;
 }
 
-.library-empty {
+.serp-empty {
     margin: 0;
     color: var(--muted);
     font-size: 0.85rem;
 }
 
-.library-empty.hidden {
+.serp-empty.hidden {
     display: none !important;
 }
 
-.library-results {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 0.6rem;
-}
-
-.library-result {
+.serp-results {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.75rem 0.85rem;
+    gap: 1.5rem;
+    margin-top: 1.4rem;
+}
+
+.serp-result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.serp-url {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+}
+
+.serp-favicon {
+    font-size: 0.85rem;
+}
+
+.serp-url-text {
+    font-family: var(--font-mono);
+}
+
+.serp-badge {
+    padding: 0.05rem 0.45rem;
     border: 1px solid var(--border);
-    border-radius: var(--r);
-    background: var(--surface-2);
-    color: inherit;
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.serp-badge-ok {
+    border-color: var(--ok-soft);
+    background: var(--ok-soft);
+    color: var(--ok);
+}
+
+.serp-title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 500;
+    line-height: 1.3;
+}
+
+/* A button, because opening a site is a local resolution rather than a
+   navigation — dressed as the link every reader expects to click. */
+.serp-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-hi);
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition:
-        border-color 0.15s ease,
-        transform 0.15s ease;
 }
 
-.library-result:hover {
-    border-color: var(--accent-line);
-    transform: translateY(-1px);
+.serp-link:hover {
+    text-decoration: underline;
 }
 
-.library-result:focus-visible {
+.serp-link:focus-visible {
     outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    outline-offset: 3px;
+    border-radius: 3px;
 }
 
-.library-result-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-}
-
-.library-result-title {
-    font-weight: 600;
-    font-size: 0.92rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.library-result-desc {
-    margin: 0;
+.serp-snippet {
+    margin: 0.15rem 0 0;
     color: var(--text-dim);
-    font-size: 0.8rem;
-    line-height: 1.45;
+    font-size: 0.85rem;
+    line-height: 1.5;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
 
-.library-result-meta {
+.serp-date {
+    color: var(--muted);
+}
+
+.serp-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem;
+    gap: 0.5rem 0.9rem;
+    margin-top: 0.3rem;
     color: var(--muted);
     font-size: 0.72rem;
+}
+
+.serp-hash {
+    font-family: var(--font-mono);
+    opacity: 0.75;
 }
 
 

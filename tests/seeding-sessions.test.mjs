@@ -307,6 +307,34 @@ test('a paused site stays paused across a reload, and resumes on request', async
     assert.equal((await context.listSeedingSessionViews.call(context))[0].state, 'seeding');
 });
 
+test('the newest deployment is listed first', async () => {
+    const { context } = await harness();
+    for (const [hash, siteName, savedAt] of [
+        [HASH, 'older', '2026-01-01T00:00:00.000Z'],
+        [OTHER_HASH, 'newest', '2026-06-01T00:00:00.000Z']
+    ]) {
+        await context.recordSeedingSession.call(context, {
+            hash,
+            torrent: liveTorrent(hash),
+            torrentFile: null,
+            payloadFiles: [payloadFile('index.html', 'x')],
+            siteName,
+            createdAt: savedAt,
+            deploy: DEPLOY
+        });
+        // The store hands records back in key order, which is hash order — and
+        // hash order is nothing to a publisher.
+        await context._seedingStore.patch(hash, { savedAt: Date.parse(savedAt) });
+    }
+
+    const views = await context.listSeedingSessionViews.call(context);
+
+    assert.deepEqual(
+        views.map((view) => view.siteName),
+        ['newest', 'older']
+    );
+});
+
 test('resuming a session this browser no longer stores says so', async () => {
     const { context } = await harness();
 

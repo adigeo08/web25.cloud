@@ -357,11 +357,13 @@ function buildCard(session, openHashes) {
  * Render the whole tab, including whether it exists at all.
  *
  * @param {any[]} sessions
- * @param {{ visible?: boolean }} [options] `visible: false` keeps the tab away
- *        entirely — what a locked wallet does, while the sites themselves go on
- *        seeding underneath.
+ * @param {{ visible?: boolean, openHash?: string }} [options] `visible: false`
+ *        keeps the tab away entirely — what a locked wallet does, while the
+ *        sites themselves go on seeding underneath. `openHash` names the card
+ *        that is open whatever else happens: the newest site, which is the one
+ *        a finished deployment sends the publisher here to see.
  */
-export function renderPages(sessions, { visible = true } = {}) {
+export function renderPages(sessions, { visible = true, openHash = '' } = {}) {
     const entries = sessions || [];
     const tabBtn = document.querySelector('[data-tab="pages"]');
     const tabPanel = document.getElementById('tab-pages');
@@ -387,6 +389,8 @@ export function renderPages(sessions, { visible = true } = {}) {
             (node) => node.closest('[data-page-hash]')?.getAttribute('data-page-hash') || ''
         )
     );
+
+    if (openHash) openHashes.add(openHash);
 
     list.textContent = '';
     entries.forEach((session) => list.appendChild(buildCard(session, openHashes)));

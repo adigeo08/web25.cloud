@@ -90,10 +90,12 @@ async function deployContext({ hash = HASH_ONE, mirrorEnabled = false, gofileSer
         isGoFileMirrorRequested: lifecycle.isGoFileMirrorRequested,
         completeDeployment: lifecycle.completeDeployment,
         resetDeployPipeline: lifecycle.resetDeployPipeline,
+        renderDeploymentSummary: lifecycle.renderDeploymentSummary,
+        showUploadResult: uploader.showUploadResult,
         refreshPagesPanel: async () => {},
         clearDeploySession() {},
-        // The deploy page hands a finished deployment to Pages and clears
-        // itself, so what it recorded is where the result now lives.
+        // The result stays on the deploy page and the same deployment is handed
+        // to Pages, so what it recorded is what that tab will show.
         recordSeedingSession: async (params) => {
             recorded.push(params);
         },
@@ -223,9 +225,8 @@ test('a stalled GoFile upload cannot hang or fail the deployment', async () => {
     assert.equal(url(), `https://web25.cloud/?orc=${HASH_ONE}`, 'the link falls back to the torrent-only address');
     assert.equal(recorded.at(-1).deploy.mirror, null);
     assert.equal(recorded.at(-1).deploy.mirrorState, 'unavailable');
-    // The deployment is finished, so the page is back at the start rather than
-    // holding a receipt for a site that now lives in Pages.
-    assert.equal(document.getElementById('deploy-stage-label').textContent, 'Stage 1 · Select files');
+    // The deployment is finished and says so, mirror or no mirror.
+    assert.equal(document.getElementById('deploy-stage-label').textContent, 'Deployment complete');
     assert.equal(warnings.length, 1, 'the failure is reported without blocking');
     assert.match(warnings[0], /deployed successfully/i);
     assert.match(warnings[0], /could not be created/i);

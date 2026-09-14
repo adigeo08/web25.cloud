@@ -631,7 +631,16 @@ export async function listSeedingSessionViews() {
         return [];
     }
 
-    return records.map((record) => {
+    // Newest first. The store hands them back in key order, which is hash
+    // order, which is nothing: what a publisher wants at the top is the site
+    // they just deployed.
+    const ordered = [...records].sort(
+        (left, right) =>
+            (right.savedAt || Date.parse(right.createdAt || '') || 0) -
+            (left.savedAt || Date.parse(left.createdAt || '') || 0)
+    );
+
+    return ordered.map((record) => {
         const hash = `${record.hash}`.toLowerCase();
         const owned = this.seedingTorrents().get(hash) || null;
         // An entry in the map is an object, not a promise that it still works:
@@ -711,7 +720,14 @@ export async function refreshPagesPanel() {
     const sessions = await this.listSeedingSessionViews();
     // Seeding is not gated on the wallet, but managing it is: with no identity
     // unlocked the tab is not offered at all, the same way Chat is not.
-    renderPages(sessions, { visible: this._pagesTabAllowed === true });
+    //
+    // The newest site is the open card. A deployment hands over to this tab the
+    // moment it finishes, and the card it hands over is the one the publisher
+    // came here to look at.
+    renderPages(sessions, {
+        visible: this._pagesTabAllowed === true,
+        openHash: sessions[0]?.hash || ''
+    });
     if (sessions.some((session) => session.state === 'seeding')) this.startSeedingStatsTimer();
     return sessions;
 }

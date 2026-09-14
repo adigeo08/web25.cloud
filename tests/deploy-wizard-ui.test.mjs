@@ -59,10 +59,12 @@ async function deployHarness({ mirrorEnabled = false, gofileService = null } = {
         isGoFileMirrorRequested: lifecycle.isGoFileMirrorRequested,
         completeDeployment: lifecycle.completeDeployment,
         resetDeployPipeline: lifecycle.resetDeployPipeline,
+        renderDeploymentSummary: lifecycle.renderDeploymentSummary,
+        showUploadResult: uploader.showUploadResult,
         refreshPagesPanel: async () => {},
         clearDeploySession() {},
-        // The deploy page hands a finished deployment to Pages and clears
-        // itself, so what it recorded is where the result now lives.
+        // The result stays on the deploy page and the same deployment is handed
+        // to Pages, so what it recorded is what that tab will show.
         recordSeedingSession: async (params) => {
             recorded.push(params);
         },
@@ -260,11 +262,12 @@ test('the wizard walks 1 → 4 → 5 and never presents the mirror step as requi
 
 // ── 3. What a finished deployment leaves behind ─────────────────────────────
 //
-// It used to leave a result panel: a link, a mirror row, identity rows, and a
-// "Deploy another site" button to dismiss it with. All of that is now a card in
-// Pages, which is where the site can also be opened, copied, and stopped. So
-// what these pin is the hand-off — the record the deploy page passes on — and
-// that the page itself goes back to being ready for the next deployment.
+// Two things, and they are not the same thing. The result stays on the Deploy
+// page — the link, the transport, the mirror row, the signature — as the
+// receipt for what just happened. The deployment itself is handed to Pages,
+// which is where it is opened, copied and stopped from. Clearing the page is
+// the publisher's own move, on "Deploy another site", and it is a real reset
+// rather than a step back to the first screen.
 
 /** The deploy page as somebody arriving at it would find it. */
 const isReadyForNextDeploy = (dom, context) => ({
@@ -275,6 +278,18 @@ const isReadyForNextDeploy = (dom, context) => ({
     signature: context.lastSignature,
     deployResult: context.lastDeployResult,
     resultHidden: dom.get('upload-result').classList.contains('hidden')
+});
+
+/** What the result panel says about the deployment on screen. */
+const resultPanel = (dom) => ({
+    hidden: dom.get('upload-result').classList.contains('hidden'),
+    url: dom.text('result-url'),
+    hash: dom.text('result-hash'),
+    transport: dom.text('result-transport'),
+    mirror: dom.text('result-gofile-mirror'),
+    mirrorRowHidden: dom.get('result-gofile-row').classList.contains('hidden'),
+    signedBy: dom.text('result-signed-by'),
+    signatureStatus: dom.text('result-signature-status')
 });
 
 test('a WebTorrent-only deployment skips the mirror and hands the site to Pages', async () => {
@@ -382,7 +397,41 @@ test('the identity and signature travel with the deployment', async () => {
     assert.equal(deploy.signatureStatus, 'VERIFIED');
 });
 
-test('every deployment path leaves the page ready for the next one', async () => {
+test('the finished deployment stays on the page as its receipt', async () => {
+    const { dom, context } = await deployHarness({
+        mirrorEnabled: true,
+        gofileService: { upload: async () => ({ mirrorLocator: LOCATOR }) }
+    });
+
+    await context.deploySignedArtifact();
+
+    assert.deepEqual(resultPanel(dom), {
+        hidden: false,
+        url: `https://web25.cloud/?orc=${HASH}&${LOCATOR}`,
+        hash: HASH,
+        transport: 'Live and seeding over WebTorrent · GoFile fallback mirror available',
+        mirror: LOCATOR,
+        mirrorRowHidden: false,
+        signedBy: '0xpublisher',
+        signatureStatus: 'VERIFIED'
+    });
+    assert.equal(dom.activeScreen(), 'live');
+    // And the deploy output carries the machine-readable version of the same.
+    assert.match(dom.text('publish-output'), /"deploymentStatus": "completed"/);
+});
+
+test('a deployment nobody asked to mirror shows no mirror row', async () => {
+    const { dom, context } = await deployHarness({ mirrorEnabled: false });
+
+    await context.deploySignedArtifact();
+
+    const panel = resultPanel(dom);
+    assert.equal(panel.url, `https://web25.cloud/?orc=${HASH}`);
+    assert.equal(panel.transport, 'Live and seeding over WebTorrent');
+    assert.equal(panel.mirrorRowHidden, true, 'an optional step nobody took gets no row');
+});
+
+test('deploying another site clears the last one off the page', async () => {
     for (const scenario of [
         { name: 'torrent only', mirrorEnabled: false, gofileService: null },
         {
@@ -403,6 +452,11 @@ test('every deployment path leaves the page ready for the next one', async () =>
         const { dom, context } = await deployHarness(scenario);
 
         await context.deploySignedArtifact();
+        // The result is still there until it is dismissed; dismissing it is
+        // what has to leave nothing of this deployment behind.
+        assert.equal(dom.get('upload-result').classList.contains('hidden'), false);
+
+        context.resetDeployPipeline();
 
         assert.deepEqual(
             isReadyForNextDeploy(dom, context),

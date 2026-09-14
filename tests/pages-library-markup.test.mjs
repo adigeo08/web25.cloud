@@ -51,6 +51,22 @@ test('stopping a session is a confirmation, not a stray click', () => {
     assert.match(modal, /id="stop-seeding-detail"/);
 });
 
+test('"Deploy another site" is a reset, not a step back', () => {
+    const result = MARKUP.slice(MARKUP.indexOf('id="upload-result"'), MARKUP.indexOf('deploy-help-details'));
+
+    // Navigating back to the drop zone would leave the last deployment's files,
+    // signature and saved session attached to the next one. Lifecycle.js wires
+    // this id to the real reset, so it carries no data-deploy-nav of its own.
+    assert.match(result, /id="deploy-another-site"[\s\S]{0,160}Deploy another site/);
+    const button = result.slice(result.indexOf('id="deploy-another-site"'));
+    assert.doesNotMatch(button.slice(0, 200), /data-deploy-nav/);
+    // The receipt itself stays: link, transport, mirror row, identity.
+    assert.match(result, /id="result-url"/);
+    assert.match(result, /id="result-transport"/);
+    assert.match(result, /id="result-gofile-row"/);
+    assert.match(result, /id="result-signature-status"/);
+});
+
 test('the deploy page has no advanced drawer left to clear anything from', () => {
     assert.ok(!MARKUP.includes('id="clear-cache"'), 'the button that stopped every session is gone');
     // And the drawer that held it is gone too: a finished deployment is managed
@@ -62,14 +78,30 @@ test('the deploy page has no advanced drawer left to clear anything from', () =>
     assert.match(MARKUP, /id="create-torrent"[\s\S]{0,160}Advanced Torrent Creator/);
 });
 
-test('the local library has a search field and a place for results', () => {
+test('the gateway box has one switch between resolving and searching', () => {
+    const gateway = MARKUP.slice(MARKUP.indexOf('class="gateway-search"'), MARKUP.indexOf('class="gateway-meta"'));
+
+    // Same box, same pill, one checkbox under it — LibraryPanel.js rewrites the
+    // placeholder, the button and the hints around it.
+    assert.match(gateway, /id="gateway-search-mode"[^>]*/);
+    assert.doesNotMatch(gateway, /id="gateway-search-mode"[^>]*checked/, 'it resolves addresses until asked');
+    assert.ok(gateway.indexOf('id="hash-input"') < gateway.indexOf('id="gateway-search-mode"'));
+    assert.match(gateway, /id="gateway-load-hints"/);
+    assert.match(gateway, /id="gateway-search-hints"[^>]*class="hidden"/);
+});
+
+test('the search results page is a results page, hidden until there is a query', () => {
     const library = MARKUP.slice(MARKUP.indexOf('id="site-library"'), MARKUP.indexOf('class="gateway-facts"'));
 
-    assert.match(library, /id="site-library"[^>]*class="library card-base hidden"/);
-    assert.match(library, /id="library-search"/);
+    assert.match(library, /id="site-library"[\s\S]{0,200}class="library serp hidden"/);
+    // A result arriving under the box has to be announced, not just appear.
+    assert.match(library, /aria-live="polite"/);
     assert.match(library, /id="library-results"/);
     assert.match(library, /id="library-count"/);
     assert.match(library, /id="library-empty"/);
+    // The old always-on listing of everything cached is gone with its input.
+    assert.ok(!MARKUP.includes('id="library-search"'), 'the second search box is gone');
+    assert.ok(!MARKUP.includes('Sites you have opened</h3>'), 'and so is the listing it headed');
 });
 
 test('the viewer header carries a way back, the hash, the source and the signature', () => {

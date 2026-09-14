@@ -23,7 +23,7 @@ import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
 import { DEFAULT_NOSTR_DM_RELAYS, NOSTR_CONFIG } from '../../config/nostr.config.js';
 import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import { rememberTab, readResumeHint } from '../../auth/SessionResumeHint.js';
-import { bindLibraryPanel, renderLibrary } from '../../ui/browse/LibraryPanel.js';
+import { bindLibraryPanel, isLibrarySearchMode, renderLibrary } from '../../ui/browse/LibraryPanel.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -1371,6 +1371,61 @@ export async function signStagedPayload() {
     this.refreshDeployUiState();
 }
 
+/** What the mirror row says, per state. An absent mirror is never rendered as an empty value. */
+const MIRROR_ROW_TEXT = {
+    pending: 'Creating…',
+    unavailable: 'Not created — WebTorrent only'
+};
+
+const TRANSPORT_TEXT = {
+    disabled: 'Live and seeding over WebTorrent',
+    pending: 'Live and seeding over WebTorrent · creating optional mirror',
+    available: 'Live and seeding over WebTorrent · GoFile fallback mirror available',
+    unavailable: 'Live and seeding over WebTorrent · no fallback mirror'
+};
+
+/**
+ * Fill in the result panel: the link, how it is being served, and who signed it.
+ *
+ * @param {{ hash: string, url: string, signedBy: string, signature: string,
+ *           signatureStatus: string, mirror?: { locator: string, filename: string }|null,
+ *           mirrorState?: string }} result
+ */
+export function renderDeploymentSummary({
+    hash,
+    url,
+    signedBy,
+    signature,
+    signatureStatus,
+    mirror = null,
+    mirrorState = 'disabled'
+}) {
+    const resultEl = document.getElementById('upload-result');
+    const hashEl = document.getElementById('result-hash');
+    const urlEl = document.getElementById('result-url');
+    const signedByEl = document.getElementById('result-signed-by');
+    const signatureEl = document.getElementById('result-signature-preview');
+    const signatureStatusEl = document.getElementById('result-signature-status');
+    const transportEl = document.getElementById('result-transport');
+    const mirrorEl = document.getElementById('result-gofile-mirror');
+    const mirrorRow = document.getElementById('result-gofile-row');
+
+    if (hashEl) hashEl.textContent = hash;
+    if (urlEl) urlEl.textContent = url;
+    if (signedByEl) signedByEl.textContent = signedBy || 'Unknown';
+    if (signatureEl) signatureEl.textContent = signature ? `${signature.slice(0, 24)}...` : 'N/A';
+    if (signatureStatusEl) signatureStatusEl.textContent = signatureStatus || 'UNVERIFIED';
+    if (transportEl) transportEl.textContent = TRANSPORT_TEXT[mirrorState] || TRANSPORT_TEXT.disabled;
+
+    // The locator addresses this deployment's mirror only; the folder page it
+    // lives in is never surfaced or shared. A mirror nobody asked for gets no
+    // row at all, rather than an empty or null-looking value.
+    if (mirrorEl) mirrorEl.textContent = mirror?.locator || MIRROR_ROW_TEXT[mirrorState] || 'Not created';
+    if (mirrorRow) mirrorRow.classList.toggle('hidden', mirrorState === 'disabled' || mirrorState === 'idle');
+
+    if (resultEl) resultEl.classList.remove('hidden');
+}
+
 /** The mirror is opt-in per deployment and nothing remembers the choice. */
 export function isGoFileMirrorRequested() {
     const toggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
@@ -1378,24 +1433,69 @@ export function isGoFileMirrorRequested() {
 }
 
 /**
- * Record the deployment. Called once the torrent is live, and again if an
- * optional mirror later succeeds or fails, so the stored record ends up with
- * whatever actually became of the mirror.
+ * Render the deployment as it currently stands. Called once the torrent is
+ * live, and again if an optional mirror later succeeds or fails, so the result
+ * on screen is never waiting on GoFile to become true.
  *
- * Nothing is rendered onto the Deploy page any more. A deployment that exists
- * belongs to Pages — that is where its link, its stats and the buttons that
- * stop, resume or delete it live — and the Deploy page goes back to being a
- * place to deploy something else.
+ * The result stays on the Deploy page — link, transport, mirror row, identity
+ * and the .torrent to download — and the same deployment is handed to Pages,
+ * which is where it is managed from here on. The page is only put back to the
+ * start when the publisher asks for it, with "Deploy another site".
  *
  * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
  *           mirrorState?: string }} state
  */
 export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorState = 'disabled' }) {
+    this.showUploadResult(
+        hash,
+        this.lastPublishCandidate.signedTorrentFile || this.lastPublishCandidate.torrentFile,
+        this.lastPublishCandidate.torrent,
+        mirror?.locator || null
+    );
+
     const url = formatWeb25Url({
         torrentHash: hash,
         gofileLocator: mirror?.locator || null,
         origin: window.location.origin,
         pathname: window.location.pathname
+    });
+
+    const temporaryMirror = mirror
+        ? { status: 'available', locator: mirror.locator, filename: mirror.filename }
+        : { status: mirrorState, ...(mirrorState === 'unavailable' ? { error: this._lastMirrorError || null } : {}) };
+
+    const output = document.getElementById('publish-output');
+    if (output) {
+        output.textContent = JSON.stringify(
+            {
+                deploymentStatus: 'completed',
+                torrentHash: hash,
+                primaryTransport: 'webtorrent',
+                temporaryMirror,
+                artifactMode: 'in-memory-bundle',
+                signedBy: identity.address,
+                signature: this.lastSignature.signature,
+                signatureAlgorithm: this.lastSignature.signatureAlgorithm || 'EVM_SECP256K1',
+                signedAt: this.lastSignature.signedAt,
+                authenticity: {
+                    integrity: 'Torrent hash guarantees content integrity',
+                    authorship: 'Wallet signature is embedded in .torrentchain and verified before site rendering'
+                },
+                signatureStorage: ['.torrentchain']
+            },
+            null,
+            2
+        );
+    }
+
+    this.renderDeploymentSummary({
+        hash,
+        url,
+        signedBy: identity.address,
+        signature: this.lastSignature.signature,
+        signatureStatus: 'VERIFIED',
+        mirror,
+        mirrorState
     });
 
     this.lastDeployResult = { hash, url, signedBy: identity.address, mirror, mirrorState };
@@ -1564,11 +1664,10 @@ async function runSignedDeployment() {
 /**
  * Put the Deploy page back to where a deploy starts.
  *
- * Called when a deployment finishes, because at that point the Deploy page has
- * nothing left to say: the site exists, and everything anyone wants to do with
- * it — open it, copy its link, see who is pulling it, stop seeding it — is on
- * its card in Pages. Leaving the finished deployment on screen only turned the
- * page into a receipt that had to be dismissed before the next deploy.
+ * This is what "Deploy another site" does, and it is a real reset rather than a
+ * step back to the first screen: the staged files, the signature, the saved
+ * session and the finished result all go, so the next deployment starts from
+ * nothing instead of inheriting whatever the last one left attached.
  */
 export function resetDeployPipeline() {
     this.pendingDeployFiles = null;
@@ -1603,14 +1702,17 @@ export function resetDeployPipeline() {
 }
 
 /**
- * Finish a deployment: clear the page down and show the publisher where the
- * site now lives.
+ * Finish a deployment: show the publisher where the site now lives.
+ *
+ * The result stays on the Deploy page behind them — it is the receipt, with the
+ * link, the .torrent and the signature — but the site itself is managed from
+ * Pages, so that is where this lands, with the deployment that just happened as
+ * the card already open. The Deploy page is reset only on request.
  */
 export async function completeDeployment() {
     // Pages has to exist before it can be opened: the tab only appears once
     // there is a session to show, and this deployment is that session.
     await this.refreshPagesPanel?.();
-    this.resetDeployPipeline();
 
     // Duck-typed rather than `instanceof HTMLElement`: this runs against test
     // doubles as well as a browser, and what matters is that it is clickable.
@@ -1960,6 +2062,16 @@ export function setupEventListeners() {
     // advanced-tools drawer should be able to do by accident. A session now
     // ends only from its own card in Pages, behind a confirmation.
 
+    // "Deploy another site" is the only thing that clears a finished
+    // deployment off this page, and it clears all of it: staged files,
+    // signature, saved session and result.
+    const deployAnother = document.getElementById('deploy-another-site');
+    if (deployAnother) {
+        deployAnother.addEventListener('click', () => {
+            this.resetDeployPipeline();
+        });
+    }
+
     // Create torrent
     const createTorrent = document.getElementById('create-torrent');
     if (createTorrent) {
@@ -1968,15 +2080,11 @@ export function setupEventListeners() {
         });
     }
 
-    // Load site
+    // Load site — or search, when the box is in search mode.
     const loadSite = document.getElementById('load-site');
     if (loadSite) {
         loadSite.addEventListener('click', () => {
-            const hashInput = /** @type {HTMLInputElement} */ (document.getElementById('hash-input'));
-            const address = hashInput.value.trim();
-            if (address) {
-                this.loadSite(address);
-            }
+            this.submitGatewayQuery();
         });
     }
 
@@ -1984,13 +2092,11 @@ export function setupEventListeners() {
     const hashInput = /** @type {HTMLInputElement} */ (document.getElementById('hash-input'));
     if (hashInput) {
         hashInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const target = /** @type {HTMLInputElement} */ (e.target);
-                const address = target.value.trim();
-                if (address) {
-                    this.loadSite(address);
-                }
-            }
+            if (e.key !== 'Enter') return;
+            // Enter is "do it now": it beats the search debounce rather than
+            // racing it, and in address mode it is the Load button.
+            e.preventDefault?.();
+            this.submitGatewayQuery();
         });
     }
 
@@ -2089,7 +2195,11 @@ export function setupEventListeners() {
 }
 
 /**
- * Wire the local library search and fill it in for the first time.
+ * Wire the gateway's search mode.
+ *
+ * Nothing is rendered here on start-up: the results page belongs to a query,
+ * and there is no query yet. What this does is put the box in whatever mode the
+ * checkbox is in, which on a fresh page is the one that resolves addresses.
  */
 export function initLibraryPanel() {
     bindLibraryPanel({
@@ -2098,23 +2208,45 @@ export function initLibraryPanel() {
             if (hash) this.loadSite(hash);
         }
     });
-    void this.refreshLibrary('');
+}
+
+/**
+ * What the gateway button and the Enter key do, which depends on what the box
+ * is for at that moment: resolve one address, or search what is already here.
+ */
+export function submitGatewayQuery() {
+    const input = /** @type {HTMLInputElement | null} */ (document.getElementById('hash-input'));
+    const value = `${input?.value || ''}`.trim();
+
+    if (isLibrarySearchMode()) {
+        void this.refreshLibrary(value);
+        return;
+    }
+    if (value) this.loadSite(value);
 }
 
 /**
  * Run one library query against the local index.
  *
- * The total is passed alongside the matches so the panel can tell "you have no
- * cached sites" from "none of your cached sites match this".
+ * The total is passed alongside the matches so the page can say what it
+ * searched as well as what it found. An empty query is not a search: it renders
+ * no page at all, rather than listing the cache at somebody who has not asked
+ * for anything.
  *
  * @param {string} [query] omit to repeat whatever was last typed
  */
 export async function refreshLibrary(query) {
     const next = query === undefined ? this._libraryQuery || '' : query;
     this._libraryQuery = next;
+
+    if (!next) {
+        renderLibrary([], { query: '', total: 0 });
+        return;
+    }
+
     try {
         const all = await this.cache.listLibrary();
-        const matches = next ? await this.cache.searchLibrary(next) : all;
+        const matches = await this.cache.searchLibrary(next);
         renderLibrary(matches, { query: next, total: all.length });
     } catch (error) {
         this.log(`Local library unavailable: ${error.message}`);

@@ -37,7 +37,7 @@ The UI is organized into:
   - Resolution order: local cache → WebTorrent/P2P → GoFile mirror, when the link carries one
   - P2P gets one attempt with an 8-second deadline; there is no retry ladder
   - A quiet swarm transparently falls through to the mirror
-  - Free-text search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix
+  - One checkbox under the box turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -222,7 +222,7 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 - Closing the tab only pauses a session until the next visit
 - The advanced-tools drawer that used to hold a "Clear Cache" button — and take every live deployment down with it — is gone from the Deploy page entirely
 
-A finished deployment therefore leaves the Deploy page rather than settling on it. When a deployment completes the page clears itself and opens **Pages**, where that site's link, live peer and upload counters, deployment record and Stop seeding / Delete website buttons are. The Deploy page is for deploying; a site that exists is managed where it lives.
+A finished deployment is shown in both places, for two different reasons. The Deploy page keeps the result — the WEB25 link, how it is being served, the mirror row, who signed it and the `.torrent` to download — as the receipt for what just happened, and **Deploy another site** clears it away for good when the publisher is done with it (a real reset: staged files, signature and saved session all go). The deployment itself is handed to **Pages**, which the page opens as soon as it completes, with that site's card already expanded — Pages is where its live peer and upload counters, its deployment record and its Stop seeding / Delete website buttons are. Cards there are newest first.
 
 **Pages** is gated on the wallet, exactly like **Chat**: with no identity unlocked the tab is not offered at all. The sites themselves go on seeding underneath — that is the whole point of the store — but managing them is the publisher's business.
 

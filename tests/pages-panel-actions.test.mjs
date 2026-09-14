@@ -135,6 +135,29 @@ test('the dialog names the site, and closes on Escape without acting', async () 
     assert.equal(dom.nodes.modal.classList.contains('hidden'), true);
 });
 
+test('the newest site is the open card, and the others stay as they were', () => {
+    const newest = session({ hash: 'a'.repeat(40), siteName: 'newest' });
+    const older = session({ hash: 'b'.repeat(40), siteName: 'older' });
+
+    // A finished deployment sends the publisher straight here, so the card it
+    // sends them to see is open when they arrive.
+    panel.renderPages([newest, older], { openHash: newest.hash });
+
+    const shells = dom.nodes.list.querySelectorAll('details');
+    assert.deepEqual(
+        shells.map((shell) => shell.open),
+        [true, false]
+    );
+
+    // A card the reader opened by hand survives the next rebuild.
+    shells[1].open = true;
+    panel.renderPages([newest, older], { openHash: newest.hash });
+    assert.deepEqual(
+        dom.nodes.list.querySelectorAll('details').map((shell) => shell.open),
+        [true, true]
+    );
+});
+
 test('the tab stays away while the wallet is locked, sessions or not', () => {
     panel.renderPages([session()], { visible: false });
 
