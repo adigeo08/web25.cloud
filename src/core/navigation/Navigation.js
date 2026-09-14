@@ -222,7 +222,8 @@ export function showMainContent() {
     // Update URL
     window.history.pushState({}, '', window.location.pathname);
 
-    // Coming back from a site is exactly when the library has something new in
-    // it: the site just rendered was cached on the way in.
+    // Coming back from a site is exactly when the local index has something new
+    // in it: the site just rendered was cached on the way in. This repeats the
+    // query that is open, if any — with no search running it renders nothing.
     void this.refreshLibrary?.();
 }

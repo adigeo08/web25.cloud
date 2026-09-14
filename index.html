@@ -296,23 +296,17 @@
                     <section id="deploy-auth-wall" class="quick-upload card-base">
                         <div>
                             <h3>🔐 Welcome back</h3>
-                            <p>Choose how you want to continue.</p>
+                            <!--
+                                One line, and it changes: normally it offers the
+                                three ways in, and when this browser was in a
+                                session the page teardown ended it says so and
+                                names the tab unlocking will return you to.
+                                AuthPanel.js writes it from the localStorage
+                                breadcrumb — a tab name and a boolean, nothing
+                                that identifies anyone.
+                            -->
+                            <p id="deploy-wall-intro">Choose how you want to continue.</p>
                         </div>
-
-                        <!--
-                            Shown only when this browser was in an unlocked
-                            session that the page teardown ended. AuthPanel.js
-                            toggles it from the localStorage breadcrumb, which
-                            holds a tab name and a boolean — no key material,
-                            no address, nothing that identifies anyone.
-                        -->
-                        <p id="session-resume-notice" class="session-resume-notice hidden">
-                            <span aria-hidden="true">🔄</span>
-                            You were signed in before this page reloaded. The key only ever lives in the signing
-                            worker, so it went with the page — unlock again to carry on where you left off. Sites you
-                            were seeding started again on their own when this page loaded, and did not need the
-                            wallet to do it.
-                        </p>
 
                         <div class="button-group">
                             <button id="unlock-wallet-btn" class="btn btn-primary">🔓 Unlock Wallet</button>
@@ -465,7 +459,15 @@
                                                     <a id="download-torrent-file" class="btn btn-secondary" download
                                                         >💾 Download .torrent</a
                                                     >
-                                                    <button type="button" class="btn btn-secondary" data-deploy-nav="upload">
+                                                    <!--
+                                                        Not a step back to the
+                                                        first screen: this one
+                                                        clears the deployment
+                                                        off the page for good,
+                                                        so the next one starts
+                                                        from nothing.
+                                                    -->
+                                                    <button type="button" id="deploy-another-site" class="btn btn-secondary">
                                                         ➕ Deploy another site
                                                     </button>
                                                 </div>
@@ -511,19 +513,17 @@
                             </section>
                         </details>
 
-                        <details class="deploy-advanced-details">
-                            <summary>🛠️ Advanced Tools</summary>
-                            <section class="controls">
-                                <div class="button-group">
-                                    <button id="create-torrent" class="btn btn-create">📦 Advanced Torrent Creator</button>
-                                </div>
-                                <p class="deploy-advanced-note">
-                                    Live deployments are managed from the <strong>Pages</strong> tab. Seeding keeps
-                                    running while this tab is open, resumes by itself after a reload — with the wallet
-                                    locked — and only ever stops when you stop it there.
-                                </p>
-                            </section>
-                        </details>
+                        <!--
+                            The torrent creator is a tool, not a drawer of
+                            advice: everything the old "Advanced Tools" note
+                            explained about live deployments now belongs to the
+                            Pages tab, where those deployments actually are.
+                        -->
+                        <div class="deploy-tools">
+                            <button id="create-torrent" class="btn btn-secondary btn-sm">
+                                📦 Advanced Torrent Creator
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -719,14 +719,38 @@
                                 </div>
                                 <button id="load-site" class="btn btn-primary">Load Site</button>
                             </div>
-                            <div class="gateway-formats" aria-label="Accepted formats">
-                                <span class="gateway-format"><b>hash</b> 40-character infohash</span>
-                                <span class="gateway-format"><b>hash&amp;locator</b> hash with GoFile mirror</span>
-                                <span class="gateway-format"><b>web25 url</b> a complete shared link</span>
+                            <!--
+                                One field, two jobs. Off, it resolves an
+                                address. On, it searches the sites this browser
+                                has already loaded — same box, same shape, and
+                                LibraryPanel.js swaps the wording around it.
+                            -->
+                            <label class="gateway-mode" for="gateway-search-mode">
+                                <input type="checkbox" id="gateway-search-mode" />
+                                <span class="gateway-mode-text">Search sites I have opened</span>
+                            </label>
+
+                            <div id="gateway-load-hints">
+                                <div class="gateway-formats" aria-label="Accepted formats">
+                                    <span class="gateway-format"><b>hash</b> 40-character infohash</span>
+                                    <span class="gateway-format"><b>hash&amp;locator</b> hash with GoFile mirror</span>
+                                    <span class="gateway-format"><b>web25 url</b> a complete shared link</span>
+                                </div>
+                                <p class="gateway-note">
+                                    P2P is always tried first. A mirror is only ever a fallback.
+                                </p>
                             </div>
-                            <p class="gateway-note">
-                                P2P is always tried first. A mirror is only ever a fallback.
-                            </p>
+
+                            <div id="gateway-search-hints" class="hidden">
+                                <div class="gateway-formats" aria-label="What a search looks at">
+                                    <span class="gateway-format"><b>keyword</b> title, description or file name</span>
+                                    <span class="gateway-format"><b>publisher</b> the address that signed it</span>
+                                    <span class="gateway-format"><b>hash</b> the first characters</span>
+                                </div>
+                                <p class="gateway-note">
+                                    Searches only what this browser has already loaded. Nothing leaves your device.
+                                </p>
+                            </div>
                         </div>
 
                         <div class="gateway-meta">
@@ -738,31 +762,26 @@
                     </section>
 
                     <!--
-                        The local library. Rendered by LibraryPanel.js from the
-                        cache's own index, and hidden entirely until this
-                        browser has loaded at least one site. Nothing here
-                        queries the network: it searches what is already local.
+                        The results page for the box above, when it is in search
+                        mode. Rendered by LibraryPanel.js from the cache's own
+                        index and shown only for an actual query: there is no
+                        list of everything cached, because a search engine with
+                        no query has nothing to show. Nothing here touches the
+                        network — it reads what is already local.
                     -->
-                    <section id="site-library" class="library card-base hidden">
-                        <div class="console-heading">
-                            <div>
-                                <span class="section-kicker">LIBRARY / THIS BROWSER</span>
-                                <h3>Sites you have opened</h3>
-                            </div>
-                            <p id="library-count" class="status-chip status-pending">0 sites</p>
+                    <section
+                        id="site-library"
+                        class="library serp hidden"
+                        role="region"
+                        aria-live="polite"
+                        aria-label="Search results from this browser"
+                    >
+                        <div class="serp-head">
+                            <p id="library-count" class="serp-stats"></p>
+                            <span class="serp-scope">local index · nothing leaves this device</span>
                         </div>
-                        <div class="library-search">
-                            <span class="gateway-search-icon" aria-hidden="true">🔎</span>
-                            <input
-                                type="search"
-                                id="library-search"
-                                class="hash-input"
-                                placeholder="Search by title, keyword, file name, publisher or hash"
-                                aria-label="Search the sites cached in this browser"
-                            />
-                        </div>
-                        <p id="library-empty" class="library-empty hidden"></p>
-                        <div id="library-results" class="library-results"></div>
+                        <p id="library-empty" class="serp-empty hidden"></p>
+                        <div id="library-results" class="serp-results"></div>
                     </section>
 
                     <section class="gateway-facts">
@@ -1331,14 +1350,20 @@
                     <button id="stop-seeding-close" class="close-btn" aria-label="Cancel">×</button>
                 </div>
                 <div class="modal-body">
-                    <p id="stop-seeding-description">Stop seeding <strong id="stop-seeding-name">this site</strong>?</p>
-                    <p>
-                        Visitors will no longer be able to load it from this browser, and it will not come back after a
-                        reload. The WEB25 link keeps working only for as long as another peer — or a GoFile mirror —
-                        still serves the same bytes.
+                    <!-- One dialog for all three card actions; PagesPanel.js
+                         writes the question, the explanation and the buttons,
+                         because stopping, resuming and deleting are different
+                         decisions and must not read alike. -->
+                    <p id="stop-seeding-description">
+                        <span id="stop-seeding-prompt">Stop seeding </span
+                        ><strong id="stop-seeding-name">this site</strong>?
+                    </p>
+                    <p id="stop-seeding-detail">
+                        Visitors will no longer be able to load it from this browser. The site stays in Pages and keeps
+                        its stored copy, so you can resume seeding it at any time.
                     </p>
                     <div class="button-group">
-                        <button id="stop-seeding-confirm" class="btn btn-clear">Yes, stop seeding</button>
+                        <button id="stop-seeding-confirm" class="btn btn-primary">Yes, stop seeding</button>
                         <button id="stop-seeding-cancel" class="btn btn-secondary">Keep seeding</button>
                     </div>
                 </div>

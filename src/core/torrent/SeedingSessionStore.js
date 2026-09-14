@@ -14,9 +14,11 @@
  * bytes back to WebTorrent — so a locked wallet is no reason to stop hosting
  * somebody's site.
  *
- * A session therefore ends in exactly two ways: the tab is closed (and the
- * record resumes on the next visit), or the publisher presses Stop seeding.
- * Signing out does not end it, and neither does clearing the site cache.
+ * Announcing therefore stops in exactly three ways: the tab is closed (and the
+ * record resumes on the next visit), the publisher presses Stop seeding (the
+ * record stays, marked paused, and Resume puts it back on the air), or the
+ * publisher presses Delete website (the record goes, payload and all). Signing
+ * out does not end it, and neither does clearing the site cache.
  */
 
 const DB_NAME = 'web25-seeding';
@@ -40,6 +42,8 @@ const STORE_SESSIONS = 'sessions';
  *   fileCount: number,
  *   torrentFile: Uint8Array|null,
  *   files: SeedingPayloadFile[],
+ *   paused?: boolean,
+ *   pausedAt?: number|null,
  *   deploy: {
  *     url: string,
  *     signedBy: string,

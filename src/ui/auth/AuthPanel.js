@@ -36,27 +36,29 @@ function renderNostrIdentitySection({ npub, nostrPublicKey, nostrEnabled, unlock
 }
 
 /**
- * Say why the session is gone, when there was one.
+ * What the sign-in wall says, in four words when it matters.
  *
- * The key lives in the signing worker and nowhere else, so a reload ends the
- * session by design. Without a word about it that reads as the app forgetting
- * the user; with one, it reads as the guarantee it is.
+ * Normally it offers the ways in. When this browser was in a session the page
+ * teardown ended, it says that instead — and the unlock button says what
+ * unlocking will do, which is put you back where you were. The explanation of
+ * *why* the session ended belongs in the docs, not in the way of someone who
+ * just wants back in.
  *
  * @param {{ localWalletExists: boolean, localWalletUnlocked: boolean, resumeHint: any }} state
  */
-function renderResumeNotice(state) {
-    const notice = document.getElementById('session-resume-notice');
-    if (!notice) return;
+function renderWallIntro(state) {
+    const intro = document.getElementById('deploy-wall-intro');
+    const unlockBtn = document.getElementById('unlock-wallet-btn');
 
-    const interrupted = Boolean(
-        state.localWalletExists && !state.localWalletUnlocked && state.resumeHint?.wasUnlocked
-    );
-    notice.classList.toggle('hidden', !interrupted);
+    const interrupted = Boolean(state.localWalletExists && !state.localWalletUnlocked && state.resumeHint?.wasUnlocked);
+
+    if (intro) intro.textContent = interrupted ? "You've been signed out." : 'Choose how you want to continue.';
+    if (unlockBtn) unlockBtn.textContent = interrupted ? '🔓 Unlock to Resume' : '🔓 Unlock Wallet';
 }
 
 export function renderAuthPanel(state) {
     renderIdentityBadge(state);
-    renderResumeNotice(state);
+    renderWallIntro(state);
 
     const status = document.getElementById('auth-status');
     if (status) {
@@ -104,10 +106,7 @@ export function renderAuthPanel(state) {
 
     const passKeyBadge = document.getElementById('passkey-protection-badge');
     if (passKeyBadge) {
-        passKeyBadge.classList.toggle(
-            'hidden',
-            !state.localWalletExists || !passkeySupported()
-        );
+        passKeyBadge.classList.toggle('hidden', !state.localWalletExists || !passkeySupported());
     }
 
     const unsupportedWarn = document.getElementById('passkey-unsupported-warning');
@@ -137,9 +136,6 @@ export function renderAuthPanel(state) {
 
     const migrationPanel = document.getElementById('legacy-migration-panel');
     if (migrationPanel) {
-        migrationPanel.classList.toggle(
-            'hidden',
-            state.status !== AUTH_STATUS.LOCAL_NEEDS_MIGRATION
-        );
+        migrationPanel.classList.toggle('hidden', state.status !== AUTH_STATUS.LOCAL_NEEDS_MIGRATION);
     }
 }

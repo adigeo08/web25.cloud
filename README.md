@@ -29,14 +29,15 @@ The UI is organized into:
 - **Pages**
   - One card per site this browser is seeding, with live peer and upload counters
   - Seeding survives a reload and resumes with the wallet still locked
-  - Signing out never stops a session; only Stop seeding does, behind a confirmation
+  - **Stop seeding** takes a site off the air and keeps its card, with **Resume seeding** in its place; **Delete website** is the separate, permanent one. Both ask first
+  - Signing out never stops a session
   - The tab appears only while at least one site is being hosted
 - **Browse / Load**
   - Load by torrent hash or complete WEB25 URL
   - Resolution order: local cache → WebTorrent/P2P → GoFile mirror, when the link carries one
   - P2P gets one attempt with an 8-second deadline; there is no retry ladder
   - A quiet swarm transparently falls through to the mirror
-  - Free-text search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix
+  - One checkbox under the box turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -216,8 +217,14 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 - Resuming needs **no key**: re-seeding is handing the same bytes back to WebTorrent, so it happens with the wallet locked
 - The resumed torrent must hash to the same info hash — the stored name and piece length are what guarantee it — and is dropped rather than announced if it does not
 - Signing out, clearing the site cache and staging the next deployment all leave live sessions alone
-- A session ends when the publisher presses **Stop seeding** on its card in **Pages**, behind a confirmation; closing the tab only pauses it until the next visit
-- The advanced-tools "Clear Cache" button, which used to take every live deployment down with it, is gone
+- **Stop seeding** on a card in **Pages** takes that site off the air and marks the record paused: the card stays, offering **Resume seeding**, and a reload leaves it paused rather than quietly starting it again
+- **Delete website**, the separate button next to it, is the permanent one: the stored payload is erased and the card goes. Both actions ask first, and they ask different questions
+- Closing the tab only pauses a session until the next visit
+- The advanced-tools drawer that used to hold a "Clear Cache" button — and take every live deployment down with it — is gone from the Deploy page entirely
+
+A finished deployment is shown in both places, for two different reasons. The Deploy page keeps the result — the WEB25 link, how it is being served, the mirror row, who signed it and the `.torrent` to download — as the receipt for what just happened, and **Deploy another site** clears it away for good when the publisher is done with it (a real reset: staged files, signature and saved session all go). The deployment itself is handed to **Pages**, which the page opens as soon as it completes, with that site's card already expanded — Pages is where its live peer and upload counters, its deployment record and its Stop seeding / Delete website buttons are. Cards there are newest first.
+
+**Pages** is gated on the wallet, exactly like **Chat**: with no identity unlocked the tab is not offered at all. The sites themselves go on seeding underneath — that is the whole point of the store — but managing them is the publisher's business.
 
 What "saved" means here is deliberately strict, because the promise is that the site is still there on the next load:
 
@@ -239,6 +246,8 @@ The wallet session lives in the signing worker and dies with the page, by design
 A single `localStorage` entry records **which tab was open** and **whether a session was live** — no address, no public key, no npub, no hash, nothing derived from any of them. On the next load the tab is restored when it still exists, and the sign-in wall says the session ended with the page and needs unlocking again. It cannot unlock anything and cannot identify whose browser it is.
 
 The two facts age separately, and for different reasons. The interrupted-session flag answers "did the page that just loaded take a live session with it", which is true of that load and of no later one, so it is read once and put down; moving between tabs no longer renews it, which it did while a single timestamp covered both. The remembered tab keeps its own timestamp and survives that.
+
+What the user sees of this is four words. The sign-in wall reads **"You've been signed out."** and the button becomes **Unlock to Resume**; unlocking then returns them to the tab they were on. Only a first sign-in — nothing remembered at all — lands on Account instead.
 
 ```json
 { "tab": "publish", "tabSavedAt": 1762000000000, "wasUnlocked": true, "sessionAt": 1762000000000 }

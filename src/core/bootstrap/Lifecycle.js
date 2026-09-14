@@ -23,7 +23,7 @@ import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
 import { DEFAULT_NOSTR_DM_RELAYS, NOSTR_CONFIG } from '../../config/nostr.config.js';
 import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import { rememberTab, readResumeHint } from '../../auth/SessionResumeHint.js';
-import { bindLibraryPanel, renderLibrary } from '../../ui/browse/LibraryPanel.js';
+import { bindLibraryPanel, isLibrarySearchMode, renderLibrary } from '../../ui/browse/LibraryPanel.js';
 import {
     appendChannelsMessage,
     appendFileTransfer,
@@ -50,7 +50,7 @@ import { PendingInvitations } from '../../channels/PendingInvitations.js';
 import { GoFileService } from '../../gofile/GoFileService.js';
 import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
 import { encodeGoFileMirror, gofileMirrorFilename } from '../../gofile/GoFileMirrorCodec.js';
-import { formatWeb25Url, parseWeb25Address } from '../../gofile/Web25Url.js';
+import { formatWeb25Url } from '../../gofile/Web25Url.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /** How long a searched address shows "checking" before it is called offline. */
@@ -1384,6 +1384,13 @@ const TRANSPORT_TEXT = {
     unavailable: 'Live and seeding over WebTorrent · no fallback mirror'
 };
 
+/**
+ * Fill in the result panel: the link, how it is being served, and who signed it.
+ *
+ * @param {{ hash: string, url: string, signedBy: string, signature: string,
+ *           signatureStatus: string, mirror?: { locator: string, filename: string }|null,
+ *           mirrorState?: string }} result
+ */
 export function renderDeploymentSummary({
     hash,
     url,
@@ -1429,8 +1436,14 @@ export function isGoFileMirrorRequested() {
  * Render the deployment as it currently stands. Called once the torrent is
  * live, and again if an optional mirror later succeeds or fails, so the result
  * on screen is never waiting on GoFile to become true.
+ *
+ * The result stays on the Deploy page — link, transport, mirror row, identity
+ * and the .torrent to download — and the same deployment is handed to Pages,
+ * which is where it is managed from here on. The page is only put back to the
+ * start when the publisher asks for it, with "Deploy another site".
+ *
  * @param {{ hash: string, identity: any, mirror?: { locator: string, filename: string }|null,
- *           mirrorRequested?: boolean, mirrorError?: Error|null }} state
+ *           mirrorState?: string }} state
  */
 export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorState = 'disabled' }) {
     this.showUploadResult(
@@ -1486,7 +1499,6 @@ export function renderDeployedArtifact({ hash, identity, mirror = null, mirrorSt
     });
 
     this.lastDeployResult = { hash, url, signedBy: identity.address, mirror, mirrorState };
-    this.persistDeploySession();
     // The payload is copied out of this page and into the seeding store, which
     // is what lets the site keep being served after a reload — and with the
     // wallet locked, since nothing about seeding needs a key.
@@ -1605,6 +1617,7 @@ async function runSignedDeployment() {
         this.renderDeployedArtifact({ hash, identity, mirrorState: 'disabled' });
         updateDeployProgress({ label: 'Live and seeding', percent: 100, state: 'success' });
         renderDeployStage('Deployment complete', 'Live and seeding from memory');
+        await this.completeDeployment();
         return;
     }
 
@@ -1637,6 +1650,7 @@ async function runSignedDeployment() {
             `Site deployed successfully. The optional GoFile fallback mirror could not be created: ${error.message}`,
             'Fallback mirror unavailable'
         );
+        await this.completeDeployment();
         return;
     }
 
@@ -1644,6 +1658,68 @@ async function runSignedDeployment() {
     updateDeployProgress({ label: 'Live + temporary mirror', percent: 100, state: 'success' });
     renderDeployStage('Deployment complete', 'Live, seeding, and temporarily mirrored');
     this.toast?.success?.('Temporary GoFile fallback mirror created.', 'Mirror ready');
+    await this.completeDeployment();
+}
+
+/**
+ * Put the Deploy page back to where a deploy starts.
+ *
+ * This is what "Deploy another site" does, and it is a real reset rather than a
+ * step back to the first screen: the staged files, the signature, the saved
+ * session and the finished result all go, so the next deployment starts from
+ * nothing instead of inheriting whatever the last one left attached.
+ */
+export function resetDeployPipeline() {
+    this.pendingDeployFiles = null;
+    this.lastPublishCandidate = null;
+    this.lastSignature = null;
+    this.lastSignedPublish = null;
+    this.lastDeployResult = null;
+    this._lastMirrorError = null;
+    this.clearDeploySession?.();
+
+    renderSignatureStatus(null);
+    renderPublishReview(null);
+    renderDeployStage('Stage 1 · Select files', 'Artifact not staged');
+    hideDeployProgress();
+
+    const output = document.getElementById('publish-output');
+    if (output) output.textContent = 'No artifact staged. Drop a website folder to begin.';
+
+    const resultEl = document.getElementById('upload-result');
+    if (resultEl) resultEl.classList.add('hidden');
+
+    // The mirror is opt-in per deployment and the next one starts from the
+    // default, not from what the last publisher happened to choose.
+    const mirrorToggle = /** @type {HTMLInputElement | null} */ (document.getElementById('deploy-gofile-mirror'));
+    if (mirrorToggle) {
+        mirrorToggle.disabled = false;
+        mirrorToggle.removeAttribute('title');
+        mirrorToggle.checked = true;
+    }
+
+    this.refreshDeployUiState();
+}
+
+/**
+ * Finish a deployment: show the publisher where the site now lives.
+ *
+ * The result stays on the Deploy page behind them — it is the receipt, with the
+ * link, the .torrent and the signature — but the site itself is managed from
+ * Pages, so that is where this lands, with the deployment that just happened as
+ * the card already open. The Deploy page is reset only on request.
+ */
+export async function completeDeployment() {
+    // Pages has to exist before it can be opened: the tab only appears once
+    // there is a session to show, and this deployment is that session.
+    await this.refreshPagesPanel?.();
+
+    // Duck-typed rather than `instanceof HTMLElement`: this runs against test
+    // doubles as well as a browser, and what matters is that it is clickable.
+    const pagesTab = document.querySelector('.tab-nav .tab-btn[data-tab="pages"]');
+    if (typeof pagesTab?.click === 'function' && pagesTab.style?.display !== 'none') {
+        pagesTab.click();
+    }
 }
 
 export function setupAuthAwareUi(state) {
@@ -1653,6 +1729,8 @@ export function setupAuthAwareUi(state) {
     const deployPanel = document.getElementById('deploy-panel');
     const channelsTabBtn = document.querySelector('[data-tab="channels"]');
     const channelsTabPanel = document.getElementById('tab-channels');
+    const pagesTabBtn = document.querySelector('[data-tab="pages"]');
+    const pagesTabPanel = document.getElementById('tab-pages');
     const hasIdentity = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const isAuthenticated = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const hasJustAuthenticated = !this._hadAuthenticatedIdentity && isAuthenticated;
@@ -1680,6 +1758,15 @@ export function setupAuthAwareUi(state) {
     if (channelsTabPanel) {
         channelsTabPanel.style.display = hasIdentity ? '' : 'none';
     }
+
+    // Pages is behind the wallet, exactly like Chat. The sites themselves go on
+    // seeding with the wallet locked — that is the whole point of the store —
+    // but managing them is the publisher's business, so the tab goes away with
+    // the session and comes back with it.
+    this._pagesTabAllowed = hasIdentity;
+    if (pagesTabBtn instanceof HTMLElement && !hasIdentity) pagesTabBtn.style.display = 'none';
+    if (pagesTabPanel instanceof HTMLElement && !hasIdentity) pagesTabPanel.style.display = 'none';
+    if (hasIdentity) void this.refreshPagesPanel?.();
 
     const deployTabBtn = document.querySelector('[data-tab="publish"]');
     if (deployTabBtn) {
@@ -1721,7 +1808,7 @@ export function setupAuthAwareUi(state) {
     if (!isAuthenticated) {
         const activeTab = document.querySelector('.tab-btn.active');
         const activeName = activeTab?.getAttribute('data-tab');
-        if (activeName === 'auth' || activeName === 'channels') {
+        if (activeName === 'auth' || activeName === 'channels' || activeName === 'pages') {
             const browseTab = document.querySelector('[data-tab="browse"]');
             if (browseTab instanceof HTMLElement) browseTab.click();
         }
@@ -1748,15 +1835,28 @@ export function setupAuthAwareUi(state) {
     }
 
     if (hasJustAuthenticated) {
-        const identityTab = document.querySelector('[data-tab="auth"]');
-        if (identityTab instanceof HTMLElement) {
-            identityTab.click();
-        }
-        // The wallet is unlocked exactly here, which is the only moment the
-        // credential can be encrypted or read. Provisioning now means a mirror
-        // never has to mint a credential mid-deploy, and a visitor who has
-        // signed in can authenticate a mirror read without ever deploying.
-        void this.ensureGoFileCredential();
+        void (async () => {
+            // Pages appears with the session, and it appears asynchronously:
+            // asking for the remembered tab before it exists would find it
+            // hidden and give up on it.
+            await this.refreshPagesPanel?.();
+
+            // Somebody coming back goes back to what they were doing. Only a
+            // first sign-in — nothing remembered at all — lands on Account,
+            // because that is the one time the identity itself is the news.
+            const resumed = this.applyResumeHint?.();
+            if (resumed === null) {
+                const identityTab = document.querySelector('[data-tab="auth"]');
+                if (typeof identityTab?.click === 'function') identityTab.click();
+            }
+
+            // The wallet is unlocked exactly here, which is the only moment the
+            // credential can be encrypted or read. Provisioning now means a
+            // mirror never has to mint a credential mid-deploy, and a visitor
+            // who has signed in can authenticate a mirror read without ever
+            // deploying.
+            void this.ensureGoFileCredential();
+        })();
     }
 }
 
@@ -1962,6 +2062,16 @@ export function setupEventListeners() {
     // advanced-tools drawer should be able to do by accident. A session now
     // ends only from its own card in Pages, behind a confirmation.
 
+    // "Deploy another site" is the only thing that clears a finished
+    // deployment off this page, and it clears all of it: staged files,
+    // signature, saved session and result.
+    const deployAnother = document.getElementById('deploy-another-site');
+    if (deployAnother) {
+        deployAnother.addEventListener('click', () => {
+            this.resetDeployPipeline();
+        });
+    }
+
     // Create torrent
     const createTorrent = document.getElementById('create-torrent');
     if (createTorrent) {
@@ -1970,15 +2080,11 @@ export function setupEventListeners() {
         });
     }
 
-    // Load site
+    // Load site — or search, when the box is in search mode.
     const loadSite = document.getElementById('load-site');
     if (loadSite) {
         loadSite.addEventListener('click', () => {
-            const hashInput = /** @type {HTMLInputElement} */ (document.getElementById('hash-input'));
-            const address = hashInput.value.trim();
-            if (address) {
-                this.loadSite(address);
-            }
+            this.submitGatewayQuery();
         });
     }
 
@@ -1986,13 +2092,11 @@ export function setupEventListeners() {
     const hashInput = /** @type {HTMLInputElement} */ (document.getElementById('hash-input'));
     if (hashInput) {
         hashInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const target = /** @type {HTMLInputElement} */ (e.target);
-                const address = target.value.trim();
-                if (address) {
-                    this.loadSite(address);
-                }
-            }
+            if (e.key !== 'Enter') return;
+            // Enter is "do it now": it beats the search debounce rather than
+            // racing it, and in address mode it is the Load button.
+            e.preventDefault?.();
+            this.submitGatewayQuery();
         });
     }
 
@@ -2091,7 +2195,11 @@ export function setupEventListeners() {
 }
 
 /**
- * Wire the local library search and fill it in for the first time.
+ * Wire the gateway's search mode.
+ *
+ * Nothing is rendered here on start-up: the results page belongs to a query,
+ * and there is no query yet. What this does is put the box in whatever mode the
+ * checkbox is in, which on a fresh page is the one that resolves addresses.
  */
 export function initLibraryPanel() {
     bindLibraryPanel({
@@ -2100,23 +2208,45 @@ export function initLibraryPanel() {
             if (hash) this.loadSite(hash);
         }
     });
-    void this.refreshLibrary('');
+}
+
+/**
+ * What the gateway button and the Enter key do, which depends on what the box
+ * is for at that moment: resolve one address, or search what is already here.
+ */
+export function submitGatewayQuery() {
+    const input = /** @type {HTMLInputElement | null} */ (document.getElementById('hash-input'));
+    const value = `${input?.value || ''}`.trim();
+
+    if (isLibrarySearchMode()) {
+        void this.refreshLibrary(value);
+        return;
+    }
+    if (value) this.loadSite(value);
 }
 
 /**
  * Run one library query against the local index.
  *
- * The total is passed alongside the matches so the panel can tell "you have no
- * cached sites" from "none of your cached sites match this".
+ * The total is passed alongside the matches so the page can say what it
+ * searched as well as what it found. An empty query is not a search: it renders
+ * no page at all, rather than listing the cache at somebody who has not asked
+ * for anything.
  *
  * @param {string} [query] omit to repeat whatever was last typed
  */
 export async function refreshLibrary(query) {
     const next = query === undefined ? this._libraryQuery || '' : query;
     this._libraryQuery = next;
+
+    if (!next) {
+        renderLibrary([], { query: '', total: 0 });
+        return;
+    }
+
     try {
         const all = await this.cache.listLibrary();
-        const matches = next ? await this.cache.searchLibrary(next) : all;
+        const matches = await this.cache.searchLibrary(next);
         renderLibrary(matches, { query: next, total: all.length });
     } catch (error) {
         this.log(`Local library unavailable: ${error.message}`);
@@ -2148,14 +2278,16 @@ export function setupTabMemory() {
  */
 export function applyResumeHint() {
     const hint = readResumeHint();
-    if (!hint) return null;
+    if (!hint?.tab) return null;
 
+    // Duck-typed rather than `instanceof HTMLElement`: what matters is that the
+    // tab is there and clickable, and this runs against test doubles too.
     const button = document.querySelector(`.tab-nav .tab-btn[data-tab="${hint.tab}"]`);
-    if (!(button instanceof HTMLElement)) return hint;
-    if (button.style.display === 'none' || button.classList.contains('active')) return hint;
-
-    button.click();
-    return hint;
+    if (typeof button?.click !== 'function' || button.style?.display === 'none') {
+        return { ...hint, restored: false };
+    }
+    if (!button.classList?.contains('active')) button.click();
+    return { ...hint, restored: true };
 }
 
 export function persistDeploySession() {
@@ -2164,19 +2296,13 @@ export function persistDeploySession() {
     }
 
     try {
-        const signedBy = this.lastSignature?.payload?.publisherAddress || this.lastDeployResult?.signedBy || null;
-        const persistedDeployResult =
-            this.lastDeployResult?.mirrorState === 'pending'
-                ? { ...this.lastDeployResult, mirror: null, mirrorState: 'unavailable' }
-                : this.lastDeployResult || null;
+        const signedBy = this.lastSignature?.payload?.publisherAddress || null;
         const payload = {
             hash: this.lastPublishCandidate.hash,
             siteName: this.lastPublishCandidate.siteName || 'website',
             createdAt: this.lastPublishCandidate.createdAt || null,
             signature: this.lastSignature,
             signedTorrentBase64: this.bytesToBase64(this.lastPublishCandidate.signedTorrentFile),
-            deployed: Boolean(persistedDeployResult),
-            deployResult: persistedDeployResult,
             signedBy,
             savedAt: Date.now()
         };
@@ -2239,15 +2365,9 @@ export async function restoreDeploySession() {
             mirrorToggle.disabled = true;
             mirrorToggle.title = 'GoFile mirroring is unavailable after restoring this deployment.';
         }
-        this.lastDeployResult = savedSession.deployResult || null;
         renderSignatureStatus(this.lastSignature);
         renderPublishReview(this.lastSignature.payload || null);
-        renderDeployStage(
-            savedSession.deployed ? 'Deployment restored' : 'Signature restored',
-            savedSession.deployed
-                ? 'Reconnected to previous signed deployment after refresh'
-                : 'Signed bundle restored. You can deploy now.'
-        );
+        renderDeployStage('Signature restored', 'Signed bundle restored. You can deploy now.');
 
         // A deployment that is already seeding from the seeding store needs no
         // second torrent for the same hash — WebTorrent refuses duplicates, and
@@ -2255,42 +2375,11 @@ export async function restoreDeploySession() {
         const alreadySeeding = this._seedingTorrents?.get(`${savedSession.hash}`.toLowerCase()) || null;
 
         await new Promise((resolve, reject) => {
+            // Only a signature comes back: a deployment that already happened
+            // is a session in Pages, not something the Deploy page restores.
             const onTorrent = (torrent) => {
                 this.lastPublishCandidate.torrent = torrent;
                 this.lastPublishCandidate.torrentFile = signedTorrentBuffer;
-
-                if (savedSession.deployed) {
-                    const savedAddress = savedSession.deployResult?.url
-                        ? parseWeb25Address(savedSession.deployResult.url)
-                        : { torrentHash: savedSession.hash, gofileLocator: null };
-                    const url = formatWeb25Url({
-                        ...savedAddress,
-                        origin: window.location.origin,
-                        pathname: window.location.pathname
-                    });
-                    this.lastDeployResult = savedSession.deployResult || {
-                        hash: savedSession.hash,
-                        url,
-                        signedBy: savedSession.signedBy || this.lastSignature?.payload?.publisherAddress || 'Unknown'
-                    };
-                    this.showUploadResult(
-                        savedSession.hash,
-                        signedTorrentBuffer,
-                        torrent,
-                        this.lastDeployResult.mirror?.locator || null
-                    );
-                    this.renderDeploymentSummary({
-                        hash: savedSession.hash,
-                        url: this.lastDeployResult.url,
-                        signedBy: this.lastDeployResult.signedBy,
-                        signature: this.lastSignature.signature,
-                        signatureStatus: 'VERIFIED',
-                        mirror: this.lastDeployResult.mirror || null,
-                        mirrorState:
-                            this.lastDeployResult.mirrorState ||
-                            (this.lastDeployResult.mirror ? 'available' : 'disabled')
-                    });
-                }
                 resolve();
             };
 
