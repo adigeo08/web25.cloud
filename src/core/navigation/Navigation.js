@@ -66,7 +66,7 @@ const RESEED_STATES = {
  * does not happen.
  *
  * @param {string} hash
- * @returns {Promise<'pending'|'available'|'resume'|'seeding'|'unavailable'>}
+ * @returns {Promise<'unverified'|'pending'|'available'|'resume'|'seeding'|'unavailable'>}
  */
 export async function resolveReseedState(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();

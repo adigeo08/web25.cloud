@@ -704,3 +704,173 @@ test('a stored session is itself a payload: a paused site needs nothing else', a
     assert.equal(result.state, 'resumed');
     assert.equal(seeded[0].torrent.infoHash, site.hash);
 });
+
+test('a deployment from before the payload store keeps a copy when its card is deleted', async () => {
+    // The gap this had at first. A browser upgraded with a live deployment
+    // never calls the writer that takes the copy — restoring a session does
+    // not write one — so its only bytes are in the session record. Deleting
+    // the card would have taken the last copy with it, which is the very bug
+    // this change is about.
+    const site = await publishedSite();
+    const cache = fakeCache();
+    const { context, seeded } = await harness({ cache });
+
+    await context._seedingStore.put({
+        hash: site.hash,
+        siteName: SITE_NAME,
+        torrentName: SITE_NAME,
+        pieceLength: PIECE_LENGTH,
+        createdAt: '',
+        savedAt: Date.now(),
+        length: 0,
+        fileCount: site.entries.length,
+        torrentFile: site.torrentFile,
+        files: site.entries,
+        deploy: { url: '', signedBy: VISITOR, mirrorState: 'disabled' }
+    });
+    assert.equal(cache.payloads.size, 0, 'nothing took a copy on the way in');
+
+    await context.deleteSeedingSession.call(context, site.hash);
+
+    assert.equal(cache.payloads.has(site.hash), true, 'the copy was kept on the way out');
+    context.currentHash = site.hash;
+    assert.equal(await context.resolveReseedState.call(context, site.hash), 'available');
+
+    await context.reseedSite.call(context, site.hash);
+    assert.equal(seeded[0].torrent.infoHash, site.hash);
+});
+
+test('a second write for the same deployment still leaves a copy behind', async () => {
+    // A mirrored deploy records itself twice: live, then mirror-resolved. The
+    // second call patches the record rather than rewriting the payload, and
+    // used to skip the copy entirely.
+    const site = await publishedSite();
+    const cache = fakeCache();
+    const { context } = await harness({ cache });
+
+    await context._seedingStore.put({
+        hash: site.hash,
+        siteName: SITE_NAME,
+        torrentName: SITE_NAME,
+        pieceLength: PIECE_LENGTH,
+        createdAt: '',
+        savedAt: Date.now(),
+        length: 0,
+        fileCount: site.entries.length,
+        torrentFile: site.torrentFile,
+        files: site.entries,
+        deploy: { url: '', signedBy: VISITOR, mirrorState: 'pending' }
+    });
+
+    await context.recordSeedingSession.call(context, {
+        hash: site.hash,
+        torrent: null,
+        torrentFile: null,
+        payloadFiles: null,
+        siteName: SITE_NAME,
+        deploy: { url: '', signedBy: VISITOR, mirrorState: 'ready' }
+    });
+
+    assert.equal(cache.payloads.has(site.hash), true);
+});
+
+test('a copy is never rewritten just to say the same thing', async () => {
+    const site = await publishedSite();
+    const cache = fakeCache();
+    let writes = 0;
+    const setPayload = cache.setPayload.bind(cache);
+    cache.setPayload = async (hash, payload) => {
+        writes += 1;
+        return setPayload(hash, payload);
+    };
+    const { context } = await harness({ cache });
+
+    await context._seedingStore.put({
+        hash: site.hash,
+        siteName: SITE_NAME,
+        torrentName: SITE_NAME,
+        pieceLength: PIECE_LENGTH,
+        createdAt: '',
+        savedAt: Date.now(),
+        length: 0,
+        fileCount: site.entries.length,
+        torrentFile: site.torrentFile,
+        files: site.entries,
+        deploy: { url: '', signedBy: VISITOR, mirrorState: 'disabled' }
+    });
+
+    // These are whole websites: copying one to change nothing is the most
+    // expensive no-op available.
+    assert.equal(await context.ensureStoredPayload.call(context, site.hash), true);
+    assert.equal(await context.ensureStoredPayload.call(context, site.hash), true);
+    assert.equal(writes, 1);
+});
+
+test('a delete still happens when no copy could be kept, and says so', async () => {
+    const site = await publishedSite();
+    const cache = fakeCache();
+    cache.setPayload = async () => false;
+    const { context, logs } = await harness({ cache });
+
+    await context._seedingStore.put({
+        hash: site.hash,
+        siteName: SITE_NAME,
+        torrentName: SITE_NAME,
+        pieceLength: PIECE_LENGTH,
+        createdAt: '',
+        savedAt: Date.now(),
+        length: 0,
+        fileCount: 1,
+        torrentFile: site.torrentFile,
+        files: site.entries,
+        deploy: { url: '', signedBy: VISITOR, mirrorState: 'disabled' }
+    });
+
+    // The user asked for the delete. A copy that cannot be kept does not earn
+    // a veto over that — it only means Reseed will say the payload is not here.
+    await context.deleteSeedingSession.call(context, site.hash);
+
+    assert.equal(await context._seedingStore.get(site.hash), null);
+    assert.ok(logs.some((line) => /leaves nothing to reseed from/.test(line)));
+});
+
+test('what the delete says afterwards agrees with what it asked', async () => {
+    const site = await publishedSite();
+    const { context } = await harness();
+    // Confirmed without a dialog in reach: with no modal in the document,
+    // `confirmSeedingAction` falls back to `window.confirm`.
+    const previousConfirm = globalThis.window.confirm;
+    const previousDocument = globalThis.document;
+    globalThis.document = { getElementById: () => null };
+    globalThis.window.confirm = () => true;
+    const messages = [];
+    context.toast = { info: (body, title) => messages.push([title, body]), error() {}, success() {}, warning() {} };
+
+    try {
+        await context._seedingStore.put({
+            hash: site.hash,
+            siteName: SITE_NAME,
+            torrentName: SITE_NAME,
+            pieceLength: PIECE_LENGTH,
+            createdAt: '',
+            savedAt: Date.now(),
+            length: 0,
+            fileCount: 1,
+            torrentFile: site.torrentFile,
+            files: site.entries,
+            deploy: { url: '', signedBy: VISITOR, mirrorState: 'disabled' }
+        });
+
+        await context.confirmDeleteSeedingSession.call(context, site.hash);
+    } finally {
+        globalThis.window.confirm = previousConfirm;
+        globalThis.document = previousDocument;
+    }
+
+    const [[title, body]] = messages;
+    assert.equal(title, 'Website deleted');
+    // It used to say the stored copy was gone, which contradicts the dialog
+    // that had just promised Reseed could put the site back.
+    assert.match(body, /put it back on the air with Reseed/i);
+    assert.doesNotMatch(body, /stored copy is gone/i);
+});

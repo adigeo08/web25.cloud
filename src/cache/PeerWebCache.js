@@ -116,6 +116,59 @@ class PeerWebCache {
         });
     }
 
+    /**
+     * Await a write the way `SeedingSessionStore` does: on the transaction.
+     *
+     * A successful `put` is not a durable write. IndexedDB reports the request
+     * as soon as it is applied *inside* the transaction, and the transaction
+     * can still abort afterwards — a quota the browser only discovers while
+     * flushing, a version change, a tab being killed. For a cached site that
+     * is a cache miss later, which is survivable; for a payload it is not,
+     * because a publisher who is told the copy is safe may then delete the
+     * session that holds the only other one.
+     *
+     * @param {IDBTransaction} transaction
+     * @param {IDBRequest} request
+     */
+    _commit(transaction, request) {
+        return new Promise((resolve, reject) => {
+            let result;
+            let settled = false;
+            const fail = (error) => {
+                if (settled) return;
+                settled = true;
+                reject(error instanceof Error ? error : new Error(`${error || 'The cache transaction failed.'}`));
+            };
+
+            request.onsuccess = () => {
+                result = request.result;
+            };
+            request.onerror = () => fail(request.error || new Error('The cache rejected a request.'));
+
+            // A double with no transaction events would never settle; falling
+            // back to the request keeps it working rather than hanging.
+            if (
+                !transaction ||
+                (typeof transaction.addEventListener !== 'function' && !('oncomplete' in transaction))
+            ) {
+                request.onsuccess = () => {
+                    if (settled) return;
+                    settled = true;
+                    resolve(request.result);
+                };
+                return;
+            }
+
+            transaction.oncomplete = () => {
+                if (settled) return;
+                settled = true;
+                resolve(result);
+            };
+            transaction.onabort = () => fail(transaction.error || new Error('The cache transaction was aborted.'));
+            transaction.onerror = () => fail(transaction.error || new Error('The cache transaction failed.'));
+        });
+    }
+
     async set(hash, siteData, metadata = {}) {
         const timestamp = Date.now();
         try {
@@ -233,13 +286,18 @@ class PeerWebCache {
      *
      * @param {string} hash
      * @param {{ torrentFile: Uint8Array, files: { path: string, type?: string, bytes: Uint8Array }[] }} payload
+     * @returns {Promise<boolean>} whether the copy is durable, not merely applied
      */
     async setPayload(hash, payload) {
         if (!payload?.torrentFile || !payload?.files?.length) return false;
         try {
             const db = await this.openDB();
             const transaction = db.transaction([this.payloadStore], 'readwrite');
-            await this._request(
+            // Settled on the commit, not on the request: what this returns is
+            // acted on — a publisher told the copy is safe may delete the
+            // session holding the only other one.
+            await this._commit(
+                transaction,
                 transaction.objectStore(this.payloadStore).put({
                     hash,
                     torrentFile: payload.torrentFile,

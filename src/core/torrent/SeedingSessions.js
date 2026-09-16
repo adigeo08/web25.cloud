@@ -171,6 +171,10 @@ async function writeSeedingSession(
         try {
             const patched = await this.seedingStore().patch(sanitized, { deploy });
             if (patched && torrent) this.adoptSeedingTorrent(sanitized, torrent);
+            // This branch is where a mirrored deploy's second call lands, and
+            // where a deployment restored from an older build lands: neither
+            // reaches the copy taken further down, so it is taken here.
+            await this.ensureStoredPayload(sanitized, patched || stored);
             this.refreshPagesPanel();
             return patched;
         } catch (error) {
@@ -515,6 +519,20 @@ export async function resumePausedSession(hash) {
 export async function deleteSeedingSession(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
 
+    // Before the bytes go, keep the copy this promises to leave behind.
+    //
+    // Delete website means "stop hosting it", not "throw the site away": the
+    // dialog says Reseed can put it back while this browser still holds a
+    // copy, and for a session whose only copy is its own record — anything
+    // deployed before the payload store existed — this is the last moment that
+    // can be true. A copy that cannot be taken is not a reason to refuse the
+    // delete the user asked for; it only means Reseed will say, honestly, that
+    // the payload is not here.
+    const kept = await this.ensureStoredPayload(sanitized);
+    if (!kept) {
+        this.log(`No reseedable copy of ${sanitized} could be kept; deleting it leaves nothing to reseed from.`);
+    }
+
     // The durable record goes first. Destroying the torrent and then failing to
     // delete the record would report "deleted" for a site that comes straight
     // back on the next reload — so a delete that fails leaves the session
@@ -728,6 +746,50 @@ export function stopSeedingStatsTimer() {
     if (!this._seedingStatsTimer) return;
     clearInterval(this._seedingStatsTimer);
     this._seedingStatsTimer = null;
+}
+
+/**
+ * Make sure the payload store holds a copy of one session's bytes.
+ *
+ * A session record already is a payload, so this is a copy rather than a
+ * capture — and it is skipped when the store already has one, because these
+ * are whole websites and rewriting one to change nothing is the most expensive
+ * no-op in the codebase.
+ *
+ * Needed because a deployment does not always pass through the writer that
+ * takes the copy: a mirrored deploy's second call patches the record instead,
+ * and a browser that deployed before this store existed has never called it at
+ * all. Those sessions are the ones whose only bytes are in `sessions`, so
+ * deleting the card would take the last copy with it.
+ *
+ * Best-effort, and honest about it: the return value says whether a copy is
+ * actually there, and nothing here throws.
+ *
+ * @param {string} hash
+ * @param {any} [record] the session record, when the caller already has it
+ * @returns {Promise<boolean>}
+ */
+export async function ensureStoredPayload(hash, record = null) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (!sanitized || typeof this.cache?.setPayload !== 'function') return false;
+
+    try {
+        const existing = await this.cache.getPayload?.(sanitized);
+        if (existing?.torrentFile && existing?.files?.length) return true;
+
+        const session = record || (await this.seedingStore().get(sanitized));
+        if (!session?.torrentFile || !session?.files?.length) return false;
+
+        return Boolean(
+            await this.cache.setPayload(sanitized, {
+                torrentFile: toBytes(session.torrentFile),
+                files: session.files
+            })
+        );
+    } catch (error) {
+        this.log(`Could not keep a reseedable copy of ${sanitized}: ${error.message}`);
+        return false;
+    }
 }
 
 /**
@@ -1158,7 +1220,15 @@ export async function confirmResumeSeedingSession(hash) {
 /** @param {string} hash */
 export async function confirmDeleteSeedingSession(hash) {
     if (!(await confirmSeedingChange.call(this, 'delete', hash))) return;
-    this.toast?.info?.('The website and its stored copy are gone from this browser.', 'Website deleted');
+    // What this action does now, rather than what it used to: the session and
+    // the card go, and the site stops being served from here. It is not the
+    // end of the site in this browser — that is Delete data — so saying "its
+    // stored copy is gone" would contradict the dialog that was just agreed to.
+    this.toast?.info?.(
+        'This site is no longer served from this browser. While a copy of it is still here you can put it back on ' +
+            'the air with Reseed; Delete data, on the site itself, removes everything.',
+        'Website deleted'
+    );
 }
 
 /**
