@@ -30,6 +30,7 @@ The UI is organized into:
   - One card per site this browser is seeding, with live peer and upload counters
   - Seeding survives a reload and resumes with the wallet still locked
   - **Stop seeding** takes a site off the air and keeps its card, with **Resume seeding** in its place; **Delete website** is the separate, permanent one. Both ask first
+  - Sites reseeded from somebody else's link sit here too, marked **Reseeded** and credited to their own publisher
   - Signing out never stops a session
   - The tab appears only while at least one site is being hosted
 - **Browse / Load**
@@ -38,6 +39,7 @@ The UI is organized into:
   - P2P gets one attempt with an 8-second deadline; there is no retry ladder
   - A quiet swarm transparently falls through to the mirror
   - One checkbox under the box turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
+  - The strip above a rendered site carries **Back**, the hash, the signature as a single mark, and the two things a visitor can decide: **Reseed** and **Delete data**
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -224,7 +226,16 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 
 A finished deployment is shown in both places, for two different reasons. The Deploy page keeps the result — the WEB25 link, how it is being served, the mirror row, who signed it and the `.torrent` to download — as the receipt for what just happened, and **Deploy another site** clears it away for good when the publisher is done with it (a real reset: staged files, signature and saved session all go). The deployment itself is handed to **Pages**, which the page opens as soon as it completes, with that site's card already expanded — Pages is where its live peer and upload counters, its deployment record and its Stop seeding / Delete website buttons are. Cards there are newest first.
 
-**Pages** is gated on the wallet, exactly like **Chat**: with no identity unlocked the tab is not offered at all. The sites themselves go on seeding underneath — that is the whole point of the store — but managing them is the publisher's business.
+A publisher's own deployments in **Pages** are gated on the wallet, exactly like **Chat**: with no identity unlocked those cards are not offered. The sites themselves go on seeding underneath — that is the whole point of the store — but managing a deployment is the publisher's business. Sites *reseeded* from here are the exception, and have to be: starting to host somebody else's site needs no identity, so stopping must not need one either, and the card that stops it stays reachable.
+
+### 6b) Reseeding somebody else's site, and forgetting one
+
+The strip above a rendered site is the only WEB25 UI on screen while a peer-hosted page is up, so it carries only things a visitor can act on. The transport label that used to sit there ("From Cache" / "Fresh Download") was a fact about the load rather than about the site, and the signature is now a single mark with its full wording in `title` and `aria-label`. What took that room:
+
+- **Reseed** — your browser joins the swarm serving the site you are looking at. It keeps its author, its signature, its date and its link; you become one of its hosts, and it appears in **Pages** as a card marked **Reseeded**, credited to the publisher who signed it rather than to you. Stop, resume and delete work on it exactly as they do on a site deployed here
+- **Delete data** — asks first, then erases everything this browser keeps about that site: seeding stops, the stored payload and the cached copy go, and it stops turning up in the search box. The same button and the same promise whether the site was deployed from here or only visited. The site itself is untouched — other peers and any mirror go on serving it
+
+Reseeding is byte-exact or it does not happen. The info hash *is* the site's address, so what gets announced has to be the payload as it travelled, not the site as it renders — in bundle mode those are different things, since one gzip file on the wire unpacks into the whole site. So the wire entries and the `.torrent` are captured during the load, checked against the info dictionary on the way into storage and again on the way out, and the re-seeded torrent's info hash is compared against the link's before anything is announced. A mismatch is refused and leaves no card behind. A site whose payload this browser never held — a partial download, a load with no `.torrent`, or one too large to hold a second copy of — says so on the button instead of offering a reseed that cannot work.
 
 What "saved" means here is deliberately strict, because the promise is that the site is still there on the next load:
 
@@ -235,7 +246,9 @@ What "saved" means here is deliberately strict, because the promise is that the 
 - An owned torrent is followed to the end of its life: when one errors or closes, it leaves the registry and its card says so, rather than reading "Seeding" because an object is still in a `Map`
 - Stopping is broadcast to this browser's other WEB25 tabs over a `BroadcastChannel`. IndexedDB is shared but the live torrents are not, so without it a site the publisher stopped would go on being served from a tab they were not looking at. Nothing leaves the browser; a browser without `BroadcastChannel` simply catches up on its next reload
 
-Signed-but-not-yet-deployed artifacts are still kept in `localStorage` (`web25.deploy.session.v1`) so the deploy screen survives a refresh mid-flow.
+Signed-but-not-yet-deployed artifacts are still kept in `localStorage` (`web25.deploy.session.v1`) so the deploy screen survives a refresh mid-flow. That artifact belongs to whoever signed it, so it is restored **on sign-in, not on load**: it used to come back on every load and reveal the deploy panel outright, which — since the session dies with the page — meant a browser holding a bundle from the last half hour showed the deploy pipeline to somebody with no wallet unlocked.
+
+Nothing signed-in-only is allowed to flash past while the wallet is being read, either. A page that has just loaded is always signed out, so the markup ships that way: the tab reads **🔐 Sign in** from first paint rather than being corrected by JavaScript a second later. What genuinely is unknown at that point — whether this browser holds a wallet at all, which decides between Unlock and Create — waits behind a placeholder instead of showing all three ways in and withdrawing one. And a page that comes back without being reloaded (a phone restoring a backgrounded tab from the back/forward cache) re-asks the worker who is signed in, because its DOM is describing a session that may be gone.
 
 ---
 

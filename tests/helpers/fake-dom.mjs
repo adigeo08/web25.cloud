@@ -106,6 +106,10 @@ class FakeNode {
         return this.attributes.has(name) ? this.attributes.get(name) : null;
     }
 
+    removeAttribute(name) {
+        this.attributes.delete(name);
+    }
+
     focus() {
         this.focused += 1;
         this.ownerDocument().activeElement = this;

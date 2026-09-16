@@ -125,11 +125,14 @@ export async function verifyGoFileMirror(mirror, requestedHash) {
             throw new Error(`GoFile mirror piece ${index} failed SHA-1 verification.`);
         }
     }
-    return { infoHash: computedHash, files: ordered, metainfo };
+    // The metainfo travels on with the verified payload: reseeding this site
+    // from here needs the exact info dictionary, not a re-derived one.
+    return { infoHash: computedHash, files: ordered, metainfo, torrentFile: mirror.torrentFile };
 }
 
 export function createMirrorTorrentAdapter(verified) {
     return {
+        torrentFile: verified.torrentFile || null,
         files: verified.files.map((entry) => ({
             name: entry.path,
             path: entry.path,

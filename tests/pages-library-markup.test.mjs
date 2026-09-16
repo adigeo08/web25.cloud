@@ -104,14 +104,29 @@ test('the search results page is a results page, hidden until there is a query',
     assert.ok(!MARKUP.includes('Sites you have opened</h3>'), 'and so is the listing it headed');
 });
 
-test('the viewer header carries a way back, the hash, the source and the signature', () => {
+test('the viewer header carries a way back, the hash, the signature and the two actions', () => {
     assert.match(VIEWER, /id="back-to-peerweb"/);
     assert.match(VIEWER, /id="current-hash"/);
-    assert.match(VIEWER, /id="cache-status"/);
     assert.match(VIEWER, /id="site-signature-status"/);
     // Back comes first: it is the control a visitor needs most while looking
     // at somebody else's site.
     assert.ok(VIEWER.indexOf('back-to-peerweb') < VIEWER.indexOf('site-signature-status'));
+
+    // What a visitor can do about the site in front of them.
+    assert.match(VIEWER, /id="viewer-reseed"/);
+    assert.match(VIEWER, /id="viewer-forget"/);
+    assert.ok(VIEWER.indexOf('site-signature-status') < VIEWER.indexOf('viewer-reseed'));
+});
+
+test('the viewer header is not a place for labels nobody can act on', () => {
+    // Which transport fetched the bytes was a fact about the load, not about
+    // the site, and it was spending the width the two actions now use.
+    assert.ok(!MARKUP.includes('id="cache-status"'), 'the transport label is gone');
+
+    // The signature is a mark, not a sentence — with the wording it replaces
+    // still on the element, so a tooltip and a screen reader both get it.
+    assert.match(VIEWER, /id="site-signature-status"[\s\S]{0,240}aria-label="Publisher: unverified"/);
+    assert.ok(!/id="site-signature-status"[^>]*class="status-chip/.test(VIEWER), 'it is no longer a text chip');
 });
 
 test('the sign-in wall has one line to say why a session ended', () => {
