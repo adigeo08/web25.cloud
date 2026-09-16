@@ -16,6 +16,23 @@ class PeerWebCache {
          * is a few hundred bytes: title, file names, publisher, hash.
          */
         this.libraryStore = 'library';
+        /**
+         * A third store: what it would take to put a site back on the air.
+         *
+         * Kept apart from the site itself because the two answer different
+         * questions. `sites` holds the site as it *renders* — the unpacked
+         * bundle the sandbox reads from. This holds the payload as it
+         * *travelled*, which is what the swarm serves and the only form that
+         * hashes to the info hash the link names; in bundle mode those are not
+         * the same bytes, and re-packing the rendered files would not
+         * reproduce them.
+         *
+         * Separate stores also mean a payload can exist without a rendered
+         * copy and the other way round: a site deployed from here is
+         * reseedable before anybody has ever opened it, and a site that has
+         * only been read can be reseeded once it has been captured.
+         */
+        this.payloadStore = 'payloads';
         this.maxAge = PEERWEB_CONFIG.CACHE_MAX_AGE;
     }
 
@@ -32,7 +49,11 @@ class PeerWebCache {
     async openDB() {
         if (this._db) return this._db;
         const db = await this._open();
-        if (db.objectStoreNames.contains(this.storeName) && db.objectStoreNames.contains(this.libraryStore)) {
+        if (
+            db.objectStoreNames.contains(this.storeName) &&
+            db.objectStoreNames.contains(this.libraryStore) &&
+            db.objectStoreNames.contains(this.payloadStore)
+        ) {
             this._db = db;
             return db;
         }
@@ -72,6 +93,9 @@ class PeerWebCache {
                 if (!db.objectStoreNames.contains(this.libraryStore)) {
                     db.createObjectStore(this.libraryStore, { keyPath: 'hash' });
                 }
+                if (!db.objectStoreNames.contains(this.payloadStore)) {
+                    db.createObjectStore(this.payloadStore, { keyPath: 'hash' });
+                }
             };
         });
     }
@@ -103,15 +127,6 @@ class PeerWebCache {
                 hash,
                 data: siteData,
                 signatureState: metadata.signatureState || null,
-                // The payload as it travelled, next to the site as it renders.
-                //
-                // These are not the same thing: what renders is the unpacked
-                // bundle, and the swarm serves the packed one. Keeping the
-                // wire form is what lets a visitor reseed a site they came
-                // back to from this cache rather than only in the page that
-                // first downloaded it — and it is the only form that hashes
-                // to the info hash the link names.
-                payload: metadata.payload || null,
                 timestamp
             };
 
@@ -121,6 +136,11 @@ class PeerWebCache {
             console.error('[PeerWebCache] Error caching site:', error);
             return;
         }
+
+        // Its own transaction, for the same reason indexing gets one: a site
+        // that is cached but not reseedable is a small loss, and must not
+        // become a site that failed to cache.
+        if (metadata.payload) await this.setPayload(hash, metadata.payload);
 
         // Indexing is a separate transaction on purpose: a site that is cached
         // but unsearchable is a small loss, and must not become a site that
@@ -205,6 +225,77 @@ class PeerWebCache {
     }
 
     /**
+     * Keep the payload that would let this browser reseed one site.
+     *
+     * Best-effort: nothing that depends on this is load-bearing for rendering
+     * a site, caching it or finding it again, so a failure is reported and
+     * swallowed rather than failing whatever was going on.
+     *
+     * @param {string} hash
+     * @param {{ torrentFile: Uint8Array, files: { path: string, type?: string, bytes: Uint8Array }[] }} payload
+     */
+    async setPayload(hash, payload) {
+        if (!payload?.torrentFile || !payload?.files?.length) return false;
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.payloadStore], 'readwrite');
+            await this._request(
+                transaction.objectStore(this.payloadStore).put({
+                    hash,
+                    torrentFile: payload.torrentFile,
+                    files: payload.files,
+                    savedAt: Date.now()
+                })
+            );
+            return true;
+        } catch (error) {
+            console.warn('[PeerWebCache] Site is not reseedable from storage:', error);
+            return false;
+        }
+    }
+
+    /**
+     * The stored payload for one site, or null.
+     *
+     * Falls back to the field the payload used to be written into, inside the
+     * site record itself, so a browser that cached a site under the previous
+     * build can still reseed it.
+     *
+     * @param {string} hash
+     */
+    async getPayload(hash) {
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.payloadStore], 'readonly');
+            const stored = await this._request(transaction.objectStore(this.payloadStore).get(hash));
+            if (stored?.torrentFile && stored?.files?.length) return stored;
+        } catch (error) {
+            console.warn('[PeerWebCache] Could not read the stored payload:', error);
+        }
+
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.storeName], 'readonly');
+            const record = await this._request(transaction.objectStore(this.storeName).get(hash));
+            const legacy = record?.payload || null;
+            return legacy?.torrentFile && legacy?.files?.length ? legacy : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /** @param {string} hash */
+    async deletePayload(hash) {
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.payloadStore], 'readwrite');
+            await this._request(transaction.objectStore(this.payloadStore).delete(hash));
+        } catch (error) {
+            console.warn('[PeerWebCache] Could not delete the stored payload:', error);
+        }
+    }
+
+    /**
      * Every indexed site in this browser, newest first.
      * @returns {Promise<any[]>}
      */
@@ -274,6 +365,8 @@ class PeerWebCache {
             const transaction = db.transaction([this.libraryStore], 'readwrite');
             await this._request(transaction.objectStore(this.libraryStore).delete(hash));
         } catch (_) {}
+        // And so does the payload. Deleting one site's data means all of it.
+        await this.deletePayload(hash);
     }
 
     async clear() {
@@ -290,6 +383,11 @@ class PeerWebCache {
             const db = await this.openDB();
             const transaction = db.transaction([this.libraryStore], 'readwrite');
             await this._request(transaction.objectStore(this.libraryStore).clear());
+        } catch (_) {}
+        try {
+            const db = await this.openDB();
+            const transaction = db.transaction([this.payloadStore], 'readwrite');
+            await this._request(transaction.objectStore(this.payloadStore).clear());
         } catch (_) {}
     }
 }

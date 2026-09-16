@@ -89,17 +89,33 @@ async function publishedSite() {
     return { entries, torrentFile, hash: await infoHashOf(torrentFile) };
 }
 
-/** A cache double: only the three calls the reseed and delete paths make. */
-function fakeCache(entries = new Map()) {
+/**
+ * A cache double: the calls the reseed and delete paths make.
+ *
+ * `payloads` is its own store in the real cache, for the same reason it is
+ * separate here: a payload can exist without a rendered copy — a site deployed
+ * from this browser is reseedable before anybody has opened it — and a rendered
+ * copy can exist without one.
+ */
+function fakeCache(entries = new Map(), payloads = new Map()) {
     return {
         entries,
+        payloads,
         deleted: [],
         async getEntry(hash) {
             return entries.get(hash) || null;
         },
+        async getPayload(hash) {
+            return payloads.get(hash) || null;
+        },
+        async setPayload(hash, payload) {
+            payloads.set(hash, payload);
+            return true;
+        },
         async delete(hash) {
             this.deleted.push(hash);
             entries.delete(hash);
+            payloads.delete(hash);
         }
     };
 }
@@ -138,6 +154,9 @@ async function harness({ cache = fakeCache(), signatureVerified = true } = {}) {
         _seedingTorrents: new Map(),
         _seedingErrors: new Map(),
         signedTorrentMetadata: new Map(),
+        getNormalizedDeployPath: (file) => file.path || file.webkitRelativePath || file.name,
+        _siteVerified: signatureVerified,
+        _siteVerdictLabel: signatureVerified ? 'Verified publisher' : 'Publisher: unverified',
         currentSiteSignatureStatus: {
             verified: signatureVerified,
             label: 'Verified publisher',
@@ -288,15 +307,8 @@ test('the card it writes credits the original author, not whoever reseeded it', 
 test('a cached visit can still reseed: the payload is read back out of the cache', async () => {
     const site = await publishedSite();
     const cache = fakeCache(
-        new Map([
-            [
-                site.hash,
-                {
-                    data: {},
-                    payload: { torrentFile: site.torrentFile, files: site.entries }
-                }
-            ]
-        ])
+        new Map([[site.hash, { data: {} }]]),
+        new Map([[site.hash, { torrentFile: site.torrentFile, files: site.entries }]])
     );
     const { context, seeded } = await harness({ cache });
 
@@ -318,7 +330,8 @@ function tamperedEntries(site) {
 test('a stored payload that does not match its .torrent never reaches the swarm', async () => {
     const site = await publishedSite();
     const cache = fakeCache(
-        new Map([[site.hash, { data: {}, payload: { torrentFile: site.torrentFile, files: tamperedEntries(site) } }]])
+        new Map([[site.hash, { data: {} }]]),
+        new Map([[site.hash, { torrentFile: site.torrentFile, files: tamperedEntries(site) }]])
     );
     const { context, logs, seeded } = await harness({ cache });
 
@@ -381,7 +394,7 @@ test('a reseed of a site already stored here puts it back on the air instead of 
 
 test('deleting a site data leaves nothing of it in this browser', async () => {
     const site = await publishedSite();
-    const cache = fakeCache(new Map([[site.hash, { data: {}, payload: null }]]));
+    const cache = fakeCache(new Map([[site.hash, { data: {} }]]));
     const { context, broadcasts } = await harness({ cache });
 
     context.rememberReseedPayload.call(context, site.hash, {
@@ -434,7 +447,6 @@ test('deleting works the same for a site deployed from here', async () => {
         siteName: SITE_NAME,
         deploy: { url: '', signedBy: VISITOR, mirrorState: 'disabled' }
     });
-    context.getNormalizedDeployPath = (file) => file.path || file.name;
     context.lastDeployResult = { hash: site.hash };
     let deploySessionCleared = 0;
     context.clearDeploySession = () => {
@@ -621,4 +633,74 @@ test('a site with no metainfo, or too big to copy, is loaded but not captured', 
     const huge = { torrentFile: site.torrentFile, length: 512 * 1024 * 1024, files: [] };
     assert.equal(await peerweb.captureReseedPayload.call(peerweb, huge, site.hash), null);
     assert.ok(logs.some((line) => /too large to hold a reseedable copy/.test(line)));
+});
+
+test('a site deployed from here is reseedable after its card is deleted', async () => {
+    // The case that made this a bug report. Deleting a deployment from Pages
+    // means this browser stops hosting it — not that it threw the site away.
+    // While a copy is still here, Reseed has to be able to put it back, and
+    // how the bytes first arrived (deployed here, WebRTC, GoFile mirror) must
+    // make no difference at all.
+    const site = await publishedSite();
+    const { context, seeded } = await harness();
+
+    await context.recordSeedingSession.call(context, {
+        hash: site.hash,
+        torrent: { infoHash: site.hash, name: SITE_NAME, pieceLength: PIECE_LENGTH, length: 10 },
+        torrentFile: site.torrentFile,
+        payloadFiles: site.entries.map((entry) => {
+            const file = new FileStub([entry.bytes], entry.path, { type: entry.type });
+            file.path = entry.path;
+            file.webkitRelativePath = entry.path;
+            return file;
+        }),
+        siteName: SITE_NAME,
+        deploy: { url: '', signedBy: VISITOR, mirrorState: 'disabled' }
+    });
+
+    await context.deleteSeedingSession.call(context, site.hash);
+    assert.equal(await context._seedingStore.get(site.hash), null, 'the deployment is gone from Pages');
+
+    // Nothing in the page and no session left — only what the deployment kept.
+    context.rememberReseedPayload.call(context, '', null);
+    context.currentHash = site.hash;
+    assert.equal(await context.resolveReseedState.call(context, site.hash), 'available');
+
+    await context.reseedSite.call(context, site.hash);
+    assert.equal(seeded[0].torrent.infoHash, site.hash, 'and it goes back up as the same site');
+});
+
+test('a stored session is itself a payload: a paused site needs nothing else', async () => {
+    const site = await publishedSite();
+    // No payload store at all — the seeding record already holds the metainfo
+    // and the ordered entries, which is what a payload is.
+    const { context, seeded } = await harness({
+        cache: {
+            async getEntry() {
+                return null;
+            }
+        }
+    });
+
+    await context._seedingStore.put({
+        hash: site.hash,
+        siteName: SITE_NAME,
+        torrentName: SITE_NAME,
+        pieceLength: PIECE_LENGTH,
+        createdAt: '',
+        savedAt: Date.now(),
+        length: 0,
+        fileCount: site.entries.length,
+        torrentFile: site.torrentFile,
+        files: site.entries,
+        paused: true,
+        deploy: { url: '', signedBy: PUBLISHER, mirrorState: 'disabled' }
+    });
+
+    context.currentHash = site.hash;
+    assert.equal(await context.resolveReseedState.call(context, site.hash), 'resume');
+
+    const result = await context.reseedSite.call(context, site.hash);
+    assert.equal(result.state, 'resumed');
+    assert.equal(seeded[0].torrent.infoHash, site.hash);
 });

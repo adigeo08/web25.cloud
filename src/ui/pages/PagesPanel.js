@@ -59,13 +59,14 @@ const ACTION_PROMPTS = {
         title: '🗑️ Delete website',
         prompt: 'Delete',
         detail:
-            'This cannot be undone. The stored copy is erased from this browser, the card disappears, and the only ' +
-            'way to bring the site back is to deploy it again. The WEB25 link keeps working only for as long as ' +
-            'another peer — or a GoFile mirror — still serves the same bytes.',
+            'The session is erased and the card disappears: this browser stops serving the site, and stops doing ' +
+            'so after a reload. The WEB25 link keeps working for as long as another peer — or a GoFile mirror — ' +
+            'still serves the same bytes. While this browser still holds a copy of the site you can put it back ' +
+            'on the air with Reseed; Delete data, on the site itself, is the one that leaves nothing behind.',
         confirm: 'Yes, delete it',
         confirmClass: 'btn btn-clear',
         cancel: 'Keep it',
-        fallback: (name) => `Delete ${name} from this browser? The stored copy is erased and cannot be recovered.`
+        fallback: (name) => `Delete ${name} from this browser? It stops being served from here.`
     },
     reseed: {
         title: '🌱 Reseed this site',

@@ -68,7 +68,7 @@ function fakeIndexedDB(state) {
 }
 
 test('a database that is already past version 1 opens without a VersionError', async () => {
-    const idb = fakeIndexedDB({ version: 2, stores: ['sites', 'library'] });
+    const idb = fakeIndexedDB({ version: 2, stores: ['sites', 'library', 'payloads'] });
     global.indexedDB = idb;
 
     const cache = new PeerWebCache();
@@ -79,7 +79,7 @@ test('a database that is already past version 1 opens without a VersionError', a
 });
 
 test('the open handle is reused instead of reopened per operation', async () => {
-    const idb = fakeIndexedDB({ version: 5, stores: ['sites', 'library'] });
+    const idb = fakeIndexedDB({ version: 5, stores: ['sites', 'library', 'payloads'] });
     global.indexedDB = idb;
 
     const cache = new PeerWebCache();
@@ -99,7 +99,7 @@ test('a missing object store is added in one upgrade, at the version that exists
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 4], 'one probe, then one upgrade above the existing version');
-    assert.deepEqual(state.stores, ['sites', 'library']);
+    assert.deepEqual(state.stores, ['sites', 'library', 'payloads']);
 });
 
 test('a fresh browser creates the database and its store', async () => {
@@ -111,7 +111,7 @@ test('a fresh browser creates the database and its store', async () => {
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 1]);
-    assert.deepEqual(state.stores, ['sites', 'library']);
+    assert.deepEqual(state.stores, ['sites', 'library', 'payloads']);
 });
 
 test('a read that cannot open the database reports null instead of throwing', async () => {
@@ -142,5 +142,24 @@ test('a cache from before the library index gains it in one upgrade', async () =
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 3]);
-    assert.deepEqual(state.stores, ['sites', 'library'], 'the cached sites are left exactly where they are');
+    assert.deepEqual(
+        state.stores,
+        ['sites', 'library', 'payloads'],
+        'the cached sites are left exactly where they are'
+    );
+});
+
+test('a cache from before reseeding gains the payload store the same way', async () => {
+    // The state every visitor of the previous build is in. A missing payload
+    // store must not make the cache itself stop working — it only means
+    // nothing is reseedable until something is captured again.
+    const state = { version: 4, stores: ['sites', 'library'] };
+    const idb = fakeIndexedDB(state);
+    global.indexedDB = idb;
+
+    const cache = new PeerWebCache();
+    await cache.openDB();
+
+    assert.deepEqual(idb.opens, [undefined, 5]);
+    assert.deepEqual(state.stores, ['sites', 'library', 'payloads']);
 });

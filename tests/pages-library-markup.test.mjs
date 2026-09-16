@@ -104,29 +104,38 @@ test('the search results page is a results page, hidden until there is a query',
     assert.ok(!MARKUP.includes('Sites you have opened</h3>'), 'and so is the listing it headed');
 });
 
-test('the viewer header carries a way back, the hash, the signature and the two actions', () => {
-    assert.match(VIEWER, /id="back-to-peerweb"/);
-    assert.match(VIEWER, /id="current-hash"/);
-    assert.match(VIEWER, /id="site-signature-status"/);
+test('the viewer header carries a way back and the two decisions, and nothing else', () => {
     // Back comes first: it is the control a visitor needs most while looking
     // at somebody else's site.
-    assert.ok(VIEWER.indexOf('back-to-peerweb') < VIEWER.indexOf('site-signature-status'));
-
-    // What a visitor can do about the site in front of them.
+    assert.match(VIEWER, /id="back-to-peerweb"/);
     assert.match(VIEWER, /id="viewer-reseed"/);
     assert.match(VIEWER, /id="viewer-forget"/);
-    assert.ok(VIEWER.indexOf('site-signature-status') < VIEWER.indexOf('viewer-reseed'));
+    assert.ok(VIEWER.indexOf('back-to-peerweb') < VIEWER.indexOf('viewer-reseed'));
+    assert.ok(VIEWER.indexOf('viewer-reseed') < VIEWER.indexOf('viewer-forget'));
 });
 
 test('the viewer header is not a place for labels nobody can act on', () => {
-    // Which transport fetched the bytes was a fact about the load, not about
-    // the site, and it was spending the width the two actions now use.
+    // Which transport fetched the bytes, and which hash it was: both facts
+    // about the load rather than about the site, and both were spending the
+    // width the two buttons need — on a phone, enough to push them off the row.
     assert.ok(!MARKUP.includes('id="cache-status"'), 'the transport label is gone');
+    assert.ok(!MARKUP.includes('id="current-hash"'), 'and so is the hash');
+    assert.ok(!MARKUP.includes('class="viewer-identity"'));
+});
 
-    // The signature is a mark, not a sentence — with the wording it replaces
-    // still on the element, so a tooltip and a screen reader both get it.
-    assert.match(VIEWER, /id="site-signature-status"[\s\S]{0,240}aria-label="Publisher: unverified"/);
-    assert.ok(!/id="site-signature-status"[^>]*class="status-chip/.test(VIEWER), 'it is no longer a text chip');
+test('the signature and the offer to host are one control', () => {
+    // Whether to rehost somebody else's bytes and whether their publisher
+    // checks out are the same question, so they are the same button: the mark
+    // sits inside it, and the wording a mark cannot carry is on the button.
+    const button = VIEWER.slice(VIEWER.indexOf('id="viewer-reseed"'), VIEWER.indexOf('id="viewer-forget"'));
+    assert.match(button, /id="site-signature-status"/);
+    assert.match(button, /id="viewer-reseed-label"/);
+    // It ships unverified and disabled: a site is not vouched for until its
+    // signature has been checked, and nothing offers to seed it until then.
+    assert.match(button, /class="viewer-verified is-unverified"/);
+    assert.match(button, /Unverified/);
+    assert.match(button, /aria-label="Publisher: unverified"/);
+    assert.match(button, /\sdisabled/);
 });
 
 test('the sign-in wall has one line to say why a session ended', () => {
