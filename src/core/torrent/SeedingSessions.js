@@ -171,6 +171,10 @@ async function writeSeedingSession(
         try {
             const patched = await this.seedingStore().patch(sanitized, { deploy });
             if (patched && torrent) this.adoptSeedingTorrent(sanitized, torrent);
+            // This branch is where a mirrored deploy's second call lands, and
+            // where a deployment restored from an older build lands: neither
+            // reaches the copy taken further down, so it is taken here.
+            await this.ensureStoredPayload(sanitized, patched || stored);
             this.refreshPagesPanel();
             return patched;
         } catch (error) {
@@ -208,7 +212,22 @@ async function writeSeedingSession(
         // protected from every teardown path, so adopting one the store never
         // accepted would leave a live torrent with no card in Pages and no way
         // for the user to stop it.
+        //
+        // And before the payload copy below, which is a convenience: the
+        // torrent's protection must not wait on it.
         if (torrent) this.adoptSeedingTorrent(sanitized, torrent);
+
+        // The same bytes, kept where they outlive this session.
+        //
+        // A publisher who deletes their deployment from Pages has stopped
+        // being its host — they have not necessarily thrown the site away, and
+        // as long as this browser still holds a copy it can put it back on the
+        // air with Reseed. Without this, the one site a browser could never
+        // reseed would be the one it deployed itself. Delete data, on the site
+        // itself, is what leaves nothing. Awaited rather than fired off so the
+        // outcome is settled by the time anything asks whether this site can
+        // be reseeded; it reports its own failures and raises none.
+        await this.cache?.setPayload?.(sanitized, { torrentFile: record.torrentFile, files: record.files });
         this.log(`Seeding session stored for ${sanitized}; it will resume after a reload.`);
         this.refreshPagesPanel();
         return record;
@@ -500,6 +519,20 @@ export async function resumePausedSession(hash) {
 export async function deleteSeedingSession(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
 
+    // Before the bytes go, keep the copy this promises to leave behind.
+    //
+    // Delete website means "stop hosting it", not "throw the site away": the
+    // dialog says Reseed can put it back while this browser still holds a
+    // copy, and for a session whose only copy is its own record — anything
+    // deployed before the payload store existed — this is the last moment that
+    // can be true. A copy that cannot be taken is not a reason to refuse the
+    // delete the user asked for; it only means Reseed will say, honestly, that
+    // the payload is not here.
+    const kept = await this.ensureStoredPayload(sanitized);
+    if (!kept) {
+        this.log(`No reseedable copy of ${sanitized} could be kept; deleting it leaves nothing to reseed from.`);
+    }
+
     // The durable record goes first. Destroying the torrent and then failing to
     // delete the record would report "deleted" for a site that comes straight
     // back on the next reload — so a delete that fails leaves the session
@@ -716,6 +749,50 @@ export function stopSeedingStatsTimer() {
 }
 
 /**
+ * Make sure the payload store holds a copy of one session's bytes.
+ *
+ * A session record already is a payload, so this is a copy rather than a
+ * capture — and it is skipped when the store already has one, because these
+ * are whole websites and rewriting one to change nothing is the most expensive
+ * no-op in the codebase.
+ *
+ * Needed because a deployment does not always pass through the writer that
+ * takes the copy: a mirrored deploy's second call patches the record instead,
+ * and a browser that deployed before this store existed has never called it at
+ * all. Those sessions are the ones whose only bytes are in `sessions`, so
+ * deleting the card would take the last copy with it.
+ *
+ * Best-effort, and honest about it: the return value says whether a copy is
+ * actually there, and nothing here throws.
+ *
+ * @param {string} hash
+ * @param {any} [record] the session record, when the caller already has it
+ * @returns {Promise<boolean>}
+ */
+export async function ensureStoredPayload(hash, record = null) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (!sanitized || typeof this.cache?.setPayload !== 'function') return false;
+
+    try {
+        const existing = await this.cache.getPayload?.(sanitized);
+        if (existing?.torrentFile && existing?.files?.length) return true;
+
+        const session = record || (await this.seedingStore().get(sanitized));
+        if (!session?.torrentFile || !session?.files?.length) return false;
+
+        return Boolean(
+            await this.cache.setPayload(sanitized, {
+                torrentFile: toBytes(session.torrentFile),
+                files: session.files
+            })
+        );
+    } catch (error) {
+        this.log(`Could not keep a reseedable copy of ${sanitized}: ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * Remember the payload the current load captured.
  *
  * One at a time: a payload is the whole site in bytes, and holding the last
@@ -734,8 +811,23 @@ export function rememberReseedPayload(hash, payload) {
 }
 
 /**
- * The payload for one hash, from the page if it is still here and from the
- * cache otherwise.
+ * The payload for one hash, from wherever this browser still holds it.
+ *
+ * Three places can have it, and which one did the downloading is none of this
+ * function's business — a site held here is reseedable whether it arrived over
+ * WebRTC, came from a GoFile mirror, or was deployed from this browser in the
+ * first place:
+ *
+ *   1. the page, when the site on screen was captured during this load;
+ *   2. the seeding store, when there is still a session for it — a record
+ *      already *is* a payload, metainfo and ordered entries and all, so a
+ *      paused or stopped site needs nothing else to go back on the air;
+ *   3. the payload store, which is what survives a deployment being deleted
+ *      from Pages and a visit ending.
+ *
+ * Whatever it comes from is checked against the metainfo before it is handed
+ * back, because the info hash is the site's address and only bytes that
+ * reproduce it are this site.
  *
  * @param {string} hash
  * @returns {Promise<any|null>}
@@ -744,21 +836,35 @@ export async function resolveReseedPayload(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
     if (this._reseedPayload?.hash === sanitized) return this._reseedPayload.payload;
 
-    try {
-        const entry = await this.cache?.getEntry?.(sanitized);
-        const stored = entry?.payload || null;
-        if (!stored?.files?.length || !stored.torrentFile) return null;
-        // Re-checked against the metainfo on the way out of storage, for the
-        // same reason it was checked on the way in: what gets announced has to
-        // be this site.
-        return buildReseedPayload({
-            torrentFile: stored.torrentFile,
-            files: stored.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) }))
-        });
-    } catch (error) {
-        this.log(`No reseed payload stored for ${sanitized}: ${error.message}`);
-        return null;
+    for (const source of [readSeedingRecordPayload, readStoredPayload]) {
+        try {
+            const held = await source.call(this, sanitized);
+            if (held) return buildReseedPayload(held);
+        } catch (error) {
+            this.log(`Reseed payload for ${sanitized} unusable from ${source.name}: ${error.message}`);
+        }
     }
+    return null;
+}
+
+/** A stored seeding session, read as the payload it already is. */
+async function readSeedingRecordPayload(hash) {
+    const record = await this.seedingStore().get(hash);
+    if (!record?.files?.length || !record.torrentFile) return null;
+    return {
+        torrentFile: toBytes(record.torrentFile),
+        files: record.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) }))
+    };
+}
+
+/** The payload store: what is left once a session is gone. */
+async function readStoredPayload(hash) {
+    const stored = await this.cache?.getPayload?.(hash);
+    if (!stored?.files?.length || !stored.torrentFile) return null;
+    return {
+        torrentFile: toBytes(stored.torrentFile),
+        files: stored.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) }))
+    };
 }
 
 /**
@@ -844,6 +950,9 @@ export async function reseedSite(hash) {
     // uses. A session that announces from a record nothing stored would be a
     // site that vanishes on the next reload with no card to explain it.
     await this.seedingStore().put(record);
+    // And kept where it outlives this session, so taking the card down later
+    // does not mean losing the ability to put it back up.
+    await this.cache?.setPayload?.(sanitized, { torrentFile: payload.torrentFile, files: payload.files });
     try {
         await this.resumeSeedingSession(record);
     } catch (error) {
@@ -1111,7 +1220,15 @@ export async function confirmResumeSeedingSession(hash) {
 /** @param {string} hash */
 export async function confirmDeleteSeedingSession(hash) {
     if (!(await confirmSeedingChange.call(this, 'delete', hash))) return;
-    this.toast?.info?.('The website and its stored copy are gone from this browser.', 'Website deleted');
+    // What this action does now, rather than what it used to: the session and
+    // the card go, and the site stops being served from here. It is not the
+    // end of the site in this browser — that is Delete data — so saying "its
+    // stored copy is gone" would contradict the dialog that was just agreed to.
+    this.toast?.info?.(
+        'This site is no longer served from this browser. While a copy of it is still here you can put it back on ' +
+            'the air with Reseed; Delete data, on the site itself, removes everything.',
+        'Website deleted'
+    );
 }
 
 /**

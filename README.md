@@ -29,7 +29,7 @@ The UI is organized into:
 - **Pages**
   - One card per site this browser is seeding, with live peer and upload counters
   - Seeding survives a reload and resumes with the wallet still locked
-  - **Stop seeding** takes a site off the air and keeps its card, with **Resume seeding** in its place; **Delete website** is the separate, permanent one. Both ask first
+  - **Stop seeding** takes a site off the air and keeps its card, with **Resume seeding** in its place; **Delete website** removes the card and the session. Both ask first
   - Sites reseeded from somebody else's link sit here too, marked **Reseeded** and credited to their own publisher
   - Signing out never stops a session
   - The tab appears only while at least one site is being hosted
@@ -39,7 +39,7 @@ The UI is organized into:
   - P2P gets one attempt with an 8-second deadline; there is no retry ladder
   - A quiet swarm transparently falls through to the mirror
   - One checkbox under the box turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
-  - The strip above a rendered site carries **Back**, the hash, the signature as a single mark, and the two things a visitor can decide: **Reseed** and **Delete data**
+  - The strip above a rendered site carries **Back** and the two things a visitor can decide: one control that is both the signature verdict and the offer to host (**✔ Reseed** when the publisher checks out, **⚠ Unverified** when nobody has vouched for the bytes), and **Delete data**
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
@@ -220,7 +220,7 @@ The payload now lives in IndexedDB (`web25-seeding`), and the page re-seeds ever
 - The resumed torrent must hash to the same info hash — the stored name and piece length are what guarantee it — and is dropped rather than announced if it does not
 - Signing out, clearing the site cache and staging the next deployment all leave live sessions alone
 - **Stop seeding** on a card in **Pages** takes that site off the air and marks the record paused: the card stays, offering **Resume seeding**, and a reload leaves it paused rather than quietly starting it again
-- **Delete website**, the separate button next to it, is the permanent one: the stored payload is erased and the card goes. Both actions ask first, and they ask different questions
+- **Delete website**, the separate button next to it, removes the session and the card: this browser stops serving the site, across reloads. It is not the end of the site here — while a copy is still cached, **Reseed** on the site itself puts it back on the air, and **Delete data** is what leaves nothing. All of these ask first, and they ask different questions
 - Closing the tab only pauses a session until the next visit
 - The advanced-tools drawer that used to hold a "Clear Cache" button — and take every live deployment down with it — is gone from the Deploy page entirely
 
@@ -230,12 +230,16 @@ A publisher's own deployments in **Pages** are gated on the wallet, exactly like
 
 ### 6b) Reseeding somebody else's site, and forgetting one
 
-The strip above a rendered site is the only WEB25 UI on screen while a peer-hosted page is up, so it carries only things a visitor can act on. The transport label that used to sit there ("From Cache" / "Fresh Download") was a fact about the load rather than about the site, and the signature is now a single mark with its full wording in `title` and `aria-label`. What took that room:
+The strip above a rendered site is the only WEB25 UI on screen while a peer-hosted page is up, so it carries only things a visitor can act on. The hash and the transport label that used to sit there ("From Cache" / "Fresh Download") were facts about the load rather than about the site, and on a phone they were what pushed the buttons off the row. What took that room:
 
-- **Reseed** — your browser joins the swarm serving the site you are looking at. It keeps its author, its signature, its date and its link; you become one of its hosts, and it appears in **Pages** as a card marked **Reseeded**, credited to the publisher who signed it rather than to you. Stop, resume and delete work on it exactly as they do on a site deployed here
+- **✔ Reseed / ⚠ Unverified** — one control, because the signature and the offer to host are one question: whether to put this browser's bandwidth behind somebody else's bytes. When the publisher's `.torrentchain` signature verifies it reads **✔ Reseed** and your browser joins the swarm serving the site; when nothing could be verified it reads **⚠ Unverified** and offers nothing at all. The mark is a glyph rather than a sentence, with the wording it replaces in the button's `title` and `aria-label`
 - **Delete data** — asks first, then erases everything this browser keeps about that site: seeding stops, the stored payload and the cached copy go, and it stops turning up in the search box. The same button and the same promise whether the site was deployed from here or only visited. The site itself is untouched — other peers and any mirror go on serving it
 
-Reseeding is byte-exact or it does not happen. The info hash *is* the site's address, so what gets announced has to be the payload as it travelled, not the site as it renders — in bundle mode those are different things, since one gzip file on the wire unpacks into the whole site. So the wire entries and the `.torrent` are captured during the load, checked against the info dictionary on the way into storage and again on the way out, and the re-seeded torrent's info hash is compared against the link's before anything is announced. A mismatch is refused and leaves no card behind. A site whose payload this browser never held — a partial download, a load with no `.torrent`, or one too large to hold a second copy of — says so on the button instead of offering a reseed that cannot work.
+A reseeded site keeps its author, its signature, its date and its link. You become one of its hosts, and it appears in **Pages** as a card marked **Reseeded**, credited to the publisher who signed it rather than to you; stop, resume and delete work on it exactly as on a site deployed here.
+
+Reseeding is byte-exact or it does not happen. The info hash *is* the site's address, so what gets announced has to be the payload as it travelled, not the site as it renders — in bundle mode those are different things, since one gzip file on the wire unpacks into the whole site. So the wire entries and the `.torrent` are kept, checked against the info dictionary on the way into storage and again on the way out, and the re-seeded torrent's info hash is compared against the link's before anything is announced. A mismatch is refused and leaves no card behind.
+
+**How the site arrived makes no difference.** A site this browser holds is reseedable whether it came over WebRTC, from a GoFile mirror, or was deployed here in the first place, and the payload is looked for in all three places it can be: the page (captured during this load), the seeding store (a session record already *is* a payload — metainfo and ordered entries — so a paused site needs nothing else), and a `payloads` store in the cache database, which is what survives a session ending. A deployment writes that store as it goes live, so deleting a site's card in Pages stops this browser hosting it without losing the ability to put it back: **Delete website** takes it off the air, **Reseed** puts it back while a copy is still here, and **Delete data** is the one that leaves nothing. Only a site whose payload was never held — a partial download, a load with no `.torrent`, or one too large to keep a second copy of — says so on the button instead of offering a reseed that cannot work.
 
 What "saved" means here is deliberately strict, because the promise is that the site is still there on the next load:
 

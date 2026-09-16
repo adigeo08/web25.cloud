@@ -114,11 +114,41 @@ test('stopping and deleting do not ask the same question', async () => {
 
     const [[stopTitle, stopDetail], [deleteTitle, deleteDetail]] = asked;
     assert.match(stopTitle, /Stop seeding/);
-    // Stopping has to promise the site stays; deleting has to say it does not.
+    // Stopping has to promise the card stays; deleting has to say it goes.
     assert.match(stopDetail, /resume seeding it at any time/i);
+    assert.match(stopDetail, /stays in Pages/i);
     assert.match(deleteTitle, /Delete website/);
-    assert.match(deleteDetail, /cannot be undone/i);
+    assert.match(deleteDetail, /card disappears/i);
     assert.notEqual(stopDetail, deleteDetail);
+});
+
+test('deleting a deployment is not the same promise as deleting its data', async () => {
+    const asked = [];
+    const capture = () => asked.push(dom.nodes.detail.textContent);
+
+    // Two different finalities, and the wording has to carry the difference.
+    // Delete website takes this browser off the air; while it still holds a
+    // copy of the site, Reseed can put it back. Delete data, offered on the
+    // site itself, is the one that leaves nothing to reseed from.
+    const deleting = panel.confirmSeedingAction('delete', { siteName: 'my-site', hash: HASH });
+    capture();
+    dom.nodes.cancel.click();
+    await deleting;
+
+    const forgetting = panel.confirmSeedingAction('forget', { siteName: 'my-site', hash: HASH });
+    capture();
+    dom.nodes.cancel.click();
+    await forgetting;
+
+    const [deleteDetail, forgetDetail] = asked;
+    assert.match(deleteDetail, /put it back on the air with Reseed/i);
+    // And the wording after the fact has to agree with the wording before it:
+    // the toast used to say the stored copy was gone, which is the opposite of
+    // what this dialog has just promised.
+    assert.doesNotMatch(deleteDetail, /stored copy is erased/i);
+    assert.match(forgetDetail, /cannot be undone/i);
+    assert.match(forgetDetail, /stops turning up when you search/i);
+    assert.notEqual(deleteDetail, forgetDetail);
 });
 
 test('the dialog names the site, and closes on Escape without acting', async () => {

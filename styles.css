@@ -4111,29 +4111,6 @@ input[type='checkbox'] {
     flex: 0 0 auto;
 }
 
-.viewer-identity {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
-    padding: 0.26rem 0.7rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface);
-}
-
-.viewer-brand {
-    font-size: 0.85rem;
-}
-
-.viewer-hash {
-    color: var(--text-dim);
-    font-size: 0.76rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* A quiet chip, kept for anywhere else that reports a plain fact. */
 .status-neutral {
     border-color: var(--border);
@@ -4141,41 +4118,39 @@ input[type='checkbox'] {
     color: var(--text-dim);
 }
 
-/* The signature, as a mark rather than a sentence.
-   A strip above somebody else's page has room for the things a visitor can do
-   and not much else, so the verdict is one glyph in a round badge. The wording
-   it replaces lives in `title` and `aria-label`, so a pointer and a screen
-   reader both still get it in full. */
+/* The signature, as a mark on the control that acts on it.
+   The verdict and the offer to host are one button, because they are one
+   question. The mark is a glyph rather than a sentence — a strip above
+   somebody else's page has room for what a visitor can do and little else —
+   and the wording it replaces lives in the button's `title` and `aria-label`,
+   so a pointer and a screen reader both still get it in full. */
 .viewer-verified {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.6rem;
-    height: 1.6rem;
     flex: 0 0 auto;
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    background: var(--surface-2);
-    font-size: 0.85rem;
+    font-size: 0.95rem;
     line-height: 1;
-    cursor: help;
 }
 
 .viewer-verified.is-verified {
-    border-color: rgba(52, 199, 123, 0.38);
-    background: var(--ok-soft);
     color: #56d295;
 }
 
 .viewer-verified.is-unverified {
-    border-color: rgba(229, 165, 60, 0.38);
-    background: var(--warn-soft);
     color: #eeb95e;
 }
 
 .viewer-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     flex: 0 0 auto;
     white-space: nowrap;
+}
+
+.viewer-action-label {
+    line-height: 1;
 }
 
 /* A disabled action still has to say why, so it keeps its tooltip: the pointer
@@ -4202,8 +4177,10 @@ input[type='checkbox'] {
         justify-content: flex-end;
     }
 
-    .viewer-identity {
-        flex: 1 1 auto;
+    /* Two buttons, side by side, the full width of the row. */
+    .site-viewer-header .viewer-action {
+        flex: 1 1 0;
+        justify-content: center;
     }
 }
 

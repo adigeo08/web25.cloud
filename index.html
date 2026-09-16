@@ -1331,34 +1331,40 @@
                 peer-hosted site is rendered, so it carries the way back out as
                 well as what was verified about what you are looking at.
             -->
+            <!--
+                Nothing in this strip is decoration. The way out on the left,
+                and on the right the two decisions a visitor can take about the
+                site in front of them. The hash used to sit in the middle and
+                the transport that fetched it on the right; neither was
+                something anybody could act on, and on a phone they were what
+                pushed the buttons off the row.
+            -->
             <div class="site-viewer-header">
                 <button id="back-to-peerweb" type="button" class="btn btn-secondary btn-sm viewer-back">
                     ← Back
                 </button>
-                <div class="viewer-identity">
-                    <span class="viewer-brand" aria-hidden="true">☁️</span>
-                    <code id="current-hash" class="viewer-hash"></code>
-                </div>
-                <!--
-                    The right-hand side is what you can do about the site in
-                    front of you. Which transport fetched it is not one of those
-                    things — it was a label nobody could act on — so the two
-                    decisions take that room instead: host it yourself, or drop
-                    everything this browser keeps about it. The signature is
-                    reduced to its mark, with the full wording on the element
-                    for anyone who asks for it.
-                -->
                 <div class="viewer-info">
-                    <span
-                        id="site-signature-status"
-                        class="viewer-verified is-unverified"
-                        role="img"
+                    <!--
+                        The signature and the offer to host are one control on
+                        purpose: whether you should rehost a site and whether
+                        its publisher checks out are the same question. Signed
+                        reads "✔ Reseed" and acts; unsigned reads "⚠
+                        Unverified" and does nothing — this browser does not
+                        put its bandwidth behind bytes nobody has vouched for.
+                        Navigation.js writes both halves.
+                    -->
+                    <button
+                        id="viewer-reseed"
+                        type="button"
+                        class="btn btn-secondary btn-sm viewer-action"
                         title="Publisher: unverified"
                         aria-label="Publisher: unverified"
-                        >⚠</span
+                        disabled
                     >
-                    <button id="viewer-reseed" type="button" class="btn btn-secondary btn-sm viewer-action">
-                        🌱 Reseed
+                        <span id="site-signature-status" class="viewer-verified is-unverified" aria-hidden="true"
+                            >⚠</span
+                        >
+                        <span id="viewer-reseed-label" class="viewer-action-label">Unverified</span>
                     </button>
                     <button id="viewer-forget" type="button" class="btn btn-clear btn-sm viewer-action">
                         🗑️ Delete data

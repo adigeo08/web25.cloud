@@ -68,7 +68,7 @@ function fakeIndexedDB(state) {
 }
 
 test('a database that is already past version 1 opens without a VersionError', async () => {
-    const idb = fakeIndexedDB({ version: 2, stores: ['sites', 'library'] });
+    const idb = fakeIndexedDB({ version: 2, stores: ['sites', 'library', 'payloads'] });
     global.indexedDB = idb;
 
     const cache = new PeerWebCache();
@@ -79,7 +79,7 @@ test('a database that is already past version 1 opens without a VersionError', a
 });
 
 test('the open handle is reused instead of reopened per operation', async () => {
-    const idb = fakeIndexedDB({ version: 5, stores: ['sites', 'library'] });
+    const idb = fakeIndexedDB({ version: 5, stores: ['sites', 'library', 'payloads'] });
     global.indexedDB = idb;
 
     const cache = new PeerWebCache();
@@ -99,7 +99,7 @@ test('a missing object store is added in one upgrade, at the version that exists
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 4], 'one probe, then one upgrade above the existing version');
-    assert.deepEqual(state.stores, ['sites', 'library']);
+    assert.deepEqual(state.stores, ['sites', 'library', 'payloads']);
 });
 
 test('a fresh browser creates the database and its store', async () => {
@@ -111,7 +111,7 @@ test('a fresh browser creates the database and its store', async () => {
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 1]);
-    assert.deepEqual(state.stores, ['sites', 'library']);
+    assert.deepEqual(state.stores, ['sites', 'library', 'payloads']);
 });
 
 test('a read that cannot open the database reports null instead of throwing', async () => {
@@ -142,5 +142,83 @@ test('a cache from before the library index gains it in one upgrade', async () =
     await cache.openDB();
 
     assert.deepEqual(idb.opens, [undefined, 3]);
-    assert.deepEqual(state.stores, ['sites', 'library'], 'the cached sites are left exactly where they are');
+    assert.deepEqual(
+        state.stores,
+        ['sites', 'library', 'payloads'],
+        'the cached sites are left exactly where they are'
+    );
+});
+
+test('a cache from before reseeding gains the payload store the same way', async () => {
+    // The state every visitor of the previous build is in. A missing payload
+    // store must not make the cache itself stop working — it only means
+    // nothing is reseedable until something is captured again.
+    const state = { version: 4, stores: ['sites', 'library'] };
+    const idb = fakeIndexedDB(state);
+    global.indexedDB = idb;
+
+    const cache = new PeerWebCache();
+    await cache.openDB();
+
+    assert.deepEqual(idb.opens, [undefined, 5]);
+    assert.deepEqual(state.stores, ['sites', 'library', 'payloads']);
+});
+
+test('a payload is only reported as kept once its transaction has committed', async () => {
+    // A successful `put` is not a durable write: IndexedDB reports the request
+    // inside the transaction, which can still abort afterwards. For a cached
+    // site that is a later cache miss; for a payload it is the difference
+    // between a publisher being told their copy is safe and losing it, because
+    // that answer is what makes deleting the session safe.
+    const transactions = [];
+    const store = {
+        put() {
+            const request = { onsuccess: null, onerror: null, result: undefined };
+            queueMicrotask(() => request.onsuccess?.());
+            return request;
+        }
+    };
+    global.indexedDB = {
+        open() {
+            const request = { onerror: null, onsuccess: null, onblocked: null, onupgradeneeded: null, result: null };
+            queueMicrotask(() => {
+                request.result = {
+                    version: 6,
+                    objectStoreNames: { contains: () => true },
+                    close() {},
+                    transaction() {
+                        const transaction = {
+                            oncomplete: null,
+                            onabort: null,
+                            onerror: null,
+                            objectStore: () => store
+                        };
+                        transactions.push(transaction);
+                        return transaction;
+                    }
+                };
+                request.onsuccess?.();
+            });
+            return request;
+        }
+    };
+
+    const cache = new PeerWebCache();
+    const payload = {
+        torrentFile: new Uint8Array([1, 2]),
+        files: [{ path: 'index.html', bytes: new Uint8Array([3]) }]
+    };
+
+    // Committed: the copy is there.
+    const kept = cache.setPayload('abc', payload);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    transactions[0].oncomplete();
+    assert.equal(await kept, true);
+
+    // Aborted after the request succeeded: the row was rolled back, and
+    // reporting it as kept would be a promise the browser did not keep.
+    const lost = cache.setPayload('def', payload);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    transactions[1].onabort();
+    assert.equal(await lost, false);
 });

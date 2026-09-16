@@ -5,42 +5,53 @@ import SiteSandbox from '../renderer/SiteSandbox.js';
 import { parseWeb25Address } from '../../gofile/Web25Url.js';
 
 /**
- * The signature, reduced to a mark.
+ * The signature, reduced to a mark on the control that acts on it.
  *
- * A viewer header is a strip above somebody else's page: the sentence that used
- * to live here ("Verified publisher: 0x1234…") spent the width the visitor
- * needs for the things they can actually do, and said in words what a tick says
- * at a glance. So the mark is the whole chip — and because a mark alone is not
- * self-explanatory, the wording it replaces stays on the element, where a
- * tooltip and a screen reader both find it.
+ * The verdict and the offer to host are one button because they are one
+ * question: whether to put this browser's bandwidth behind somebody else's
+ * bytes. Signed reads "✔ Reseed" and acts. Unsigned reads "⚠ Unverified" and
+ * does nothing — there is no version of this strip where you are invited to
+ * rehost a site whose publisher could not be checked.
  *
- * Unverified is never silent. It gets its own mark rather than no mark, because
- * "nothing shown" reads as "nothing wrong".
+ * A sentence would have said in words what a tick says at a glance, and spent
+ * the width the buttons need, so the wording lives in `title` and `aria-label`
+ * where a pointer and a screen reader both find it. Unverified is never
+ * silent: it gets its own mark rather than no mark, because "nothing shown"
+ * reads as "nothing wrong".
  *
  * @param {{ verified?: boolean, label?: string }} status
  */
 export function updateSiteSignatureBadge(status) {
     const badge = document.getElementById('site-signature-status');
-    if (!badge) return;
-
     const verified = Boolean(status?.verified);
     const label = status?.label || (verified ? 'Verified publisher' : 'Publisher: unverified');
 
-    badge.textContent = verified ? '✔' : '⚠';
-    badge.className = verified ? 'viewer-verified is-verified' : 'viewer-verified is-unverified';
-    badge.setAttribute('role', 'img');
-    badge.setAttribute('title', label);
-    badge.setAttribute('aria-label', label);
+    if (badge) {
+        badge.textContent = verified ? '✔' : '⚠';
+        badge.className = verified ? 'viewer-verified is-verified' : 'viewer-verified is-unverified';
+    }
+
+    // The verdict decides what the button is allowed to offer, so it is
+    // re-resolved rather than left showing the previous site's answer.
+    this._siteVerified = verified;
+    this._siteVerdictLabel = label;
+    void this.refreshViewerActions(this.currentHash || '');
 }
 
-/** What the Reseed button says, per state. Disabled states carry the reason. */
+/**
+ * What the combined control says, per state.
+ *
+ * `unverified` is the one that is not about hosting at all: it reports the
+ * signature and offers nothing, so its wording comes from the verdict itself.
+ */
 const RESEED_STATES = {
-    pending: { text: '🌱 Reseed', disabled: true, title: 'Checking whether this site can be seeded from here…' },
-    available: { text: '🌱 Reseed', disabled: false, title: 'Serve this site to other visitors from your browser' },
-    resume: { text: '▶️ Resume seeding', disabled: false, title: 'This site is stored here. Put it back on the air.' },
-    seeding: { text: '🌱 Seeding', disabled: true, title: 'You are already seeding this site from this browser' },
+    unverified: { text: 'Unverified', disabled: true, title: '' },
+    pending: { text: 'Reseed', disabled: true, title: 'Checking whether this site can be seeded from here…' },
+    available: { text: 'Reseed', disabled: false, title: 'Serve this site to other visitors from your browser' },
+    resume: { text: 'Resume seeding', disabled: false, title: 'This site is stored here. Put it back on the air.' },
+    seeding: { text: 'Seeding', disabled: true, title: 'You are already seeding this site from this browser' },
     unavailable: {
-        text: '🌱 Reseed',
+        text: 'Reseed',
         disabled: true,
         title: 'This browser does not hold the original payload of this site, so it cannot be seeded from here'
     }
@@ -55,11 +66,15 @@ const RESEED_STATES = {
  * does not happen.
  *
  * @param {string} hash
- * @returns {Promise<'pending'|'available'|'resume'|'seeding'|'unavailable'>}
+ * @returns {Promise<'unverified'|'pending'|'available'|'resume'|'seeding'|'unavailable'>}
  */
 export async function resolveReseedState(hash) {
     const sanitized = `${hash || ''}`.toLowerCase();
     if (!sanitized) return 'unavailable';
+    // An unverified publisher ends the question. Reseeding is this browser
+    // offering somebody else's bytes to strangers under a signed address, and
+    // a signature that did not check out is exactly the case where it must not.
+    if (this._siteVerified !== true) return 'unverified';
     if (this.seedingTorrents?.().has(sanitized)) return 'seeding';
 
     let record = null;
@@ -96,13 +111,30 @@ export async function refreshViewerActions(hash) {
     }
     if (!reseed) return;
 
+    const verdict =
+        this._siteVerdictLabel || (this._siteVerified === true ? 'Verified publisher' : 'Publisher: unverified');
     const applyState = (name) => {
         const state = RESEED_STATES[name] || RESEED_STATES.pending;
-        reseed.textContent = state.text;
+        // Only the label changes; the mark next to it belongs to the signature
+        // and is written by `updateSiteSignatureBadge`.
+        const label = document.getElementById('viewer-reseed-label');
+        if (label) label.textContent = state.text;
+        else reseed.textContent = state.text;
         reseed.disabled = state.disabled;
-        reseed.setAttribute('title', state.title);
+        // The verdict comes first in the description either way: it is what
+        // decides whether the rest of the sentence is even on offer.
+        const description = state.title ? `${verdict} — ${state.title}` : verdict;
+        reseed.setAttribute('title', description);
+        reseed.setAttribute('aria-label', description);
         reseed.setAttribute('data-reseed-state', name);
     };
+
+    // An unverified site is not pending anything: the answer is already known
+    // and does not depend on a store lookup.
+    if (this._siteVerified !== true) {
+        applyState('unverified');
+        return;
+    }
 
     applyState('pending');
     if (!sanitized) return;
@@ -123,6 +155,15 @@ export async function refreshViewerActions(hash) {
 export async function handleViewerReseed() {
     const hash = `${this.currentHash || ''}`.toLowerCase();
     if (!hash) return;
+    // The button is disabled for an unverified site, and this is the same rule
+    // stated where it is enforced rather than only where it is displayed.
+    if (this._siteVerified !== true) {
+        this.toast?.warning?.(
+            'This site has no publisher signature that could be verified, so it cannot be seeded from your browser.',
+            'Unverified publisher'
+        );
+        return;
+    }
     await this.confirmReseedSite(hash, { siteName: this.currentSiteTitle?.() || '' });
     await this.refreshViewerActions(hash);
 }
@@ -286,7 +327,6 @@ export function convertNavigationToVirtualUrl(href, basePath, hash) {
 export function showSiteViewer(site, hash, fromCache) {
     const mainContent = document.getElementById('main-content');
     const siteViewer = document.getElementById('site-viewer');
-    const currentHash = document.getElementById('current-hash');
     const iframe = /** @type {HTMLIFrameElement} */ (document.getElementById('site-frame'));
 
     if (mainContent) {
@@ -295,17 +335,16 @@ export function showSiteViewer(site, hash, fromCache) {
     if (siteViewer) {
         siteViewer.classList.remove('hidden');
     }
-    if (currentHash) {
-        currentHash.textContent = `Hash: ${hash.substring(0, 16)}...`;
-    }
-    // Where the bytes came from is a fact about the load, not about the site:
-    // it is logged, and the space it used to occupy belongs to the two actions.
+    // The hash and the transport are both facts about the load rather than
+    // about the site, and neither is something a visitor can act on. They are
+    // logged; the strip is for the way out and the two decisions.
     this.log(`Rendering ${hash} from ${fromCache ? 'the local cache' : 'a fresh download'}.`);
 
+    // This also re-resolves the control it shares with Reseed, so there is one
+    // place that decides what the strip offers for this site.
     this.updateSiteSignatureBadge(
         this.currentSiteSignatureStatus || { label: 'Publisher: unverified', verified: false }
     );
-    void this.refreshViewerActions(hash);
 
     if (iframe) {
         iframe.onerror = (e) => {
@@ -370,6 +409,11 @@ export function showMainContent() {
     this.currentHash = null;
     this._currentSiteTitle = '';
     this.currentGofileLocator = null;
+    // The next site gets its own verdict. Carrying this one's over would mean
+    // a strip offering to reseed on the strength of a signature that belonged
+    // to a different site.
+    this._siteVerified = false;
+    this._siteVerdictLabel = '';
     // The captured payload is a whole site in memory and the viewer is the only
     // place that offers to reseed it. The cached copy is what a later visit
     // reseeds from, so letting this go costs nothing and keeps a browsing

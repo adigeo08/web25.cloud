@@ -29,6 +29,13 @@ class PeerWeb {
         /** The `<title>` the sandboxed site reported, for the viewer dialogs. */
         this._currentSiteTitle = '';
         /**
+         * Whether the site on screen carries a signature that checked out, and
+         * the wording that says so. The viewer's one combined control reads
+         * both: a site nobody has vouched for is never offered for reseeding.
+         */
+        this._siteVerified = false;
+        this._siteVerdictLabel = '';
+        /**
          * The payload of the site on screen, exactly as it travelled.
          *
          * One at a time: this is a whole website in memory, held only so the
