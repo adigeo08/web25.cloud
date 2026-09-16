@@ -24,6 +24,19 @@ class PeerWeb {
         this.toast = new ToastNotification();
         this.currentSiteData = null;
         this.currentHash = null;
+        /** The mirror locator the current site was reached by, if any. */
+        this.currentGofileLocator = null;
+        /** The `<title>` the sandboxed site reported, for the viewer dialogs. */
+        this._currentSiteTitle = '';
+        /**
+         * The payload of the site on screen, exactly as it travelled.
+         *
+         * One at a time: this is a whole website in memory, held only so the
+         * Reseed button can act without a round trip to the cache — and
+         * dropped again the moment the viewer closes.
+         * @type {{ hash: string, payload: any }|null}
+         */
+        this._reseedPayload = null;
         /** @type {import('./renderer/SiteSandbox.js').default | null} */
         this.siteSandbox = null;
         this.serviceWorkerReady = false;
@@ -53,7 +66,7 @@ class PeerWeb {
          */
         this._pagesTabAllowed = false;
         this.signedTorrentMetadata = new Map();
-        this.currentSiteSignatureStatus = { label: "Publisher: unverified", verified: false };
+        this.currentSiteSignatureStatus = { label: 'Publisher: unverified', verified: false };
         const overrideTrackers =
             Array.isArray(window.PEERWEB_TRACKERS) && window.PEERWEB_TRACKERS.length > 0
                 ? window.PEERWEB_TRACKERS

@@ -27,6 +27,12 @@ const STATE_LABELS = {
  * one is a pause the publisher can undo from the same card, the other throws
  * the stored copy away. Resuming asks too, because it puts a site back on the
  * air — which is not something to do by brushing a button.
+ *
+ * The last two belong to the viewer rather than a card. `reseed` starts hosting
+ * a stranger's site from this browser, and `forget` is the delete offered while
+ * looking at a site: the same question as `delete`, asked of sites this browser
+ * only visited, so it talks about what is kept here rather than about a
+ * deployment.
  */
 const ACTION_PROMPTS = {
     pause: {
@@ -60,6 +66,31 @@ const ACTION_PROMPTS = {
         confirmClass: 'btn btn-clear',
         cancel: 'Keep it',
         fallback: (name) => `Delete ${name} from this browser? The stored copy is erased and cannot be recovered.`
+    },
+    reseed: {
+        title: '🌱 Reseed this site',
+        prompt: 'Reseed',
+        detail:
+            'Your browser starts serving this site to other visitors, under the same WEB25 link and the same ' +
+            'author — it stays their site, you become one of its hosts. It appears in Pages alongside your own ' +
+            'sites, where you can stop or delete it whenever you like.',
+        confirm: 'Yes, seed it from here',
+        confirmClass: 'btn btn-primary',
+        cancel: 'Not now',
+        fallback: (name) => `Seed ${name} from this browser? Other visitors will be able to load it from you.`
+    },
+    forget: {
+        title: '🗑️ Delete site data',
+        prompt: 'Delete everything this browser keeps about',
+        detail:
+            'This cannot be undone. Seeding stops, the stored payload and the cached copy are erased, and the site ' +
+            'stops turning up when you search. The site itself is unaffected: other peers — and any mirror — go on ' +
+            'serving it, and the link keeps working. This is only about your browser.',
+        confirm: 'Yes, delete the data',
+        confirmClass: 'btn btn-clear',
+        cancel: 'Keep it',
+        fallback: (name) =>
+            `Delete everything this browser keeps about ${name}? Seeding stops and the cached copy is erased.`
     }
 };
 
@@ -268,6 +299,10 @@ function buildCard(session, openHashes) {
     const heading = el('div', 'page-card-heading');
     heading.appendChild(el('span', 'page-card-title', session.siteName || 'website'));
     heading.appendChild(el('code', 'page-card-hash', shortHash(session.hash)));
+    // A site being hosted here for somebody else says so on the collapsed
+    // card, not three rows down: the one thing that must never be ambiguous in
+    // this list is which of these sites you published.
+    if (session.reseeded) heading.appendChild(el('span', 'page-card-role', 'Reseeded'));
     summary.appendChild(heading);
 
     const state = STATE_LABELS[session.state] || STATE_LABELS.stopped;
@@ -301,6 +336,14 @@ function buildCard(session, openHashes) {
             'GoFile fallback mirror',
             session.mirror?.locator || MIRROR_LABELS[session.mirrorState] || 'Not created',
             { code: Boolean(session.mirror?.locator) }
+        )
+    );
+    facts.appendChild(
+        factRow(
+            'Your role',
+            session.reseeded
+                ? 'Host — you are reseeding somebody else’s site'
+                : 'Publisher — deployed from this browser'
         )
     );
     facts.appendChild(factRow('Signed by', session.signedBy || 'Unknown', { code: true }));
@@ -342,7 +385,9 @@ function buildCard(session, openHashes) {
 
     // Deleting is its own button, never the side-effect of stopping: stopping a
     // site used to throw it away, which made a pause impossible to ask for.
-    const remove = el('button', 'btn btn-clear btn-sm', '🗑️ Delete website');
+    // On a reseeded card it is not "your website" being deleted — it is the
+    // copy this browser holds — and the label has to be honest about that.
+    const remove = el('button', 'btn btn-clear btn-sm', session.reseeded ? '🗑️ Stop hosting' : '🗑️ Delete website');
     remove.setAttribute('data-page-action', 'delete');
     remove.setAttribute('data-page-hash', session.hash);
     actions.appendChild(remove);

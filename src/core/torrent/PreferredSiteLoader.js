@@ -78,6 +78,10 @@ export async function loadSite(addressInput, retryLocator = null) {
     this._gofileFallbackController = null;
     this.releaseLoadTorrent?.();
     this.currentHash = sanitizedHash;
+    // The locator is part of this site's address, so it has to outlive the
+    // load: a reseed here shares the same link a visitor arrived on, mirror
+    // and all, rather than a hash-only one that drops the fallback.
+    this.currentGofileLocator = gofileLocator;
     initializeSignatureState.call(this, sanitizedHash);
 
     // Cache is intentionally checked before WebTorrent readiness. A cached site

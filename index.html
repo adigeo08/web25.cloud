@@ -92,7 +92,17 @@
                 <button class="tab-btn active" data-tab="browse" role="tab" aria-selected="true">
                     🔍 Search
                 </button>
-                <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false">🚀 Deploy</button>
+                <!--
+                    Signed out is not a guess: the signing worker starts locked
+                    on every page load, so this is what the tab reads until
+                    somebody unlocks. It used to ship as "Deploy" and was
+                    corrected by JS once the wallet had been read, which on a
+                    slow phone meant a Deploy tab offered to a guest for as
+                    long as the libraries took to load.
+                -->
+                <button class="tab-btn" data-tab="publish" role="tab" aria-selected="false" aria-busy="true">
+                    🔐 Sign in
+                </button>
                 <button class="tab-btn" data-tab="pages" role="tab" aria-selected="false" style="display: none">
                     📄 Pages
                 </button>
@@ -293,7 +303,7 @@
 
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
-                    <section id="deploy-auth-wall" class="quick-upload card-base">
+                    <section id="deploy-auth-wall" class="quick-upload card-base" aria-busy="true">
                         <div>
                             <h3>🔐 Welcome back</h3>
                             <!--
@@ -308,7 +318,20 @@
                             <p id="deploy-wall-intro">Choose how you want to continue.</p>
                         </div>
 
-                        <div class="button-group">
+                        <!--
+                            Which of these applies depends on whether this
+                            browser already holds a wallet, which takes an
+                            IndexedDB read to answer. Until it does, the row is
+                            a placeholder rather than all three buttons at
+                            once: offering Unlock and Create together, and then
+                            withdrawing one, is worse than a moment of waiting.
+                        -->
+                        <div id="deploy-wall-loading" class="auth-skeleton" aria-hidden="true">
+                            <span class="skeleton-bar"></span>
+                            <span class="skeleton-bar"></span>
+                        </div>
+
+                        <div id="deploy-wall-actions" class="button-group hidden">
                             <button id="unlock-wallet-btn" class="btn btn-primary">🔓 Unlock Wallet</button>
                             <button id="register-wallet-btn" class="btn btn-secondary">✨ Create Wallet</button>
                             <button id="recover-wallet-btn" class="btn btn-secondary">🌱 Recover Wallet</button>
@@ -1316,9 +1339,30 @@
                     <span class="viewer-brand" aria-hidden="true">☁️</span>
                     <code id="current-hash" class="viewer-hash"></code>
                 </div>
+                <!--
+                    The right-hand side is what you can do about the site in
+                    front of you. Which transport fetched it is not one of those
+                    things — it was a label nobody could act on — so the two
+                    decisions take that room instead: host it yourself, or drop
+                    everything this browser keeps about it. The signature is
+                    reduced to its mark, with the full wording on the element
+                    for anyone who asks for it.
+                -->
                 <div class="viewer-info">
-                    <span id="cache-status" class="status-chip status-neutral"></span>
-                    <span id="site-signature-status" class="status-chip status-pending">Publisher: unverified</span>
+                    <span
+                        id="site-signature-status"
+                        class="viewer-verified is-unverified"
+                        role="img"
+                        title="Publisher: unverified"
+                        aria-label="Publisher: unverified"
+                        >⚠</span
+                    >
+                    <button id="viewer-reseed" type="button" class="btn btn-secondary btn-sm viewer-action">
+                        🌱 Reseed
+                    </button>
+                    <button id="viewer-forget" type="button" class="btn btn-clear btn-sm viewer-action">
+                        🗑️ Delete data
+                    </button>
                 </div>
             </div>
             <!--

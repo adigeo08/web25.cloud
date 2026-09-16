@@ -18,6 +18,7 @@ import {
     gofileMirrorFilename,
     verifyGoFileMirror
 } from '../../gofile/GoFileMirrorCodec.js';
+import { buildReseedPayload, normalizePayloadPath } from './ReseedPayload.js';
 import { attachTrackerConnectionGuard } from './TrackerConnectionGuard.js';
 
 /**
@@ -95,6 +96,7 @@ export async function loadSite(addressInput, retryLocator = null) {
     }
 
     this.currentHash = sanitizedHash;
+    this.currentGofileLocator = gofileLocator;
     const knownSignature = this.signedTorrentMetadata.get(sanitizedHash);
     this.currentSiteSignatureStatus = knownSignature
         ? this.buildSignatureState({
@@ -694,6 +696,72 @@ export function notifySignatureAbort(hash, publisher, reason = 'receiver-signatu
     }
 }
 
+/**
+ * The largest site a visit will hold a reseedable copy of.
+ *
+ * Reseeding needs the payload exactly as it travelled, which is a second copy
+ * of the site in memory while the first one is being rendered from. Generous
+ * enough to cover any static site anybody would deploy this way, and small
+ * enough that the copy cannot be what takes a phone down.
+ */
+const MAX_RESEED_PAYLOAD_BYTES = 128 * 1024 * 1024;
+
+/**
+ * Keep what it would take to put this site back on the air.
+ *
+ * A visitor can only reseed a site they hold the *payload* of, and the payload
+ * is what came over the wire, not what ended up on screen: in bundle mode the
+ * swarm serves one gzip file that unpacks into the whole site, and re-packing
+ * the rendered files would not reproduce it byte for byte. So the wire entries
+ * are read once, here, while the transport that fetched them is still open.
+ *
+ * Best-effort throughout. A site that cannot be captured still renders, still
+ * caches and is still searchable — the only thing lost is the Reseed button,
+ * and a button that lies about what it can serve is worse than one that says
+ * it cannot.
+ *
+ * @param {any} torrent the live torrent, or the GoFile mirror adapter
+ * @param {string} hash
+ * @returns {Promise<any|null>}
+ */
+export async function captureReseedPayload(torrent, hash) {
+    try {
+        const torrentFile = torrent?.torrentFile || torrent?._torrentFile || null;
+        if (!torrentFile) {
+            this.log(`No .torrent metadata for ${hash}; this site cannot be reseeded from here.`);
+            return null;
+        }
+
+        // Capturing means a second copy of the payload in memory, on top of
+        // the site that is about to render from the first one. A site big
+        // enough for that to matter is not worth risking the render for: it
+        // still loads, it simply cannot be reseeded from this visit.
+        const size = Number(torrent.length) || 0;
+        if (size > MAX_RESEED_PAYLOAD_BYTES) {
+            this.log(
+                `Site ${hash} is ${this.formatBytes(size)}; too large to hold a reseedable copy of alongside the render.`
+            );
+            return null;
+        }
+
+        const files = [];
+        for (const file of torrent.files || []) {
+            const path = normalizePayloadPath(file.path || file.name || '');
+            const bytes = await this.readFileBuffer(file);
+            files.push({ path, type: file.type || this.getContentType(path), bytes });
+        }
+
+        // Validated against the metainfo rather than assumed: a payload that
+        // would announce under a different info hash is not this site.
+        const payload = buildReseedPayload({ torrentFile, files });
+        this.log(`Captured the reseed payload for ${hash} (${payload.files.length} entries).`);
+        return payload;
+    } catch (error) {
+        this.log(`Reseed payload unavailable for ${hash}: ${error.message}`);
+        return null;
+    }
+}
+
 export function readFileBuffer(file) {
     return new Promise((resolve, reject) => {
         file.getBuffer((error, buffer) => {
@@ -883,7 +951,9 @@ export async function processTorrentEarly(torrent, hash) {
     this.attachSignatureManifest(siteData, hash);
     this.validateReceivedManifest(siteData, hash);
 
-    // Cache the site (even if incomplete)
+    // Cache the site (even if incomplete) — but with no reseed payload: half a
+    // download is not this site's payload, and it would announce under an info
+    // hash nothing matches. The completed pass captures that.
     await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
     // Newly cached means newly findable by name.
     void this.refreshLibrary?.();
@@ -982,7 +1052,9 @@ export async function processTorrent(torrent, hash) {
     this.validateReceivedManifest(siteData, hash);
 
     // Cache the site
-    await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+    const payload = await this.captureReseedPayload(torrent, hash);
+    this.rememberReseedPayload(hash, payload);
+    await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus, payload });
     // Newly cached means newly findable by name.
     void this.refreshLibrary?.();
 
@@ -1066,7 +1138,9 @@ export async function processTorrentGzipBundle(torrent, hash) {
 
         this.attachSignatureManifest(siteData, hash);
         this.validateReceivedManifest(siteData, hash);
-        await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus });
+        const payload = await this.captureReseedPayload(torrent, hash);
+        this.rememberReseedPayload(hash, payload);
+        await this.cache.set(hash, siteData, { signatureState: this.currentSiteSignatureStatus, payload });
         // Newly cached means newly findable by name.
         void this.refreshLibrary?.();
         this.displaySite(siteData, hash);

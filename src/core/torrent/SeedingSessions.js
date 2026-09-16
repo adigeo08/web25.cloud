@@ -13,9 +13,17 @@
  * publisher pressing Stop seeding (paused, and resumable), pressing Delete
  * website (gone, payload and all), and the tab going away — and that last one
  * resumes by itself on the next visit.
+ *
+ * A session does not have to start with a deployment. A visitor looking at
+ * somebody else's site can press Reseed and host it from here, which writes
+ * exactly the same kind of record — marked `reseeded`, and carrying the
+ * original publisher rather than whoever is signed in.
  */
 
 import SeedingSessionStore from './SeedingSessionStore.js';
+import { buildReseedPayload, readPublisherFromPayload } from './ReseedPayload.js';
+import { formatWeb25Url } from '../../gofile/Web25Url.js';
+import { gofileMirrorFilename } from '../../gofile/GoFileMirrorCodec.js';
 import { bindPagesPanel, confirmSeedingAction, renderPages, updatePagesLiveStats } from '../../ui/pages/PagesPanel.js';
 
 /** How often the Pages cards refresh their live peer/upload counters. */
@@ -664,6 +672,11 @@ export async function listSeedingSessionViews() {
             mirror: record.deploy?.mirror || null,
             mirrorState: record.deploy?.mirrorState || 'disabled',
             hasTorrentFile: Boolean(record.torrentFile),
+            // Whose site this is. A reseeded card sits in Pages next to the
+            // publisher's own sites and must never read as one of them: the
+            // author on it is somebody else, and the card says out loud that
+            // this browser is a host rather than the publisher.
+            reseeded: record.reseeded === true,
             paused: record.paused === true,
             // Paused is a decision, not a failure: it reads differently on the
             // card and it is the state a reload preserves.
@@ -702,6 +715,250 @@ export function stopSeedingStatsTimer() {
     this._seedingStatsTimer = null;
 }
 
+/**
+ * Remember the payload the current load captured.
+ *
+ * One at a time: a payload is the whole site in bytes, and holding the last
+ * three visits' worth in the page would cost more memory than the site being
+ * looked at. The cached copy is what makes Reseed work on a later visit; this
+ * is only the fast path for the site on screen, and the one thing that still
+ * works when the cache write itself failed.
+ *
+ * @param {string} hash
+ * @param {any} payload
+ */
+export function rememberReseedPayload(hash, payload) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    this._reseedPayload = payload ? { hash: sanitized, payload } : null;
+    return this._reseedPayload;
+}
+
+/**
+ * The payload for one hash, from the page if it is still here and from the
+ * cache otherwise.
+ *
+ * @param {string} hash
+ * @returns {Promise<any|null>}
+ */
+export async function resolveReseedPayload(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (this._reseedPayload?.hash === sanitized) return this._reseedPayload.payload;
+
+    try {
+        const entry = await this.cache?.getEntry?.(sanitized);
+        const stored = entry?.payload || null;
+        if (!stored?.files?.length || !stored.torrentFile) return null;
+        // Re-checked against the metainfo on the way out of storage, for the
+        // same reason it was checked on the way in: what gets announced has to
+        // be this site.
+        return buildReseedPayload({
+            torrentFile: stored.torrentFile,
+            files: stored.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) }))
+        });
+    } catch (error) {
+        this.log(`No reseed payload stored for ${sanitized}: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Host somebody else's site from this browser.
+ *
+ * The publisher of a site is whoever signed it, and that does not change by
+ * being mirrored: the record this writes carries the original publisher, the
+ * original signature and the original date, with `reseeded` marking this
+ * browser as a host rather than the author. It lands in Pages next to the
+ * user's own deployments because that is where hosting is managed — stopping,
+ * resuming and deleting it work exactly as they do for a site deployed here.
+ *
+ * @param {string} hash
+ */
+export async function reseedSite(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (!sanitized) throw new Error('There is no site to reseed.');
+    // A cached site renders before WebTorrent has finished booting, so the
+    // button can be reached with nothing to announce through yet.
+    if (!this.clientReady || !this.client) {
+        throw new Error('The peer-to-peer client is still starting up. Try again in a moment.');
+    }
+
+    const existing = await this.seedingStore().get(sanitized);
+    if (existing) {
+        // Already known here. A paused record is the interesting case: the
+        // answer to "seed this" is to put it back on the air, not to write a
+        // second copy of a payload that is already stored.
+        if (existing.paused === true) {
+            await this.resumePausedSession(sanitized);
+            return { hash: sanitized, state: 'resumed' };
+        }
+        if (this.seedingTorrents().has(sanitized)) return { hash: sanitized, state: 'already-seeding' };
+        await this.resumeSeedingSession(existing);
+        await this.refreshPagesPanel();
+        return { hash: sanitized, state: 'resumed' };
+    }
+
+    const payload = await this.resolveReseedPayload(sanitized);
+    if (!payload) {
+        throw new Error(
+            'This browser does not hold the original payload of this site, so it cannot announce it under the same address.'
+        );
+    }
+
+    const publisher = readPublisherFromPayload(payload.files);
+    const locator = this.currentGofileLocator || null;
+    const url = buildReseedUrl(sanitized, locator);
+    // Only if it is about *this* site. `currentSiteSignatureStatus` follows
+    // whatever the viewer last rendered, and attributing one site's bytes to
+    // another site's publisher is the one mistake this record must not make.
+    const signatureState =
+        this.currentSiteSignatureStatus &&
+        `${this.currentSiteSignatureStatus.torrentHash || ''}`.toLowerCase() === sanitized
+            ? this.currentSiteSignatureStatus
+            : null;
+
+    const record = {
+        hash: sanitized,
+        siteName: payload.name || 'website',
+        torrentName: payload.name || 'website',
+        pieceLength: payload.pieceLength || null,
+        createdAt: publisher.signedAt || new Date().toISOString(),
+        savedAt: Date.now(),
+        length: payload.length,
+        fileCount: payload.files.length,
+        torrentFile: payload.torrentFile,
+        files: payload.files,
+        reseeded: true,
+        deploy: {
+            url,
+            signedBy: publisher.publisher || signatureState?.publisher || '',
+            signature: publisher.signature || '',
+            signatureAlgorithm: publisher.signatureAlgorithm || '',
+            signedAt: publisher.signedAt || '',
+            signatureStatus: signatureState?.verified ? 'VERIFIED' : 'UNVERIFIED',
+            mirror: locator ? { locator, filename: mirrorFilenameFor(sanitized) } : null,
+            mirrorState: locator ? 'ready' : 'disabled'
+        }
+    };
+
+    // Durable first, announced second — the same order every other write here
+    // uses. A session that announces from a record nothing stored would be a
+    // site that vanishes on the next reload with no card to explain it.
+    await this.seedingStore().put(record);
+    try {
+        await this.resumeSeedingSession(record);
+    } catch (error) {
+        // The payload does not reproduce this info hash, or WebTorrent refused
+        // it. Either way this browser is not hosting the site, so the record
+        // goes rather than sitting in Pages claiming otherwise.
+        try {
+            await this.seedingStore().remove(sanitized);
+        } catch (_) {}
+        throw new Error(`This site could not be reseeded from here: ${error.message}`);
+    }
+
+    this._seedingErrors?.delete(sanitized);
+    this.broadcastSeedingChange('resumed', sanitized);
+    this.log(`Reseeding ${sanitized} (${record.siteName}) published by ${record.deploy.signedBy || 'unknown'}.`);
+    await this.refreshPagesPanel();
+    return { hash: sanitized, state: 'seeding' };
+}
+
+/**
+ * Forget one site completely, whoever published it.
+ *
+ * The same button for your own deployment and for somebody else's, because it
+ * is the same promise: after this, nothing about that site is left in this
+ * browser. The seeding session goes, so it stops being served; the stored
+ * payload goes with it; the cached copy and its library row go, so it stops
+ * turning up in the search box; and the in-page state goes, so the tab is not
+ * still holding a site the store has forgotten.
+ *
+ * The site itself is untouched — other peers and any mirror go on serving it.
+ * This is about what this browser keeps.
+ *
+ * @param {string} hash
+ */
+export async function forgetSiteData(hash) {
+    const sanitized = `${hash || ''}`.toLowerCase();
+    if (!sanitized) throw new Error('There is no site to delete.');
+
+    const failures = [];
+
+    // Hosting first: while a torrent is up, the site is still being handed to
+    // strangers, which is the part of "delete" that is visible from outside.
+    try {
+        await this.seedingStore().remove(sanitized);
+    } catch (error) {
+        failures.push(`its saved session (${error.message})`);
+    }
+    this.releaseSeedingTorrent(sanitized);
+
+    try {
+        await this.cache.delete(sanitized);
+    } catch (error) {
+        failures.push(`its cached copy (${error.message})`);
+    }
+
+    // In-page state. None of this is durable, but all of it would keep the
+    // site alive in this tab: the signature it was rendered under, the payload
+    // held for reseeding, and the bytes the sandbox is reading from.
+    this.signedTorrentMetadata?.delete(sanitized);
+    this._seedingErrors?.delete(sanitized);
+    if (this._reseedPayload?.hash === sanitized) this._reseedPayload = null;
+    if (`${this.currentHash || ''}`.toLowerCase() === sanitized) {
+        this.currentSiteData = null;
+        this.currentGofileLocator = null;
+    }
+
+    if (this.lastDeployResult?.hash === sanitized) {
+        this.lastDeployResult = null;
+        this.clearDeploySession?.();
+    }
+
+    this.broadcastSeedingChange('deleted', sanitized);
+    this.log(`Deleted every local trace of ${sanitized}.`);
+
+    await this.refreshPagesPanel();
+    // The search box answers from the library index, which has just lost a row.
+    void this.refreshLibrary?.();
+
+    if (failures.length > 0) {
+        throw new Error(`Some of this site is still here: ${failures.join(', ')}.`);
+    }
+    return true;
+}
+
+/** The mirror's filename is derived from the hash, so it needs nothing stored. */
+function mirrorFilenameFor(hash) {
+    try {
+        return gofileMirrorFilename(hash);
+    } catch (_) {
+        return '';
+    }
+}
+
+/**
+ * The link a reseeded site is shared under: this browser's own address for it,
+ * mirror locator included when the visitor arrived by one.
+ *
+ * An empty string when there is no origin to build from, which the card and
+ * the copy button already handle — a made-up link would be worse than none.
+ */
+function buildReseedUrl(hash, locator) {
+    try {
+        const origin = window?.location?.origin || '';
+        if (!origin) return '';
+        return formatWeb25Url({
+            torrentHash: hash,
+            gofileLocator: locator,
+            origin,
+            pathname: window.location.pathname || '/'
+        });
+    } catch (_) {
+        return '';
+    }
+}
+
 /** Wire the Pages tab's card actions. Safe to call more than once. */
 export function initPagesPanel() {
     this.initSeedingChannel();
@@ -718,16 +975,28 @@ export function initPagesPanel() {
 /** Rebuild the Pages tab from the store plus whatever is live. */
 export async function refreshPagesPanel() {
     const sessions = await this.listSeedingSessionViews();
-    // Seeding is not gated on the wallet, but managing it is: with no identity
-    // unlocked the tab is not offered at all, the same way Chat is not.
+
+    // Seeding is not gated on the wallet, but a *deployment* is: with no
+    // identity unlocked, the publisher's own sites are not listed, the same way
+    // Chat is not offered.
     //
+    // A reseeded site is the exception, and has to be. A visitor needs no
+    // identity to start hosting somebody else's site, so they must not need one
+    // to stop — hiding the card would leave a guest serving a site with no way
+    // to take it down. So the tab exists for anybody holding one of those, and
+    // shows exactly those until an identity is unlocked.
+    const identityUnlocked = this._pagesTabAllowed === true;
+    const listed = identityUnlocked ? sessions : sessions.filter((session) => session.reseeded === true);
+
     // The newest site is the open card. A deployment hands over to this tab the
     // moment it finishes, and the card it hands over is the one the publisher
     // came here to look at.
-    renderPages(sessions, {
-        visible: this._pagesTabAllowed === true,
-        openHash: sessions[0]?.hash || ''
+    renderPages(listed, {
+        visible: identityUnlocked || listed.length > 0,
+        openHash: listed[0]?.hash || ''
     });
+    // Counters follow what is actually announcing, which is every session —
+    // listed or not.
     if (sessions.some((session) => session.state === 'seeding')) this.startSeedingStatsTimer();
     return sessions;
 }
@@ -783,25 +1052,41 @@ export async function downloadSeedingSessionTorrent(hash) {
  * Every one of them changes what the rest of the world can load from this
  * browser, so none of them happens on a single click.
  *
- * @param {'pause'|'resume'|'delete'} action
+ * @param {'pause'|'resume'|'delete'|'reseed'|'forget'} action
  * @param {string} hash
+ * @param {{ siteName?: string }} [context] a name for a site with no record yet
  */
-async function confirmSeedingChange(action, hash) {
+async function confirmSeedingChange(action, hash, context = {}) {
     const sanitized = `${hash || ''}`.toLowerCase();
-    const record = await this.seedingStore().get(sanitized);
-    const confirmed = await confirmSeedingAction(action, { siteName: record?.siteName || '', hash: sanitized });
+    let record = null;
+    try {
+        record = await this.seedingStore().get(sanitized);
+    } catch (_) {
+        // Reseed and Delete data are offered for sites with no record at all,
+        // so a store that cannot be read must not stop the question being put.
+        record = null;
+    }
+    const confirmed = await confirmSeedingAction(action, {
+        siteName: record?.siteName || context.siteName || '',
+        hash: sanitized
+    });
     if (!confirmed) return false;
 
     const run = {
         pause: () => this.pauseSeedingSession(sanitized),
         resume: () => this.resumePausedSession(sanitized),
-        delete: () => this.deleteSeedingSession(sanitized)
+        delete: () => this.deleteSeedingSession(sanitized),
+        reseed: () => this.reseedSite(sanitized),
+        forget: () => this.forgetSiteData(sanitized)
     }[action];
 
     try {
         await run();
     } catch (error) {
-        this.toast?.error?.(error.message, action === 'resume' ? 'Not seeding' : 'Nothing changed');
+        this.toast?.error?.(
+            error.message,
+            action === 'resume' || action === 'reseed' ? 'Not seeding' : 'Nothing changed'
+        );
         await this.refreshPagesPanel();
         return false;
     }
@@ -827,4 +1112,34 @@ export async function confirmResumeSeedingSession(hash) {
 export async function confirmDeleteSeedingSession(hash) {
     if (!(await confirmSeedingChange.call(this, 'delete', hash))) return;
     this.toast?.info?.('The website and its stored copy are gone from this browser.', 'Website deleted');
+}
+
+/**
+ * Ask, then start hosting somebody else's site.
+ *
+ * @param {string} hash
+ * @param {{ siteName?: string }} [context]
+ */
+export async function confirmReseedSite(hash, context = {}) {
+    if (!(await confirmSeedingChange.call(this, 'reseed', hash, context))) return false;
+    this.toast?.success?.(
+        'This site is now seeding from your browser as well. It is in Pages, published by its original author.',
+        'Reseeding'
+    );
+    return true;
+}
+
+/**
+ * Ask, then erase every local trace of one site.
+ *
+ * @param {string} hash
+ * @param {{ siteName?: string }} [context]
+ */
+export async function confirmForgetSiteData(hash, context = {}) {
+    if (!(await confirmSeedingChange.call(this, 'forget', hash, context))) return false;
+    this.toast?.info?.(
+        'Everything this browser kept about that site is gone: it is no longer seeded, cached or searchable here.',
+        'Site data deleted'
+    );
+    return true;
 }

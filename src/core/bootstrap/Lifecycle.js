@@ -86,6 +86,11 @@ function directMessageRoomFromSession(sessionId) {
 
 export async function init() {
     try {
+        // Placeholders where a decision about the wallet is still pending. The
+        // markup ships signed out, which is always true of a page that has just
+        // loaded, so nothing signed-in-only can flash past on a slow phone.
+        this.applyAuthPhase('pending');
+        this.setupSessionRevalidation();
         await this.loadRequiredLibraries();
         await this.initializeWebTorrent();
         await this.registerServiceWorker();
@@ -113,6 +118,24 @@ export async function init() {
         console.error('PeerWeb initialization failed:', error);
         this.showError('Failed to initialize PeerWeb: ' + error.message);
     }
+}
+
+/**
+ * Re-check the session whenever the page comes back without being reloaded.
+ *
+ * `pageshow` with `persisted` is a back/forward-cache restore: the DOM is
+ * exactly as it was frozen, which is the one case where the UI can be showing a
+ * signed-in surface for a session that no longer exists. Installed before the
+ * libraries load so a restore during start-up is caught too.
+ */
+export function setupSessionRevalidation() {
+    if (this._sessionRevalidationBound) return;
+    this._sessionRevalidationBound = true;
+    window.addEventListener('pageshow', (event) => {
+        if (!(/** @type {any} */ (event)?.persisted)) return;
+        this.log('Page restored from the back/forward cache; re-checking the wallet session.');
+        void this.revalidateAuthState();
+    });
 }
 
 export async function initAuth() {
@@ -1722,6 +1745,76 @@ export async function completeDeployment() {
     }
 }
 
+/**
+ * Whether an identity is actually unlocked in this page right now.
+ *
+ * Read from the controller rather than from a flag this module keeps, because
+ * the controller is the only thing that has asked the signing worker. Anything
+ * that reveals a signed-in-only surface has to go through here.
+ */
+export function isAuthenticatedIdentity() {
+    const state = this.authController?.state;
+    return Boolean(state?.localWalletUnlocked && state?.address && state?.identityType);
+}
+
+/**
+ * The sign-in wall, before and after the wallet has been read.
+ *
+ * Knowing whether this browser holds a wallet takes an IndexedDB round trip,
+ * and on a phone that is long enough to see. The three ways in are therefore
+ * placeholders until the answer lands, rather than all of them at once with
+ * one quietly withdrawn a moment later.
+ *
+ * What is *not* pending is whether anybody is signed in: the signing worker
+ * starts locked on every page load, so a loading page is a signed-out page and
+ * the markup ships that way. Nothing here may reveal a signed-in surface —
+ * that is `setupAuthAwareUi`'s job, once there is an identity to show.
+ *
+ * @param {'pending'|'resolved'} phase
+ */
+export function applyAuthPhase(phase) {
+    const resolved = phase === 'resolved';
+    this._authPhase = resolved ? 'resolved' : 'pending';
+
+    const loading = document.getElementById('deploy-wall-loading');
+    const actions = document.getElementById('deploy-wall-actions');
+    if (loading) loading.classList.toggle('hidden', resolved);
+    if (actions) actions.classList.toggle('hidden', !resolved);
+
+    const wall = document.getElementById('deploy-auth-wall');
+    if (wall instanceof HTMLElement) {
+        if (resolved) wall.removeAttribute('aria-busy');
+        else wall.setAttribute('aria-busy', 'true');
+    }
+
+    const deployTabBtn = document.querySelector('[data-tab="publish"]');
+    if (deployTabBtn instanceof HTMLElement) {
+        if (resolved) deployTabBtn.removeAttribute('aria-busy');
+        else deployTabBtn.setAttribute('aria-busy', 'true');
+    }
+}
+
+/**
+ * Re-ask who is signed in, and re-render on the answer.
+ *
+ * A page can come back without being reloaded — a phone restoring a
+ * backgrounded tab from the back/forward cache is the common one — and it comes
+ * back with whatever the DOM said when it was frozen. If the session behind
+ * that DOM has since gone, the page would go on showing a signed-in surface to
+ * somebody who is signed out. Asking the worker again is the only honest way
+ * to find out, and it is cheap.
+ */
+export async function revalidateAuthState() {
+    if (!this.authController) return;
+    try {
+        await this.authController.refreshLocalWalletState();
+        this.authController.render();
+        this.authController.notify();
+    } catch (error) {
+        this.log(`Could not re-check the wallet session: ${error.message}`);
+    }
+}
+
 export function setupAuthAwareUi(state) {
     const identityTabBtn = document.querySelector('[data-tab="auth"]');
     const identityTabPanel = document.getElementById('tab-auth');
@@ -1735,6 +1828,10 @@ export function setupAuthAwareUi(state) {
     const isAuthenticated = Boolean(state.localWalletUnlocked && state.address && state.identityType);
     const hasJustAuthenticated = !this._hadAuthenticatedIdentity && isAuthenticated;
     this._hadAuthenticatedIdentity = isAuthenticated;
+
+    // The wallet has been read: whatever this function decides below is the
+    // real state, so the placeholders give way to it.
+    this.applyAuthPhase('resolved');
 
     if (identityTabBtn) {
         identityTabBtn.style.display = hasIdentity ? 'inline-flex' : 'none';
@@ -1759,14 +1856,19 @@ export function setupAuthAwareUi(state) {
         channelsTabPanel.style.display = hasIdentity ? '' : 'none';
     }
 
-    // Pages is behind the wallet, exactly like Chat. The sites themselves go on
-    // seeding with the wallet locked — that is the whole point of the store —
-    // but managing them is the publisher's business, so the tab goes away with
-    // the session and comes back with it.
+    // A publisher's own deployments are behind the wallet, exactly like Chat:
+    // the sites go on seeding with it locked — that is the whole point of the
+    // store — but managing a deployment is the publisher's business, so those
+    // cards go away with the session and come back with it.
+    //
+    // Sites reseeded from here are not behind it. Starting to host somebody
+    // else's site needs no identity, so stopping must not need one either, and
+    // `refreshPagesPanel` is the single place that decides which cards exist
+    // and therefore whether the tab does.
     this._pagesTabAllowed = hasIdentity;
     if (pagesTabBtn instanceof HTMLElement && !hasIdentity) pagesTabBtn.style.display = 'none';
     if (pagesTabPanel instanceof HTMLElement && !hasIdentity) pagesTabPanel.style.display = 'none';
-    if (hasIdentity) void this.refreshPagesPanel?.();
+    void this.refreshPagesPanel?.();
 
     const deployTabBtn = document.querySelector('[data-tab="publish"]');
     if (deployTabBtn) {
@@ -1806,9 +1908,12 @@ export function setupAuthAwareUi(state) {
     }
 
     if (!isAuthenticated) {
+        // Pages is not in this list any more: it can legitimately survive a
+        // locked wallet with the sites this browser hosts for other people, and
+        // `renderPages` already moves a reader off a tab that does disappear.
         const activeTab = document.querySelector('.tab-btn.active');
         const activeName = activeTab?.getAttribute('data-tab');
-        if (activeName === 'auth' || activeName === 'channels' || activeName === 'pages') {
+        if (activeName === 'auth' || activeName === 'channels') {
             const browseTab = document.querySelector('[data-tab="browse"]');
             if (browseTab instanceof HTMLElement) browseTab.click();
         }
@@ -1840,6 +1945,11 @@ export function setupAuthAwareUi(state) {
             // asking for the remembered tab before it exists would find it
             // hidden and give up on it.
             await this.refreshPagesPanel?.();
+
+            // A signed bundle from before the reload belongs to whoever was
+            // signing then, so it comes back now — with an identity to deploy
+            // it — rather than on load, where it had nobody to belong to.
+            await this.restoreDeploySession?.();
 
             // Somebody coming back goes back to what they were doing. Only a
             // first sign-in — nothing remembered at all — lands on Account,
@@ -2108,6 +2218,18 @@ export function setupEventListeners() {
         });
     }
 
+    // The two decisions the viewer offers about the site in front of you:
+    // host it from here, or drop everything this browser keeps about it.
+    const reseedButton = document.getElementById('viewer-reseed');
+    if (reseedButton) {
+        reseedButton.addEventListener('click', () => void this.handleViewerReseed());
+    }
+
+    const forgetButton = document.getElementById('viewer-forget');
+    if (forgetButton) {
+        forgetButton.addEventListener('click', () => void this.handleViewerForget());
+    }
+
     // Close debug panel
     const closeDebug = document.getElementById('close-debug');
     if (closeDebug) {
@@ -2322,6 +2444,19 @@ export function clearDeploySession() {
 export async function restoreDeploySession() {
     if (!this.clientReady || !this.client) return;
 
+    // Nothing here is for a guest.
+    //
+    // This used to run on every load and then reveal the Deploy panel
+    // outright, so a browser holding a signed bundle from the last half hour
+    // showed the deploy pipeline to somebody with no wallet unlocked — the
+    // session dies with the page, so after a refresh that was *every* time.
+    // It is signing state, it belongs to whoever signed it, and it comes back
+    // when they are back: `setupAuthAwareUi` calls this again on sign-in.
+    if (!this.isAuthenticatedIdentity()) {
+        this.log('Deploy session left stored: no identity is unlocked to own it.');
+        return;
+    }
+
     let savedSession = null;
     try {
         const raw = localStorage.getItem(DEPLOY_SESSION_STORAGE_KEY);
@@ -2394,12 +2529,11 @@ export async function restoreDeploySession() {
 
         this.refreshDeployUiState();
 
-        if (this.lastPublishCandidate) {
-            const deployWall = document.getElementById('deploy-auth-wall');
-            const deployPanel = document.getElementById('deploy-panel');
-            if (deployWall) deployWall.classList.add('hidden');
-            if (deployPanel) deployPanel.classList.remove('hidden');
-        }
+        // Which of the wall and the panel is up is decided by whether anybody
+        // is signed in, in one place, and this is not it. Forcing the panel
+        // open from here is what showed the deploy pipeline to a locked
+        // wallet; the check at the top of this function means the panel is
+        // already open by the time a restore gets this far.
 
         this.toast.info('Signed torrent session restored after refresh.', 'Session restored');
         this.log(`Deploy session restored for ${savedSession.hash}`);

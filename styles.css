@@ -4134,12 +4134,55 @@ input[type='checkbox'] {
     white-space: nowrap;
 }
 
-/* Where the site came from is information, not a verdict: it gets a quiet
-   chip so the signature chip next to it stays the one that means something. */
+/* A quiet chip, kept for anywhere else that reports a plain fact. */
 .status-neutral {
     border-color: var(--border);
     background: var(--surface-2);
     color: var(--text-dim);
+}
+
+/* The signature, as a mark rather than a sentence.
+   A strip above somebody else's page has room for the things a visitor can do
+   and not much else, so the verdict is one glyph in a round badge. The wording
+   it replaces lives in `title` and `aria-label`, so a pointer and a screen
+   reader both still get it in full. */
+.viewer-verified {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface-2);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: help;
+}
+
+.viewer-verified.is-verified {
+    border-color: rgba(52, 199, 123, 0.38);
+    background: var(--ok-soft);
+    color: #56d295;
+}
+
+.viewer-verified.is-unverified {
+    border-color: rgba(229, 165, 60, 0.38);
+    background: var(--warn-soft);
+    color: #eeb95e;
+}
+
+.viewer-action {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* A disabled action still has to say why, so it keeps its tooltip: the pointer
+   has to reach it for that, which `pointer-events: none` would prevent. */
+.viewer-action:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .site-viewer-header .viewer-info {
@@ -4156,6 +4199,7 @@ input[type='checkbox'] {
     .site-viewer-header .viewer-info {
         width: 100%;
         margin-left: 0;
+        justify-content: flex-end;
     }
 
     .viewer-identity {
@@ -4215,6 +4259,50 @@ select,
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
+}
+
+/* Placeholders for a widget whose state is still being read.
+   Used where the answer decides what the user is allowed to see — the sign-in
+   wall's three ways in — so that the wait looks like a wait instead of showing
+   one state and correcting it a moment later. The global reduced-motion rule
+   below flattens the sweep to a plain block. */
+.auth-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+    max-width: 22rem;
+}
+
+.skeleton-bar {
+    position: relative;
+    display: block;
+    height: 2.35rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+    overflow: hidden;
+}
+
+.skeleton-bar:last-child {
+    width: 60%;
+}
+
+.skeleton-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+    animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(100%);
+    }
 }
 
 @keyframes spin {
@@ -4415,6 +4503,21 @@ select,
 .page-card-hash {
     color: var(--muted);
     font-size: 0.75rem;
+}
+
+/* Whose site this is, on the collapsed card. The one thing that must not be
+   ambiguous in a list that mixes your deployments with sites you host for
+   other people. */
+.page-card-role {
+    align-self: flex-start;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 .page-card-body {

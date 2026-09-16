@@ -16,12 +16,21 @@ const MARKUP = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const NAV = MARKUP.slice(MARKUP.indexOf('<nav id="primary-nav"'), MARKUP.indexOf('</nav>'));
 const ACCOUNT = MARKUP.slice(MARKUP.indexOf('id="tab-auth"'), MARKUP.indexOf('<!-- ── PUBLISH TAB ── -->'));
 
-test('the navigation reads Search, Deploy, Account, Chat, About', () => {
+test('the navigation reads Search, Sign in, Account, Chat, About', () => {
     assert.match(NAV, /data-tab="browse"[\s\S]{0,120}🔍 Search/);
-    assert.match(NAV, /data-tab="publish"[\s\S]{0,120}🚀 Deploy/);
     assert.match(NAV, /data-tab="auth"[\s\S]{0,160}👤 Account/);
     assert.match(NAV, /data-tab="channels"[\s\S]{0,160}💬 Chat/);
     assert.match(NAV, /data-tab="about"[\s\S]{0,120}ℹ️ About/);
+});
+
+test('the Deploy tab ships signed out, because a page that has just loaded is', () => {
+    // The signing worker starts locked on every page load, so "Sign in" is not
+    // a guess about this visitor — it is true of every first paint. It used to
+    // ship as "Deploy" and be corrected by the first auth render, which on a
+    // phone meant a Deploy tab offered to a guest for as long as the libraries
+    // took to load. `setupAuthAwareUi` swaps it to Deploy on unlock.
+    assert.match(NAV, /data-tab="publish"[\s\S]{0,200}🔐 Sign in/);
+    assert.match(NAV, /data-tab="publish"[^>]*aria-busy="true"/);
 });
 
 test('Account and Chat are hidden until an identity exists', () => {
@@ -48,6 +57,19 @@ test('the sign-in wall offers unlock, create and recover', () => {
     // start with the wrong one missing.
     assert.doesNotMatch(wall, /id="unlock-wallet-btn"[^>]*class="[^"]*hidden/);
     assert.doesNotMatch(wall, /id="register-wallet-btn"[^>]*class="[^"]*hidden/);
+});
+
+test('the wall waits behind a placeholder until it knows which way in applies', () => {
+    const wall = MARKUP.slice(MARKUP.indexOf('id="deploy-auth-wall"'), MARKUP.indexOf('id="deploy-panel"'));
+
+    // Whether this browser holds a wallet takes an IndexedDB read to answer.
+    // Offering Unlock and Create together and then withdrawing one is worse
+    // than a moment of waiting, so the row starts hidden behind a skeleton and
+    // `applyAuthPhase` swaps them once the read lands.
+    assert.match(wall, /id="deploy-wall-loading"[^>]*class="auth-skeleton"/);
+    assert.match(wall, /id="deploy-wall-actions"[^>]*class="button-group hidden"/);
+    assert.match(wall, /id="deploy-auth-wall"[^>]*aria-busy="true"/);
+    assert.ok(wall.indexOf('deploy-wall-loading') < wall.indexOf('deploy-wall-actions'));
 });
 
 test('the one-time seed band spans the Account page above the identity columns', () => {

@@ -103,6 +103,15 @@ class PeerWebCache {
                 hash,
                 data: siteData,
                 signatureState: metadata.signatureState || null,
+                // The payload as it travelled, next to the site as it renders.
+                //
+                // These are not the same thing: what renders is the unpacked
+                // bundle, and the swarm serves the packed one. Keeping the
+                // wire form is what lets a visitor reseed a site they came
+                // back to from this cache rather than only in the page that
+                // first downloaded it — and it is the only form that hashes
+                // to the info hash the link names.
+                payload: metadata.payload || null,
                 timestamp
             };
 
