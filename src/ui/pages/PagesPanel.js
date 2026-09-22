@@ -296,14 +296,23 @@ function buildCard(session, openHashes) {
     const shell = /** @type {HTMLDetailsElement} */ (el('details', 'page-card-shell'));
     shell.open = openHashes.has(session.hash);
 
+    // How this browser came to hold the site, and whose site it is, are two
+    // questions with two answers. A reseed of somebody else's page makes you
+    // its host; a reseed of your own — a deployment you lost, put back from a
+    // copy this browser kept — leaves you its publisher, because the signature
+    // in it is yours. Calling that one "somebody else's site" would be telling
+    // a publisher their own work is not theirs.
+    const hostingForSomebodyElse = Boolean(session.reseeded && !session.ownPublisher);
+
     const summary = el('summary', 'page-card-summary');
     const heading = el('div', 'page-card-heading');
     heading.appendChild(el('span', 'page-card-title', session.siteName || 'website'));
     heading.appendChild(el('code', 'page-card-hash', shortHash(session.hash)));
-    // A site being hosted here for somebody else says so on the collapsed
-    // card, not three rows down: the one thing that must never be ambiguous in
-    // this list is which of these sites you published.
-    if (session.reseeded) heading.appendChild(el('span', 'page-card-role', 'Reseeded'));
+    // Which of these sites you published must never be ambiguous, so it is on
+    // the collapsed card rather than three rows down.
+    if (session.reseeded) {
+        heading.appendChild(el('span', 'page-card-role', hostingForSomebodyElse ? 'Reseeded' : 'Restored'));
+    }
     summary.appendChild(heading);
 
     const state = STATE_LABELS[session.state] || STATE_LABELS.stopped;
@@ -342,9 +351,11 @@ function buildCard(session, openHashes) {
     facts.appendChild(
         factRow(
             'Your role',
-            session.reseeded
+            hostingForSomebodyElse
                 ? 'Host — you are reseeding somebody else’s site'
-                : 'Publisher — deployed from this browser'
+                : session.reseeded
+                  ? 'Publisher — your own site, put back from a copy held here'
+                  : 'Publisher — deployed from this browser'
         )
     );
     facts.appendChild(factRow('Signed by', session.signedBy || 'Unknown', { code: true }));
@@ -386,9 +397,13 @@ function buildCard(session, openHashes) {
 
     // Deleting is its own button, never the side-effect of stopping: stopping a
     // site used to throw it away, which made a pause impossible to ask for.
-    // On a reseeded card it is not "your website" being deleted — it is the
-    // copy this browser holds — and the label has to be honest about that.
-    const remove = el('button', 'btn btn-clear btn-sm', session.reseeded ? '🗑️ Stop hosting' : '🗑️ Delete website');
+    // Hosting somebody else's site is the one case where this is not "your
+    // website" being deleted but the copy this browser holds of theirs.
+    const remove = el(
+        'button',
+        'btn btn-clear btn-sm',
+        hostingForSomebodyElse ? '🗑️ Stop hosting' : '🗑️ Delete website'
+    );
     remove.setAttribute('data-page-action', 'delete');
     remove.setAttribute('data-page-hash', session.hash);
     actions.appendChild(remove);

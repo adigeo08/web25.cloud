@@ -141,13 +141,20 @@ test('a site with no payload here says why rather than offering a reseed that ca
     assert.match(dom.nodes.reseed.getAttribute('title'), /^Verified publisher/, 'the verdict leads');
 });
 
-test('a site already seeding from here is not offered again', async () => {
+test('a site already seeding from here is not offered again, and says so with its own mark', async () => {
     const peerweb = await context({ seeding: true, payload: { files: [] } });
 
     await peerweb.refreshViewerActions.call(peerweb, HASH);
 
     assert.equal(dom.nodes.reseed.getAttribute('data-reseed-state'), 'seeding');
     assert.equal(dom.nodes.reseed.disabled, true);
+    // Once your browser is serving the page you are looking at, that is the
+    // fact worth a glyph: the signature is settled, and the tick that reported
+    // it gives way to the mark for hosting.
+    assert.equal(dom.nodes.badge.textContent, '✅');
+    assert.equal(dom.nodes.badge.className, 'viewer-verified is-hosting');
+    // The verdict is not lost, only moved: it still leads the description.
+    assert.match(dom.nodes.reseed.getAttribute('title'), /^Verified publisher/);
 });
 
 test('a site stored here but off the air is a resume, not a second copy', async () => {
@@ -160,6 +167,24 @@ test('a site stored here but off the air is a resume, not a second copy', async 
     assert.equal(dom.nodes.reseed.getAttribute('data-reseed-state'), 'resume');
     assert.equal(dom.nodes.reseed.disabled, false);
     assert.equal(dom.nodes.label.textContent, 'Resume seeding');
+    assert.equal(dom.nodes.badge.textContent, '🔄');
+    assert.equal(dom.nodes.badge.className, 'viewer-verified is-hosting');
+});
+
+test('only a state that needs a verified signature may take the mark', async () => {
+    // The two hosting marks are safe to show in place of the verdict precisely
+    // because neither state is reachable without one. Anything that can be
+    // reached unverified keeps the signature's own mark, or the strip would
+    // stop reporting the one thing it is there to report.
+    const unverified = await context({ verified: false, payload: { files: [] } });
+    await unverified.refreshViewerActions.call(unverified, HASH);
+    assert.equal(dom.nodes.badge.textContent, '⚠');
+    assert.equal(dom.nodes.badge.className, 'viewer-verified is-unverified');
+
+    const nothingHeld = await context({ payload: null });
+    await nothingHeld.refreshViewerActions.call(nothingHeld, HASH);
+    assert.equal(dom.nodes.badge.textContent, '✔');
+    assert.equal(dom.nodes.badge.className, 'viewer-verified is-verified');
 });
 
 test('an answer that arrives after the visitor has moved on is dropped', async () => {

@@ -196,3 +196,30 @@ test('the tab stays away while the wallet is locked, sessions or not', () => {
     assert.equal(dom.nodes.tabBtn.style.display, 'none');
     assert.equal(dom.nodes.panel.style.display, 'none');
 });
+
+test('a card reads as your own when the signature in it is yours', () => {
+    // Three cards, one question each: how this browser came to hold the site,
+    // and whose site it is. They are not the same question, and conflating
+    // them told a publisher their own work belonged to somebody else.
+    panel.renderPages([session({ hash: HASH, reseeded: false, ownPublisher: true })]);
+    let card = dom.nodes.list.querySelector('article.page-card');
+    assert.match(card.textContent, /Publisher — deployed from this browser/);
+    assert.match(card.textContent, /🗑️ Delete website/);
+    assert.ok(!card.textContent.includes('Reseeded'), 'a deployment is not a reseed');
+
+    // Lost and put back from a copy: reseeded, and still the publisher's.
+    panel.renderPages([session({ hash: HASH, reseeded: true, ownPublisher: true })]);
+    card = dom.nodes.list.querySelector('article.page-card');
+    assert.match(card.textContent, /Publisher — your own site, put back from a copy held here/);
+    assert.match(card.textContent, /Restored/);
+    assert.match(card.textContent, /🗑️ Delete website/, 'it is still your website to delete');
+
+    // Somebody else's site, hosted here.
+    panel.renderPages([session({ hash: HASH, reseeded: true, ownPublisher: false })]);
+    card = dom.nodes.list.querySelector('article.page-card');
+    assert.match(card.textContent, /Host — you are reseeding somebody else’s site/);
+    assert.match(card.textContent, /Reseeded/);
+    // Deleting this one is not deleting a website of yours — it is dropping
+    // the copy this browser holds of theirs.
+    assert.match(card.textContent, /🗑️ Stop hosting/);
+});

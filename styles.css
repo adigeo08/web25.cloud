@@ -4141,6 +4141,12 @@ input[type='checkbox'] {
     color: #eeb95e;
 }
 
+/* Already hosting: the state carries its own mark, so the glyph is its own
+   colour rather than the signature's. */
+.viewer-verified.is-hosting {
+    color: inherit;
+}
+
 .viewer-action {
     display: inline-flex;
     align-items: center;

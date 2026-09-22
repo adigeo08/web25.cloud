@@ -64,6 +64,22 @@ function toSeedFile(entry) {
     return file;
 }
 
+/**
+ * Two EVM addresses, compared the way a person means it.
+ *
+ * Case is not identity here: the same address is written all-lowercase by one
+ * tool and EIP-55 checksummed by another, and a card that called your own site
+ * somebody else's over capitalisation would be worse than useless.
+ *
+ * @param {string} left
+ * @param {string} right
+ */
+function sameAddress(left, right) {
+    const a = `${left || ''}`.trim().toLowerCase();
+    const b = `${right || ''}`.trim().toLowerCase();
+    return Boolean(a) && a === b;
+}
+
 /** @param {any} value */
 function toBytes(value) {
     if (value instanceof Uint8Array) return value;
@@ -227,7 +243,11 @@ async function writeSeedingSession(
         // itself, is what leaves nothing. Awaited rather than fired off so the
         // outcome is settled by the time anything asks whether this site can
         // be reseeded; it reports its own failures and raises none.
-        await this.cache?.setPayload?.(sanitized, { torrentFile: record.torrentFile, files: record.files });
+        await this.cache?.setPayload?.(sanitized, {
+            torrentFile: record.torrentFile,
+            files: record.files,
+            gofileLocator: record.deploy?.mirror?.locator || ''
+        });
         this.log(`Seeding session stored for ${sanitized}; it will resume after a reload.`);
         this.refreshPagesPanel();
         return record;
@@ -681,6 +701,13 @@ export async function listSeedingSessionViews() {
             (left.savedAt || Date.parse(left.createdAt || '') || 0)
     );
 
+    // Who is signed in right now, not who was when the record was written. A
+    // publisher who reseeds their own site from a copy this browser kept is
+    // still its publisher, and signing in later is what makes that knowable —
+    // so the comparison happens here, per render, rather than being frozen
+    // into the record.
+    const identity = this.authController?.state?.address || '';
+
     return ordered.map((record) => {
         const hash = `${record.hash}`.toLowerCase();
         const owned = this.seedingTorrents().get(hash) || null;
@@ -705,11 +732,16 @@ export async function listSeedingSessionViews() {
             mirror: record.deploy?.mirror || null,
             mirrorState: record.deploy?.mirrorState || 'disabled',
             hasTorrentFile: Boolean(record.torrentFile),
-            // Whose site this is. A reseeded card sits in Pages next to the
-            // publisher's own sites and must never read as one of them: the
-            // author on it is somebody else, and the card says out loud that
-            // this browser is a host rather than the publisher.
+            // How this browser came to hold the site: deployed here, or put
+            // back on the air from a copy it kept.
             reseeded: record.reseeded === true,
+            // And whose site it is, which is a different question. A publisher
+            // who lost their deployment and reseeded it from a copy is still
+            // its publisher — the signature says so — and a card that called
+            // it somebody else's would be telling them their own site is not
+            // theirs. With nobody signed in this is false, which is honest:
+            // the browser has no identity to recognise.
+            ownPublisher: sameAddress(record.deploy?.signedBy, identity),
             paused: record.paused === true,
             // Paused is a decision, not a failure: it reads differently on the
             // card and it is the state a reload preserves.
@@ -783,7 +815,8 @@ export async function ensureStoredPayload(hash, record = null) {
         return Boolean(
             await this.cache.setPayload(sanitized, {
                 torrentFile: toBytes(session.torrentFile),
-                files: session.files
+                files: session.files,
+                gofileLocator: session.deploy?.mirror?.locator || ''
             })
         );
     } catch (error) {
@@ -839,7 +872,12 @@ export async function resolveReseedPayload(hash) {
     for (const source of [readSeedingRecordPayload, readStoredPayload]) {
         try {
             const held = await source.call(this, sanitized);
-            if (held) return buildReseedPayload(held);
+            if (!held) continue;
+            const payload = buildReseedPayload(held);
+            // `buildReseedPayload` answers for the bytes only; the locator is
+            // metadata that rides along with whichever source held them.
+            payload.gofileLocator = `${held.gofileLocator || ''}`;
+            return payload;
         } catch (error) {
             this.log(`Reseed payload for ${sanitized} unusable from ${source.name}: ${error.message}`);
         }
@@ -853,7 +891,8 @@ async function readSeedingRecordPayload(hash) {
     if (!record?.files?.length || !record.torrentFile) return null;
     return {
         torrentFile: toBytes(record.torrentFile),
-        files: record.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) }))
+        files: record.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) })),
+        gofileLocator: record.deploy?.mirror?.locator || ''
     };
 }
 
@@ -863,7 +902,8 @@ async function readStoredPayload(hash) {
     if (!stored?.files?.length || !stored.torrentFile) return null;
     return {
         torrentFile: toBytes(stored.torrentFile),
-        files: stored.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) }))
+        files: stored.files.map((file) => ({ ...file, bytes: toBytes(file.bytes) })),
+        gofileLocator: stored.gofileLocator || ''
     };
 }
 
@@ -911,7 +951,11 @@ export async function reseedSite(hash) {
     }
 
     const publisher = readPublisherFromPayload(payload.files);
-    const locator = this.currentGofileLocator || null;
+    // This load's locator first — it is the most recent thing known about how
+    // the site is reachable — and otherwise whatever was kept with the payload
+    // from the visit that did resolve one. A site reached by a bare hash today
+    // still has the mirror it was mirrored to.
+    const locator = this.currentGofileLocator || payload.gofileLocator || null;
     const url = buildReseedUrl(sanitized, locator);
     // Only if it is about *this* site. `currentSiteSignatureStatus` follows
     // whatever the viewer last rendered, and attributing one site's bytes to
@@ -952,7 +996,11 @@ export async function reseedSite(hash) {
     await this.seedingStore().put(record);
     // And kept where it outlives this session, so taking the card down later
     // does not mean losing the ability to put it back up.
-    await this.cache?.setPayload?.(sanitized, { torrentFile: payload.torrentFile, files: payload.files });
+    await this.cache?.setPayload?.(sanitized, {
+        torrentFile: payload.torrentFile,
+        files: payload.files,
+        gofileLocator: locator || ''
+    });
     try {
         await this.resumeSeedingSession(record);
     } catch (error) {

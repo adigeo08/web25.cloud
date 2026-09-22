@@ -82,6 +82,13 @@ export async function loadSite(addressInput, retryLocator = null) {
     // load: a reseed here shares the same link a visitor arrived on, mirror
     // and all, rather than a hash-only one that drops the fallback.
     this.currentGofileLocator = gofileLocator;
+    // And outlive the page, when this browser already holds the site. A load
+    // is the only moment a locator is known, and most loads are not the one
+    // that first stored the payload — somebody opening a bare hash tomorrow
+    // knows nothing about the mirror this link carries today. Nothing is
+    // written for a site with no payload here: noticing a mirror is not a
+    // reason to start keeping a site.
+    if (gofileLocator) void this.cache?.rememberMirrorLocator?.(sanitizedHash, gofileLocator);
     initializeSignatureState.call(this, sanitizedHash);
 
     // Cache is intentionally checked before WebTorrent readiness. A cached site
