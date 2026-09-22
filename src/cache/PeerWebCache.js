@@ -285,12 +285,20 @@ class PeerWebCache {
      * swallowed rather than failing whatever was going on.
      *
      * @param {string} hash
-     * @param {{ torrentFile: Uint8Array, files: { path: string, type?: string, bytes: Uint8Array }[] }} payload
+     * @param {{ torrentFile: Uint8Array, files: { path: string, type?: string, bytes: Uint8Array }[],
+     *          gofileLocator?: string }} payload
      * @returns {Promise<boolean>} whether the copy is durable, not merely applied
      */
     async setPayload(hash, payload) {
         if (!payload?.torrentFile || !payload?.files?.length) return false;
         try {
+            // A locator already known about this site is not forgotten by a
+            // later write that happens not to carry one. The mirror is part of
+            // the site's address rather than of whichever load noticed it, and
+            // most loads do not: somebody opening a bare hash knows nothing
+            // about a mirror that a previous visit resolved through.
+            const known = `${payload.gofileLocator || ''}` || (await this.storedMirrorLocator(hash));
+
             const db = await this.openDB();
             const transaction = db.transaction([this.payloadStore], 'readwrite');
             // Settled on the commit, not on the request: what this returns is
@@ -302,12 +310,56 @@ class PeerWebCache {
                     hash,
                     torrentFile: payload.torrentFile,
                     files: payload.files,
+                    gofileLocator: known || '',
                     savedAt: Date.now()
                 })
             );
             return true;
         } catch (error) {
             console.warn('[PeerWebCache] Site is not reseedable from storage:', error);
+            return false;
+        }
+    }
+
+    /**
+     * The mirror locator this browser last knew for one site, if any.
+     *
+     * Kept next to the payload because it is the same kind of fact: part of
+     * what it takes to put the site back exactly as it was reachable before.
+     *
+     * @param {string} hash
+     * @returns {Promise<string>}
+     */
+    async storedMirrorLocator(hash) {
+        try {
+            const stored = await this.getPayload(hash);
+            return `${stored?.gofileLocator || ''}`;
+        } catch (_) {
+            return '';
+        }
+    }
+
+    /**
+     * Note a mirror locator for a site whose payload may not be here yet.
+     *
+     * A load resolves the locator long before anything decides whether the
+     * site is worth keeping a payload for, and a visitor who never presses
+     * Reseed should not have written one. So this only fills in a row that
+     * already exists, and says whether it did.
+     *
+     * @param {string} hash
+     * @param {string} locator
+     */
+    async rememberMirrorLocator(hash, locator) {
+        const value = `${locator || ''}`.trim();
+        if (!value) return false;
+        try {
+            const stored = await this.getPayload(hash);
+            if (!stored?.torrentFile || !stored?.files?.length) return false;
+            if (stored.gofileLocator === value) return true;
+            return await this.setPayload(hash, { ...stored, gofileLocator: value });
+        } catch (error) {
+            console.warn('[PeerWebCache] Could not record the mirror locator:', error);
             return false;
         }
     }

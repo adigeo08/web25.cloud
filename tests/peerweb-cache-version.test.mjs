@@ -170,8 +170,15 @@ test('a payload is only reported as kept once its transaction has committed', as
     // site that is a later cache miss; for a payload it is the difference
     // between a publisher being told their copy is safe and losing it, because
     // that answer is what makes deleting the session safe.
-    const transactions = [];
+    const writes = [];
     const store = {
+        // Nothing stored yet, so the locator lookup `setPayload` makes first
+        // finds no row and falls through to the write under test.
+        get() {
+            const request = { onsuccess: null, onerror: null, result: undefined };
+            queueMicrotask(() => request.onsuccess?.());
+            return request;
+        },
         put() {
             const request = { onsuccess: null, onerror: null, result: undefined };
             queueMicrotask(() => request.onsuccess?.());
@@ -186,14 +193,14 @@ test('a payload is only reported as kept once its transaction has committed', as
                     version: 6,
                     objectStoreNames: { contains: () => true },
                     close() {},
-                    transaction() {
+                    transaction(names, mode) {
                         const transaction = {
                             oncomplete: null,
                             onabort: null,
                             onerror: null,
                             objectStore: () => store
                         };
-                        transactions.push(transaction);
+                        if (mode === 'readwrite') writes.push(transaction);
                         return transaction;
                     }
                 };
@@ -212,13 +219,13 @@ test('a payload is only reported as kept once its transaction has committed', as
     // Committed: the copy is there.
     const kept = cache.setPayload('abc', payload);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    transactions[0].oncomplete();
+    writes[0].oncomplete();
     assert.equal(await kept, true);
 
     // Aborted after the request succeeded: the row was rolled back, and
     // reporting it as kept would be a promise the browser did not keep.
     const lost = cache.setPayload('def', payload);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    transactions[1].onabort();
+    writes[1].onabort();
     assert.equal(await lost, false);
 });

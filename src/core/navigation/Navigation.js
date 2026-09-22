@@ -32,7 +32,9 @@ export function updateSiteSignatureBadge(status) {
     }
 
     // The verdict decides what the button is allowed to offer, so it is
-    // re-resolved rather than left showing the previous site's answer.
+    // re-resolved rather than left showing the previous site's answer — and
+    // the state it resolves to may put its own mark over the one just written,
+    // once the site is actually being hosted from here.
     this._siteVerified = verified;
     this._siteVerdictLabel = label;
     void this.refreshViewerActions(this.currentHash || '');
@@ -43,13 +45,30 @@ export function updateSiteSignatureBadge(status) {
  *
  * `unverified` is the one that is not about hosting at all: it reports the
  * signature and offers nothing, so its wording comes from the verdict itself.
+ *
+ * Two states carry a mark of their own. The glyph is normally the signature's,
+ * but once a site is actually being hosted from here, what the strip should
+ * report is *that* — the signature is settled, and the interesting fact is
+ * whether your browser is serving the page you are looking at. Only states
+ * that are unreachable without a verified signature may override it, which is
+ * why `unverified` and `unavailable` do not.
  */
 const RESEED_STATES = {
     unverified: { text: 'Unverified', disabled: true, title: '' },
     pending: { text: 'Reseed', disabled: true, title: 'Checking whether this site can be seeded from here…' },
     available: { text: 'Reseed', disabled: false, title: 'Serve this site to other visitors from your browser' },
-    resume: { text: 'Resume seeding', disabled: false, title: 'This site is stored here. Put it back on the air.' },
-    seeding: { text: 'Seeding', disabled: true, title: 'You are already seeding this site from this browser' },
+    resume: {
+        text: 'Resume seeding',
+        icon: '🔄',
+        disabled: false,
+        title: 'This site is stored here. Put it back on the air.'
+    },
+    seeding: {
+        text: 'Seeding',
+        icon: '✅',
+        disabled: true,
+        title: 'You are already seeding this site from this browser'
+    },
     unavailable: {
         text: 'Reseed',
         disabled: true,
@@ -115,11 +134,23 @@ export async function refreshViewerActions(hash) {
         this._siteVerdictLabel || (this._siteVerified === true ? 'Verified publisher' : 'Publisher: unverified');
     const applyState = (name) => {
         const state = RESEED_STATES[name] || RESEED_STATES.pending;
-        // Only the label changes; the mark next to it belongs to the signature
-        // and is written by `updateSiteSignatureBadge`.
         const label = document.getElementById('viewer-reseed-label');
         if (label) label.textContent = state.text;
         else reseed.textContent = state.text;
+
+        // The mark is the signature's unless the state has one of its own —
+        // which only the two hosting states do, and only because neither is
+        // reachable without a verified signature in the first place.
+        const badge = document.getElementById('site-signature-status');
+        if (badge) {
+            badge.textContent = state.icon || (this._siteVerified === true ? '✔' : '⚠');
+            badge.className = state.icon
+                ? 'viewer-verified is-hosting'
+                : this._siteVerified === true
+                  ? 'viewer-verified is-verified'
+                  : 'viewer-verified is-unverified';
+        }
+
         reseed.disabled = state.disabled;
         // The verdict comes first in the description either way: it is what
         // decides whether the rest of the sentence is even on offer.

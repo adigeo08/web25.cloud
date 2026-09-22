@@ -874,3 +874,105 @@ test('what the delete says afterwards agrees with what it asked', async () => {
     assert.match(body, /put it back on the air with Reseed/i);
     assert.doesNotMatch(body, /stored copy is gone/i);
 });
+
+test('a publisher who reseeds their own site is still its publisher', async () => {
+    // The case that read wrong: a deployment you lost, put back from a copy
+    // this browser kept, was being called somebody else's site. The signature
+    // in it is yours, so the card has to compare identities rather than assume
+    // that anything reseeded belongs to a stranger.
+    const site = await publishedSite();
+    const { context } = await harness();
+
+    context.rememberReseedPayload.call(context, site.hash, {
+        torrentFile: site.torrentFile,
+        name: SITE_NAME,
+        pieceLength: PIECE_LENGTH,
+        length: 0,
+        files: site.entries
+    });
+    await context.reseedSite.call(context, site.hash);
+
+    // Signed in as the publisher of this site — written in a different case,
+    // which is how one tool checksums an address and another does not.
+    context.authController = { state: { address: PUBLISHER.toUpperCase() } };
+    const [mine] = await context.listSeedingSessionViews.call(context);
+    assert.equal(mine.reseeded, true, 'it did come back through a reseed');
+    assert.equal(mine.ownPublisher, true, 'and it is still this identity’s site');
+
+    // Signed in as somebody else: the same record, and now genuinely hosting.
+    context.authController = { state: { address: VISITOR } };
+    const [theirs] = await context.listSeedingSessionViews.call(context);
+    assert.equal(theirs.ownPublisher, false);
+
+    // Nobody signed in: the browser has no identity to recognise, and saying
+    // so is more honest than guessing.
+    context.authController = null;
+    const [anonymous] = await context.listSeedingSessionViews.call(context);
+    assert.equal(anonymous.ownPublisher, false);
+});
+
+test('a reseed keeps the mirror the site was reachable by', async () => {
+    const site = await publishedSite();
+    const cache = fakeCache(
+        new Map([[site.hash, { data: {} }]]),
+        // A visit that resolved a mirror kept it with the payload; this visit
+        // opened a bare hash and knows nothing about it.
+        new Map([[site.hash, { torrentFile: site.torrentFile, files: site.entries, gofileLocator: 'keptLocator456' }]])
+    );
+    const { context } = await harness({ cache });
+    context.currentGofileLocator = null;
+
+    await context.reseedSite.call(context, site.hash);
+
+    const stored = await context._seedingStore.get(site.hash);
+    // The link this browser now shares is the whole address, mirror and all,
+    // rather than a hash-only one that has quietly lost the fallback.
+    assert.equal(stored.deploy.url, `https://web25.cloud/?orc=${site.hash}&keptLocator456`);
+    assert.equal(stored.deploy.mirrorState, 'ready');
+    assert.equal(stored.deploy.mirror.locator, 'keptLocator456');
+
+    // And the card says the mirror exists, instead of "Not created".
+    const [view] = await context.listSeedingSessionViews.call(context);
+    assert.equal(view.mirror.locator, 'keptLocator456');
+    assert.equal(view.mirrorState, 'ready');
+});
+
+test("this load's mirror wins over an older one, and neither is forgotten", async () => {
+    const site = await publishedSite();
+    const cache = fakeCache(
+        new Map([[site.hash, { data: {} }]]),
+        new Map([[site.hash, { torrentFile: site.torrentFile, files: site.entries, gofileLocator: 'oldLocator111' }]])
+    );
+    const { context } = await harness({ cache });
+    context.currentGofileLocator = 'freshLocator222';
+
+    await context.reseedSite.call(context, site.hash);
+
+    const stored = await context._seedingStore.get(site.hash);
+    assert.equal(stored.deploy.mirror.locator, 'freshLocator222', 'the newest thing known about the address wins');
+    // And it is what the payload keeps from here on.
+    assert.equal(cache.payloads.get(site.hash).gofileLocator, 'freshLocator222');
+});
+
+test('a mirror noticed on a later visit is kept for the payload already held', async () => {
+    const { default: PeerWebCache } = await import('../src/cache/PeerWebCache.js');
+    const site = await publishedSite();
+    const cache = new PeerWebCache();
+
+    // No payload here yet: noticing a mirror is not a reason to start keeping
+    // a site, so nothing is written.
+    assert.equal(await cache.rememberMirrorLocator(site.hash, 'lateLocator789'), false);
+    assert.equal(await cache.storedMirrorLocator(site.hash), '');
+
+    await cache.setPayload(site.hash, { torrentFile: site.torrentFile, files: site.entries });
+    assert.equal(await cache.storedMirrorLocator(site.hash), '', 'that visit knew of no mirror');
+
+    // A later load opens the full WEB25 link, which does carry one.
+    assert.equal(await cache.rememberMirrorLocator(site.hash, 'lateLocator789'), true);
+    assert.equal(await cache.storedMirrorLocator(site.hash), 'lateLocator789');
+
+    // And a write from a visit that knows nothing about it does not drop it:
+    // the mirror belongs to the site's address, not to one load.
+    await cache.setPayload(site.hash, { torrentFile: site.torrentFile, files: site.entries });
+    assert.equal(await cache.storedMirrorLocator(site.hash), 'lateLocator789');
+});

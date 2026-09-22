@@ -754,6 +754,11 @@ export async function captureReseedPayload(torrent, hash) {
         // Validated against the metainfo rather than assumed: a payload that
         // would announce under a different info hash is not this site.
         const payload = buildReseedPayload({ torrentFile, files });
+        // The mirror this load came by, or was offered, travels with it. It is
+        // part of the address the site is reachable at, so a reseed can hand
+        // the next visitor the same link this visitor arrived on rather than a
+        // hash-only one that has lost the fallback.
+        payload.gofileLocator = `${this.currentGofileLocator || ''}`;
         this.log(`Captured the reseed payload for ${hash} (${payload.files.length} entries).`);
         return payload;
     } catch (error) {
