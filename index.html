@@ -580,6 +580,19 @@
 
                         <div class="dm-layout">
                         <aside class="dm-contacts" aria-label="Contacts">
+                            <!--
+                                The other half of the phone's two panes: while a
+                                conversation is live but the list is on screen,
+                                this is the way back into it. Hidden on desktop,
+                                where both panes are visible at once.
+                            -->
+                            <button
+                                id="dm-back-to-chat"
+                                type="button"
+                                class="btn btn-secondary btn-sm dm-pane-switch dm-back-to-chat"
+                            >
+                                ← Back to conversation
+                            </button>
                             <div id="dm-my-npub-panel" class="dm-own-pubkey-panel dm-identity-card hidden">
                                 <p class="dm-own-pubkey-label">🪐 Your Nostr address</p>
                                 <code
@@ -589,12 +602,23 @@
                                     role="button"
                                     tabindex="0"
                                 ></code>
+                                <!--
+                                    On a phone this button *is* the identity
+                                    card: the address itself, its heading and
+                                    its hint step aside, and what is left is one
+                                    small control on the contacts toolbar. So
+                                    the wording is its own element, and
+                                    `aria-label` carries it whether or not it is
+                                    drawn.
+                                -->
                                 <button
                                     id="dm-copy-own-npub-btn"
                                     class="btn btn-primary btn-sm dm-copy-address-btn"
                                     title="Copy my Nostr address"
+                                    aria-label="Copy my Nostr address"
                                 >
-                                    📋 Copy my address
+                                    <span aria-hidden="true">📋</span>
+                                    <span class="dm-copy-address-label">Copy my address</span>
                                 </button>
                                 <p class="dm-own-pubkey-hint">Share this so others can message you.</p>
                             </div>
@@ -690,6 +714,23 @@
                         <!-- SUB-PANEL 2: Chat Active -->
                         <div id="dm-chat-active" class="hidden">
                             <div class="dm-chat-head">
+                                <!--
+                                    Phone only. A conversation takes the whole
+                                    tab there, the way a phone messenger does,
+                                    so there has to be a way back to the list
+                                    that is not Disconnect — leaving the screen
+                                    is not leaving the conversation. CSS shows
+                                    it only while the conversation is the whole
+                                    tab; on desktop both panes are on screen and
+                                    there is nothing to go back to.
+                                -->
+                                <button
+                                    id="dm-back-to-contacts"
+                                    type="button"
+                                    class="btn btn-secondary btn-sm dm-pane-switch dm-back-to-contacts"
+                                >
+                                    ← Contacts
+                                </button>
                                 <p id="dm-connection-status" class="status-chip status-pending">Not connected</p>
                                 <p id="dm-peer-label" class="dm-peer-label"></p>
                             </div>
@@ -750,7 +791,7 @@
                             -->
                             <label class="gateway-mode" for="gateway-search-mode">
                                 <input type="checkbox" id="gateway-search-mode" />
-                                <span class="gateway-mode-text">Search sites I have opened</span>
+                                <span class="gateway-mode-text">Search local cached history</span>
                             </label>
 
                             <div id="gateway-load-hints">
@@ -1366,8 +1407,20 @@
                         >
                         <span id="viewer-reseed-label" class="viewer-action-label">Unverified</span>
                     </button>
-                    <button id="viewer-forget" type="button" class="btn btn-clear btn-sm viewer-action">
-                        🗑️ Delete data
+                    <!--
+                        The label is its own element so a narrow phone can drop
+                        it and leave the bin, which says the same thing in the
+                        space there is. `aria-label` carries the wording either
+                        way, so nothing depends on the text being on screen.
+                    -->
+                    <button
+                        id="viewer-forget"
+                        type="button"
+                        class="btn btn-clear btn-sm viewer-action"
+                        aria-label="Delete this site's data from this browser"
+                    >
+                        <span aria-hidden="true">🗑️</span>
+                        <span class="viewer-action-label">Delete data</span>
                     </button>
                 </div>
             </div>

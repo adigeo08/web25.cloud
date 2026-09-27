@@ -38,7 +38,7 @@ The UI is organized into:
   - Resolution order: local cache → WebTorrent/P2P → GoFile mirror, when the link carries one
   - P2P gets one attempt with an 8-second deadline; there is no retry ladder
   - A quiet swarm transparently falls through to the mirror
-  - One checkbox under the box turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
+  - One checkbox under the box — **Search local cached history** — turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
   - The strip above a rendered site carries **Back** and the two things a visitor can decide: one control that is both the signature verdict and the offer to host (**✔ Reseed** when the publisher checks out, **⚠ Unverified** when nobody has vouched for the bytes), and **Delete data**
 - **Direct Messenger (WebRTC data channels + Nostr)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
@@ -391,6 +391,28 @@ NIPs used: **NIP-01**, **NIP-19**, **NIP-44 v2**, **NIP-59**, **NIP-17**.
 NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
+
+### 8a) The messenger on a phone
+
+Desktop shows the contact list and the conversation side by side, and still
+does. A phone cannot, so the panel behaves like a phone messenger there —
+without a second code path: it is the same DOM, laid out differently.
+
+- The sidebar's top becomes a **toolbar**: the identity card collapses to the
+  one control a phone has room for — a small **📋** copy button — sharing a line
+  with the contact filter. The address itself, its heading and its hint step
+  aside, and the button keeps the wording in `aria-label`
+- **Invitations** always sit directly under that toolbar, and the contact list
+  under them
+- **Opening a conversation takes the whole tab.** The contact list steps aside
+  rather than being pushed down a scroll, and **← Contacts** brings it back.
+  That is navigation, not disconnection: the conversation stays open and
+  connected behind it, **← Back to conversation** returns, and Disconnect
+  remains the only thing that ends a chat
+
+Both switches are phone-only furniture, and both pane rules are conditional on a
+conversation actually being open — so the "find someone" screen still stacks
+under the contacts exactly as it did, and desktop never sees any of it.
 
 ### 8b) Consent, trusted contacts and presence
 

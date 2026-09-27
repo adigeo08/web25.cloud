@@ -27,10 +27,16 @@ test('the burger button is wired to the tab list it opens', () => {
 test('the gateway search keeps its icon and input in one shrinkable row', () => {
     // The wrapper is what lets the pill become a stacked field on a phone
     // without the absolutely positioned icon drifting off its row.
-    const group = MARKUP.slice(MARKUP.indexOf('class="hash-input-group gateway-input-group"'), MARKUP.indexOf('gateway-formats'));
+    const group = MARKUP.slice(
+        MARKUP.indexOf('class="hash-input-group gateway-input-group"'),
+        MARKUP.indexOf('gateway-formats')
+    );
     assert.match(group, /<div class="gateway-field">[\s\S]*?gateway-search-icon[\s\S]*?id="hash-input"[\s\S]*?<\/div>/);
     assert.match(group, /id="load-site"/);
-    assert.match(STYLES, /@media \(max-width: 720px\) \{[\s\S]*?\.gateway-input-group \{[\s\S]*?flex-direction: column;/);
+    assert.match(
+        STYLES,
+        /@media \(max-width: 720px\) \{[\s\S]*?\.gateway-input-group \{[\s\S]*?flex-direction: column;/
+    );
 });
 
 test('the phone stepper shows only the step before, the current one and the next', () => {
@@ -69,4 +75,75 @@ test('the recipient search button spans the row on a phone, like Copy my address
     // Both controls live in the messenger panel, which is what makes the
     // mismatch visible in the first place.
     assert.match(MARKUP, /id="dm-copy-own-npub-btn"[\s\S]*?id="dm-nostr-search-btn"/);
+});
+
+test('the viewer strip stays one row on a phone, and shrinks instead of wrapping', () => {
+    const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 640px)'));
+    // Wrapping spent a line of a small screen on chrome above somebody else's
+    // page, and stretching the two controls to fill it made them look like the
+    // point of the view.
+    assert.doesNotMatch(phone.slice(0, 600), /\.site-viewer-header \{[\s\S]{0,200}?flex-wrap: wrap;/);
+    assert.match(phone, /\.site-viewer-header \.btn \{[\s\S]*?min-height: 30px;/);
+    assert.match(phone, /\.site-viewer-header \.viewer-info \{[\s\S]*?flex-wrap: nowrap;/);
+
+    // Narrower still, the bin stands for "delete" on its own — and the button
+    // carries the wording in `aria-label`, so dropping the text costs a screen
+    // reader nothing.
+    const narrow = STYLES.slice(STYLES.indexOf('@media (max-width: 420px)'));
+    assert.match(narrow, /#viewer-forget \.viewer-action-label \{[\s\S]*?display: none;/);
+    assert.match(MARKUP, /id="viewer-forget"[\s\S]{0,240}aria-label="Delete this site's data from this browser"/);
+    assert.match(MARKUP, /id="viewer-forget"[\s\S]{0,320}<span class="viewer-action-label">Delete data<\/span>/);
+});
+
+test('the contacts sidebar becomes a toolbar with a list under it on a phone', () => {
+    const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 860px)'));
+
+    // The identity card collapses to the one control that does something, and
+    // shares a line with the contact filter.
+    assert.match(phone, /#dm-my-npub-panel \{[\s\S]*?display: contents;/);
+    assert.match(phone, /\.dm-copy-address-label \{[\s\S]*?display: none;/);
+    assert.match(phone, /\.dm-contacts \.dm-copy-address-btn \{[\s\S]*?order: 1;/);
+    assert.match(phone, /\.dm-contacts input\.dm-contacts-filter \{[\s\S]*?order: 2;/);
+    // Invitations sit under that toolbar, and the list under them.
+    assert.match(phone, /#dm-invitations \{[\s\S]*?order: 4;/);
+    assert.match(phone, /\.dm-contacts-list \{[\s\S]*?order: 6;/);
+
+    // Hiding the wording needs the button to say it some other way.
+    assert.match(MARKUP, /id="dm-copy-own-npub-btn"[\s\S]{0,300}aria-label="Copy my Nostr address"/);
+    assert.match(MARKUP, /<span class="dm-copy-address-label">Copy my address<\/span>/);
+});
+
+test('a conversation takes the whole tab on a phone, and desktop keeps both panes', () => {
+    const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 860px)'));
+
+    // Both rules are conditional on a conversation actually being open, so the
+    // finder screen still stacks under the contacts exactly as it did.
+    assert.match(
+        phone,
+        /\.dm-layout:has\(#dm-chat-active:not\(\.hidden\)\):not\(\.dm-show-contacts\) \.dm-contacts \{[\s\S]*?display: none;/
+    );
+    assert.match(
+        phone,
+        /\.dm-layout:has\(#dm-chat-active:not\(\.hidden\)\)\.dm-show-contacts \.dm-main \{[\s\S]*?display: none;/
+    );
+
+    // The two ways between the panes exist, and are phone-only furniture: on
+    // desktop both panes are on screen and there is nothing to switch to.
+    assert.match(MARKUP, /id="dm-back-to-contacts"/);
+    assert.match(MARKUP, /id="dm-back-to-chat"/);
+    assert.match(STYLES, /\.dm-pane-switch \{\s*display: none;/);
+    assert.match(
+        phone,
+        /\.dm-layout:has\(#dm-chat-active:not\(\.hidden\)\) \.dm-back-to-contacts \{[\s\S]*?display: inline-flex;/
+    );
+
+    // Back leads the conversation head, ahead of the avatar and the peer name.
+    assert.match(phone, /\.dm-back-to-contacts \{[\s\S]*?order: -3;/);
+    const head = MARKUP.slice(MARKUP.indexOf('class="dm-chat-head"'), MARKUP.indexOf('id="channels-messages"'));
+    assert.ok(head.indexOf('dm-back-to-contacts') < head.indexOf('dm-connection-status'));
+});
+
+test('the search toggle offers the local cached history, by that name', () => {
+    assert.match(MARKUP, /<span class="gateway-mode-text">Search local cached history<\/span>/);
+    assert.ok(!MARKUP.includes('Search sites I have opened'), 'the old wording is gone');
 });
