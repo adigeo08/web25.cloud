@@ -23,7 +23,7 @@ const SEARCH_DEBOUNCE_MS = 140;
 
 const PLACEHOLDERS = {
     load: 'Paste a torrent hash, hash&mirror, or WEB25 URL',
-    search: 'Search sites you have opened — title, keyword, file, publisher'
+    search: 'Search local cached history — title, keyword, file, publisher'
 };
 
 const ARIA_LABELS = {

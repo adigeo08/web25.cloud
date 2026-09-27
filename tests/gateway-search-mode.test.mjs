@@ -58,7 +58,7 @@ test('the box resolves addresses until the checkbox is ticked', () => {
 
     assert.equal(panel.isLibrarySearchMode(), true);
     assert.equal(dom.nodes.button.textContent, 'Search');
-    assert.match(dom.nodes.input.placeholder, /search sites you have opened/i);
+    assert.match(dom.nodes.input.placeholder, /search local cached history/i);
     assert.equal(dom.nodes.input.getAttribute('aria-label'), 'Search the sites cached in this browser');
     // The three address formats are not what a keyword search accepts.
     assert.equal(dom.nodes.loadHints.classList.contains('hidden'), true);

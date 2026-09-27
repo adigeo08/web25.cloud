@@ -2330,6 +2330,13 @@ input[type='checkbox'] {
     font-size: 0.7rem;
 }
 
+/* The phone's two pane switches. Off on desktop, where both panes are on
+   screen at once and there is nothing to switch between; the media query below
+   turns each on for the pane it belongs to. */
+.dm-pane-switch {
+    display: none;
+}
+
 /* An invitation is a message from a person, so it is shaped like one. */
 .dm-invite {
     position: relative;
@@ -4171,22 +4178,44 @@ input[type='checkbox'] {
     align-items: center;
 }
 
+/* The strip on a phone: one row, not two.
+   Wrapping the actions onto a second row spent a line of a small screen on
+   chrome above somebody else's page, and stretching them to fill it made two
+   controls look like the point of the view. Everything shrinks instead — the
+   labels are short, the marks carry most of the meaning, and 30px keeps both
+   buttons a real tap target. */
 @media (max-width: 640px) {
     .site-viewer-header {
-        flex-wrap: wrap;
-        gap: 0.5rem;
+        gap: 0.4rem;
+        padding: 0.45rem 0.55rem;
+    }
+
+    .site-viewer-header .btn {
+        min-height: 30px;
+        padding: 0.28rem 0.5rem;
+        font-size: 0.72rem;
     }
 
     .site-viewer-header .viewer-info {
-        width: 100%;
-        margin-left: 0;
-        justify-content: flex-end;
+        flex-wrap: nowrap;
+        gap: 0.35rem;
     }
 
-    /* Two buttons, side by side, the full width of the row. */
     .site-viewer-header .viewer-action {
-        flex: 1 1 0;
-        justify-content: center;
+        gap: 0.25rem;
+    }
+
+    .viewer-verified {
+        font-size: 0.82rem;
+    }
+}
+
+/* Narrower still: the bin says "delete" on its own, and the room goes to the
+   half of the strip that changes — the verdict and what it is offering. The
+   button keeps its `aria-label`, so dropping the text costs a reader nothing. */
+@media (max-width: 420px) {
+    #viewer-forget .viewer-action-label {
+        display: none;
     }
 }
 
@@ -4376,13 +4405,123 @@ select,
         min-height: 0;
     }
 
+    /* The sidebar becomes a toolbar with a list under it.
+       A phone has no room for a card holding the whole npub, its heading and
+       its hint above everything else, so the card collapses to the one control
+       that does something — Copy — which shares a line with the contact
+       filter. Everything after that is a full-width row in the order it is
+       read: invitations, then the list. */
     .dm-contacts {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.7rem;
         border-right: 0;
         border-bottom: 1px solid var(--border);
     }
 
+    .dm-contacts > * {
+        flex: 1 1 100%;
+    }
+
+    /* `display: contents` lifts the card's children onto the toolbar row; the
+       `hidden` class still wins over it, so an identity that is not there is
+       still not drawn. */
+    #dm-my-npub-panel {
+        display: contents;
+    }
+
+    #dm-my-npub-panel .dm-own-pubkey-label,
+    #dm-my-npub-panel .dm-own-pubkey-value,
+    #dm-my-npub-panel .dm-own-pubkey-hint,
+    .dm-copy-address-label {
+        display: none;
+    }
+
+    .dm-contacts .dm-copy-address-btn {
+        order: 1;
+        flex: 0 0 auto;
+        width: auto;
+        min-height: 34px;
+        margin: 0;
+        padding: 0.4rem 0.6rem;
+    }
+
+    .dm-contacts input.dm-contacts-filter {
+        order: 2;
+        flex: 1 1 7rem;
+        width: auto;
+        min-height: 34px;
+        margin: 0;
+    }
+
+    #dm-my-npub-locked,
+    #dm-nostr-disabled {
+        order: 3;
+        margin: 0;
+    }
+
+    #dm-invitations {
+        order: 4;
+    }
+
+    .dm-contacts-head {
+        order: 5;
+        margin: 0;
+    }
+
     .dm-contacts-list {
+        order: 6;
+        /* Short while it shares the tab with the finder below it. */
         max-height: 220px;
+    }
+
+    .dm-contacts-hint {
+        order: 7;
+        margin-top: 0;
+    }
+
+    .dm-back-to-chat {
+        order: 0;
+    }
+
+    /* A conversation takes the whole tab, the way a phone messenger does.
+       Both rules are conditional on a conversation actually being open, so the
+       finder screen still stacks under the contacts exactly as before — and
+       `dm-show-contacts` means nothing until there is a conversation to come
+       back to. */
+    .dm-layout:has(#dm-chat-active:not(.hidden)):not(.dm-show-contacts) .dm-contacts {
+        display: none;
+    }
+
+    .dm-layout:has(#dm-chat-active:not(.hidden)).dm-show-contacts .dm-main {
+        display: none;
+    }
+
+    .dm-layout:has(#dm-chat-active:not(.hidden)) .dm-back-to-contacts {
+        display: inline-flex;
+    }
+
+    .dm-layout:has(#dm-chat-active:not(.hidden)).dm-show-contacts .dm-back-to-chat {
+        display: inline-flex;
+    }
+
+    /* With the conversation off screen the list has the tab to itself, so the
+       cap that keeps it from crowding the finder is not wanted. */
+    .dm-layout:has(#dm-chat-active:not(.hidden)).dm-show-contacts .dm-contacts-list {
+        max-height: none;
+    }
+
+    /* Back comes first in the head, ahead of the avatar and the peer's name. */
+    .dm-back-to-contacts {
+        order: -3;
+        flex: 0 0 auto;
+    }
+
+    .dm-chat-head {
+        flex-wrap: wrap;
+        padding: 0.6rem 0.75rem;
     }
 
     .deploy-stepper {

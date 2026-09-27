@@ -30,6 +30,24 @@ export const DM_CONNECTION_LABELS = {
     disconnected: { text: 'Disconnected', className: 'status-chip status-error' }
 };
 
+/**
+ * Which of the two panes a phone is showing.
+ *
+ * Desktop shows the contact list and the conversation side by side and has no
+ * use for this: the class it toggles only means anything inside the narrow
+ * media query, and only while a conversation pane is open. A phone cannot show
+ * both, so a conversation takes the whole tab the way a phone messenger does —
+ * and leaving that screen has to be possible without leaving the conversation,
+ * which is what Disconnect is for.
+ *
+ * @param {'contacts'|'conversation'} pane
+ */
+export function showDmPane(pane) {
+    const layout = document.querySelector('.dm-layout');
+    if (!layout) return;
+    layout.classList.toggle('dm-show-contacts', pane === 'contacts');
+}
+
 export function showDmStep(step) {
     DM_STEPS.forEach((id) => {
         const el = document.getElementById(id);
@@ -40,6 +58,11 @@ export function showDmStep(step) {
             el.classList.add('hidden');
         }
     });
+
+    // A conversation that has just opened is what the person asked to see, so
+    // on a phone it gets the screen. The finder needs no such claim: with no
+    // conversation open both panes simply stack.
+    if (step === 'dm-chat-active') showDmPane('conversation');
 }
 
 function setDmError(elementId, message) {
@@ -138,6 +161,11 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend }) {
         onLeave();
         showDmStep('dm-choose-role');
     });
+
+    // The phone's two panes. Neither touches the conversation: this is which
+    // screen you are looking at, not whether you are still connected.
+    document.getElementById('dm-back-to-contacts')?.addEventListener('click', () => showDmPane('contacts'));
+    document.getElementById('dm-back-to-chat')?.addEventListener('click', () => showDmPane('conversation'));
 
     bindCopyButton(copyOwnNpubBtn, () => document.getElementById('dm-own-npub-value')?.textContent || '');
 
