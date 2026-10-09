@@ -9,6 +9,7 @@
  */
 
 import { bindCopyButton } from '../ClipboardButton.js';
+import { paintAvatar } from './Avatar.js';
 
 const DM_STEPS = ['dm-choose-role', 'dm-chat-active'];
 
@@ -46,6 +47,39 @@ export function showDmPane(pane) {
     const layout = document.querySelector('.dm-layout');
     if (!layout) return;
     layout.classList.toggle('dm-show-contacts', pane === 'contacts');
+    // A thread that filled up while it was off screen could not scroll, so
+    // coming back to it lands on the latest message, the way a messenger
+    // reopens a chat.
+    if (pane === 'conversation') scrollThreadToBottom();
+}
+
+/** How close to the bottom still counts as reading the latest message. */
+const NEAR_BOTTOM_PX = 120;
+
+function messagesContainer() {
+    return document.getElementById('channels-messages');
+}
+
+/** @param {HTMLElement} container */
+function isNearBottom(container) {
+    return container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_BOTTOM_PX;
+}
+
+/**
+ * The jump-to-latest button, shown only while the latest is off screen.
+ * @param {HTMLElement|null} [container]
+ */
+function syncScrollButton(container = messagesContainer()) {
+    const button = document.getElementById('dm-scroll-bottom');
+    if (!button || !container) return;
+    button.classList.toggle('hidden', isNearBottom(container));
+}
+
+/** @param {HTMLElement|null} [container] */
+function scrollThreadToBottom(container = messagesContainer()) {
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    syncScrollButton(container);
 }
 
 export function showDmStep(step) {
@@ -186,6 +220,18 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend }) {
     }
 
     sendBtn?.addEventListener('click', () => onSend(messageInput?.value || ''));
+    // Pressing Send must not take focus from the field: on a phone that closes
+    // the keyboard after every message, which no messenger does.
+    sendBtn?.addEventListener('mousedown', (event) => event.preventDefault());
+
+    // Reading back through the thread is not interrupted by new messages; the
+    // button below is how you get back to them.
+    const thread = messagesContainer();
+    thread?.addEventListener('scroll', () => syncScrollButton(thread), { passive: true });
+    document.getElementById('dm-scroll-bottom')?.addEventListener('click', () => {
+        const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        thread?.scrollTo({ top: thread.scrollHeight, behavior: still ? 'auto' : 'smooth' });
+    });
     messageInput?.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') onSend(messageInput.value || '');
     });
@@ -229,6 +275,7 @@ export function renderDmSearchResult(result) {
     const profile = result.profile || null;
     const displayName = profile?.displayName || profile?.name || '';
 
+    paintAvatar(document.getElementById('dm-search-result-avatar'), displayName || result.npub || '');
     if (nameEl) nameEl.textContent = displayName || 'Unnamed Nostr identity';
     if (npubEl) npubEl.textContent = result.shortNpub || result.npub || '';
     if (aboutEl) {
@@ -277,6 +324,7 @@ export function renderDmConnectionState(state, { peerLabel = '' } = {}) {
 
     const peerEl = document.getElementById('dm-peer-label');
     if (peerEl) peerEl.textContent = peerLabel;
+    paintAvatar(document.getElementById('dm-peer-avatar'), peerLabel);
 
     // Anything past waiting means there is a conversation pane worth showing.
     if (state !== 'idle' && state !== 'awaiting-peer') showDmStep('dm-chat-active');
@@ -284,7 +332,12 @@ export function renderDmConnectionState(state, { peerLabel = '' } = {}) {
 
 export function clearChannelsMessages() {
     const container = document.getElementById('channels-messages');
-    if (container) container.innerHTML = '';
+    if (container) {
+        container.innerHTML = '';
+        // The next message starts a new day chip, whatever day it is.
+        delete container.dataset.day;
+    }
+    document.getElementById('dm-scroll-bottom')?.classList.add('hidden');
 }
 
 export function clearDmSearch() {
@@ -364,26 +417,124 @@ export function renderMessageText(target, text) {
     if (lastIndex < value.length) target.appendChild(document.createTextNode(value.slice(lastIndex)));
 }
 
+/** Consecutive messages from one side within this window read as one burst. */
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * A peer supplies the timestamp, so a value that does not parse falls back to
+ * now rather than printing "Invalid Date" into the thread.
+ * @param {any} value
+ */
+function messageDate(value) {
+    const date = new Date(value || Date.now());
+    return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+/** @param {Date} date */
+function dayKey(date) {
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+/** @param {Date} date */
+function dayLabel(date) {
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (dayKey(date) === dayKey(today)) return 'Today';
+    if (dayKey(date) === dayKey(yesterday)) return 'Yesterday';
+    return date.toLocaleDateString([], {
+        day: 'numeric',
+        month: 'long',
+        ...(date.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' })
+    });
+}
+
+/**
+ * A date chip whenever the thread crosses into a new day.
+ * @param {HTMLElement} container
+ * @param {Date} date
+ */
+function markDay(container, date) {
+    const key = dayKey(date);
+    if (container.dataset.day === key) return;
+    container.dataset.day = key;
+
+    const chip = document.createElement('div');
+    chip.className = 'channels-day';
+    chip.setAttribute('role', 'separator');
+    const label = document.createElement('span');
+    label.textContent = dayLabel(date);
+    chip.appendChild(label);
+    container.appendChild(chip);
+}
+
+/**
+ * The clock in the corner of a bubble.
+ * @param {Date} date
+ */
+function messageStamp(date) {
+    const meta = document.createElement('span');
+    meta.className = 'channels-message-meta';
+    meta.textContent = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return meta;
+}
+
+/**
+ * One message, as a bubble.
+ *
+ * In a one-to-one conversation the side a bubble sits on already says who
+ * wrote it, so the bubble carries only the time; the sender's address and the
+ * full date are in its tooltip. A run of messages from the same side shares
+ * one tail, a new day gets a chip, and a notice the service writes itself
+ * ("Peer verified …") is a centred pill rather than a message from anybody.
+ *
+ * @param {any} message
+ * @param {boolean} [isOwn]
+ */
 export function appendChannelsMessage(message, isOwn = false) {
-    const container = document.getElementById('channels-messages');
+    const container = messagesContainer();
     if (!container) return;
 
-    const item = document.createElement('div');
-    item.className = `channels-message ${isOwn ? 'is-own' : ''}`.trim();
+    // Someone reading back through the thread stays where they are; your own
+    // message always brings you to the bottom.
+    const follow = isOwn || isNearBottom(container);
+    const date = messageDate(message.timestamp);
+    markDay(container, date);
 
-    const meta = document.createElement('div');
-    meta.className = 'channels-message-meta';
-    const time = new Date(message.timestamp || Date.now()).toLocaleTimeString();
-    meta.textContent = `${shortAddress(message.from)} · ${time}`;
+    const system = message.from === 'system';
+    const side = system ? 'system' : isOwn ? 'out' : 'in';
+    const from = `${message.from || ''}`;
+
+    const item = document.createElement('div');
+    item.className = ['channels-message', side === 'out' ? 'is-own' : '', system ? 'is-system' : '']
+        .filter(Boolean)
+        .join(' ');
+    item.dataset.side = side;
+    item.dataset.from = from;
+    item.dataset.ts = `${date.getTime()}`;
+    item.title = `${system ? 'Notice' : shortAddress(message.from)} · ${date.toLocaleString()}`;
+
+    const previous = /** @type {HTMLElement|null} */ (container.lastElementChild);
+    if (
+        !system &&
+        previous?.dataset?.side === side &&
+        previous.dataset.from === from &&
+        date.getTime() - Number(previous.dataset.ts || 0) < GROUP_WINDOW_MS
+    ) {
+        item.classList.add('is-continued');
+    }
 
     const body = document.createElement('div');
     body.className = 'channels-message-body';
     renderMessageText(body, message.text || '');
+    // Inside the body, after the text, so it can float onto the last line.
+    if (!system) body.appendChild(messageStamp(date));
 
-    item.appendChild(meta);
     item.appendChild(body);
     container.appendChild(item);
-    container.scrollTop = container.scrollHeight;
+
+    if (follow) scrollThreadToBottom(container);
+    else syncScrollButton(container);
 }
 
 export function clearChannelsComposer() {
@@ -404,13 +555,29 @@ export function bindFileInput(onFile) {
     });
 }
 
+/** @param {number} bytes */
+function formatBytes(bytes) {
+    if (!(bytes > 0)) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
 /**
- * One row per transfer, in either direction.
+ * One bubble per transfer, in either direction.
  *
- * Over the relay a transfer takes seconds per megabyte rather than an instant,
- * so the row has to be honest while it runs: the sender sees its own progress,
- * the receiver sees a name and a percentage instead of a stuck placeholder, and
- * a transfer that dies mid-way says so rather than freezing at 94%.
+ * A file is part of the conversation, so it sits in the thread where it was
+ * sent, on the side of whoever sent it. Over the relay a transfer takes
+ * seconds per megabyte rather than an instant, so the bubble has to be honest
+ * while it runs: the sender sees its own progress, the receiver sees a name
+ * and a percentage instead of a stuck placeholder, and a transfer that dies
+ * mid-way says so rather than freezing at 94%. A finished file is the bubble
+ * itself: tapping it saves it.
  *
  * @param {{ fileId: string, fileName?: string, fileSize?: number, url?: string|null,
  *           received?: number, direction?: 'in'|'out', state?: 'active'|'error',
@@ -426,42 +593,94 @@ export function appendFileTransfer({
     state = 'active',
     overRelay = false
 }) {
-    const container = document.getElementById('channels-files');
+    const container = messagesContainer();
     if (!container) return;
+
+    let follow = false;
     let item = document.getElementById(`file-transfer-${fileId}`);
     if (!item) {
+        follow = direction === 'out' || isNearBottom(container);
+        const now = new Date();
+        markDay(container, now);
         item = document.createElement('div');
         item.id = `file-transfer-${fileId}`;
-        item.className = 'file-transfer';
-        container.appendChild(item);
+        item.className = 'channels-message file-transfer';
         item.dataset.fileName = fileName;
+        item.dataset.ts = `${now.getTime()}`;
+        container.appendChild(item);
     }
     // Progress events carry less than the first event did; whatever the row was
     // named when it opened is what it stays called.
     if (fileName) item.dataset.fileName = fileName;
+    if (fileSize > 0) item.dataset.fileSize = `${fileSize}`;
+    // A file this browser is sending stays outgoing: its own announcement is
+    // reported as an incoming transfer before the send starts.
+    if (direction === 'out' || !item.dataset.side) item.dataset.side = direction === 'out' ? 'out' : 'in';
+
     const label = item.dataset.fileName || fileName || 'file';
+    const outgoing = item.dataset.side === 'out';
+    const size = formatBytes(Number(item.dataset.fileSize || 0));
 
     item.textContent = '';
+    item.classList.toggle('is-own', outgoing);
     item.classList.toggle('is-error', state === 'error');
+    item.classList.toggle('is-ready', Boolean(url));
 
-    if (url) {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = label;
-        link.className = 'btn btn-secondary btn-sm';
-        link.textContent = `💾 ${label}`;
-        item.appendChild(link);
-        return;
+    const card = document.createElement(url ? 'a' : 'div');
+    card.className = 'file-transfer-card';
+    if (url && card instanceof HTMLAnchorElement) {
+        card.href = url;
+        card.download = label;
+        card.title = `Save ${label}`;
     }
 
-    const span = document.createElement('span');
+    const icon = document.createElement('span');
+    icon.className = 'file-transfer-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = state === 'error' ? '⚠️' : url ? '💾' : outgoing ? '📤' : '📥';
+
+    const info = document.createElement('span');
+    info.className = 'file-transfer-info';
+    const name = document.createElement('span');
+    name.className = 'file-transfer-name';
+    name.textContent = label;
+    const status = document.createElement('span');
+    status.className = 'file-transfer-status';
+
+    const progress = fileSize > 0 ? Math.min(100, Math.round((received / fileSize) * 100)) : 0;
+    const via = overRelay ? ' · over relay' : '';
     if (state === 'error') {
-        span.textContent = `⚠️ ${label} — transfer interrupted`;
+        status.textContent = 'Transfer interrupted';
+    } else if (url) {
+        status.textContent = [size, 'Tap to save'].filter(Boolean).join(' · ');
+    } else if (outgoing && progress >= 100) {
+        status.textContent = [size, `Sent${via}`].filter(Boolean).join(' · ');
     } else {
-        const progress = fileSize > 0 ? Math.round((received / fileSize) * 100) : 0;
-        const arrow = direction === 'out' ? '📤' : '📥';
-        const via = overRelay ? ' · over relay' : '';
-        span.textContent = `${arrow} ${label} — ${progress}%${via}`;
+        status.textContent = `${outgoing ? 'Sending' : 'Receiving'} · ${progress}%${via}`;
     }
-    item.appendChild(span);
+
+    info.appendChild(name);
+    info.appendChild(status);
+    card.appendChild(icon);
+    card.appendChild(info);
+    item.appendChild(card);
+
+    if (state !== 'error' && !url && progress < 100) {
+        const bar = document.createElement('div');
+        bar.className = 'file-transfer-progress';
+        bar.setAttribute('role', 'progressbar');
+        bar.setAttribute('aria-valuemin', '0');
+        bar.setAttribute('aria-valuemax', '100');
+        bar.setAttribute('aria-valuenow', `${progress}`);
+        bar.setAttribute('aria-label', label);
+        const fill = document.createElement('span');
+        fill.style.width = `${progress}%`;
+        bar.appendChild(fill);
+        item.appendChild(bar);
+    }
+
+    item.appendChild(messageStamp(messageDate(Number(item.dataset.ts))));
+
+    if (follow) scrollThreadToBottom(container);
+    else syncScrollButton(container);
 }

@@ -357,7 +357,9 @@ export function setupChannels() {
                 fileName: event.fileName,
                 fileSize: event.fileSize || event.total || 0,
                 received: event.received || 0,
-                direction: 'in'
+                // The sender's own announcement comes back through here too,
+                // marked local; it is the start of an outgoing bubble.
+                direction: event.local === true ? 'out' : 'in'
             });
         } else if (event.type === 'file-send-start' || event.type === 'file-send-progress') {
             // The sender needs its own row: over the relay a file is paced

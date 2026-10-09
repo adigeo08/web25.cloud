@@ -9,6 +9,7 @@
  */
 
 import { shortNpub } from '../../nostr/nip19.js';
+import { createAvatar } from './Avatar.js';
 
 /**
  * @param {{ onSelect: (contact: any) => void, onFilter: (query: string) => void,
@@ -126,16 +127,32 @@ function renderContactRow(contact, online, selectedKey) {
     row.setAttribute('data-contact-npub', contact.npub || '');
     row.setAttribute('data-contact-name', contact.name || '');
 
+    const displayName = contact.name || shortNpub(contact.npub || contact.nostrPublicKey);
+
+    // The face, with presence as the dot on its corner.
+    const face = document.createElement('span');
+    face.className = 'dm-contact-avatar';
+    face.appendChild(createAvatar(displayName));
     const dot = document.createElement('span');
     dot.className = `dm-presence-dot${online ? ' is-online' : ''}`;
     dot.setAttribute('aria-label', online ? 'online' : 'offline');
+    face.appendChild(dot);
 
     const body = document.createElement('span');
     body.className = 'dm-contact-body';
 
+    const top = document.createElement('span');
+    top.className = 'dm-contact-top';
     const name = document.createElement('span');
     name.className = 'dm-contact-name';
-    name.textContent = contact.name || shortNpub(contact.npub || contact.nostrPublicKey);
+    name.textContent = displayName;
+    top.appendChild(name);
+    if (online) {
+        const presence = document.createElement('span');
+        presence.className = 'dm-contact-presence';
+        presence.textContent = 'online';
+        top.appendChild(presence);
+    }
 
     // Enough identity to disambiguate two contacts with the same friendly name.
     const identity = document.createElement('span');
@@ -143,9 +160,9 @@ function renderContactRow(contact, online, selectedKey) {
     const evm = contact.evmAddress ? `${contact.evmAddress.slice(0, 8)}…` : 'no EVM address';
     identity.textContent = `${shortNpub(contact.npub || contact.nostrPublicKey)} · ${evm}`;
 
-    body.appendChild(name);
+    body.appendChild(top);
     body.appendChild(identity);
-    row.appendChild(dot);
+    row.appendChild(face);
     row.appendChild(body);
     row.appendChild(renderContactActions(contact));
     return row;

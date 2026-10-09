@@ -392,27 +392,43 @@ NIP-04 is not implemented. See `docs/nostr-direct-messenger.md`.
 
 ---
 
-### 8a) The messenger on a phone
+### 8a) The messenger layout, desktop and phone
 
-Desktop shows the contact list and the conversation side by side, and still
-does. A phone cannot, so the panel behaves like a phone messenger there —
-without a second code path: it is the same DOM, laid out differently.
+The Chat tab is laid out like a desktop messenger: the chat list on the left,
+the open conversation on the right, each scrolling on its own inside a window
+that fits the screen, with the composer pinned to the bottom.
 
-- The sidebar's top becomes a **toolbar**: the identity card collapses to the
-  one control a phone has room for — a small **📋** copy button — sharing a line
-  with the contact filter. The address itself, its heading and its hint step
-  aside, and the button keeps the wording in `aria-label`
-- **Invitations** always sit directly under that toolbar, and the contact list
-  under them
-- **Opening a conversation takes the whole tab.** The contact list steps aside
-  rather than being pushed down a scroll, and **← Contacts** brings it back.
-  That is navigation, not disconnection: the conversation stays open and
-  connected behind it, **← Back to conversation** returns, and Disconnect
-  remains the only thing that ends a chat
+- **Chat list:** your Nostr address on one line with a **📋 Copy** button,
+  a contact filter, pending **invitations**, then your contacts — letter
+  avatars (no profile picture is ever fetched), a presence dot and "online",
+  and Rename / Remove on each row
+- **Conversation:** a header with the peer's avatar, name and the single
+  connection state underneath it, plus **Save contact** and **Disconnect**.
+  Messages are bubbles with the time in the corner; a run from one side shares
+  a tail, each day gets a chip, and service notices ("Peer verified …") are
+  centred pills. The sender's address and full date are in each bubble's
+  tooltip
+- **Files are bubbles in the thread**, on the sender's side, with progress
+  while they run, "Sent" when done, and a received file is tapped to save
+- Reading back through history is not interrupted by new messages; a
+  **jump-to-latest** button appears instead. Pressing Send keeps focus in the
+  field, so a phone keyboard stays open
+
+A phone cannot show both panes, so there the panel behaves like a phone
+messenger — without a second code path: it is the same DOM, laid out
+differently.
+
+- **Opening a conversation takes the whole screen.** The **←** in its header
+  brings the list back. That is navigation, not disconnection: the
+  conversation stays open and connected behind it, a **Back to conversation**
+  bar at the top of the list returns, and Disconnect remains the only thing
+  that ends a chat
+- With no conversation open, the list and the "start a new chat" finder stack
+  in one page scroll
 
 Both switches are phone-only furniture, and both pane rules are conditional on a
 conversation actually being open — so the "find someone" screen still stacks
-under the contacts exactly as it did, and desktop never sees any of it.
+under the contacts, and desktop never sees any of it.
 
 ### 8b) Consent, trusted contacts and presence
 

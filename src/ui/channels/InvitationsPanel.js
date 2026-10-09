@@ -16,6 +16,7 @@
  */
 
 import { shortNpub } from '../../nostr/nip19.js';
+import { createAvatar } from './Avatar.js';
 
 const TRUST_LABELS = {
     unknown: { text: 'Unknown sender', className: 'dm-invite-trust is-unknown' },
@@ -94,6 +95,7 @@ export function renderInvitations(invitations) {
 function renderInvitationRow(invitation) {
     const row = document.createElement('div');
     row.className = 'dm-invite';
+    row.appendChild(createAvatar(invitation.profileName || invitation.npub || invitation.peerNostrPublicKey));
 
     const body = document.createElement('div');
     body.className = 'dm-invite-body';
@@ -130,7 +132,9 @@ function renderInvitationRow(invitation) {
 
     const meta = document.createElement('p');
     meta.className = 'dm-invite-meta';
-    const received = invitation.receivedAt ? new Date(invitation.receivedAt).toLocaleTimeString() : '';
+    const received = invitation.receivedAt
+        ? new Date(invitation.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : '';
     const label = TRUST_LABELS[invitation.trustState] || TRUST_LABELS.unknown;
     const trust = document.createElement('span');
     trust.className = label.className;
