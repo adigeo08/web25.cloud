@@ -414,6 +414,35 @@ that fits the screen, with the composer pinned to the bottom.
   **jump-to-latest** button appears instead. Pressing Send keeps focus in the
   field, so a phone keyboard stays open
 
+**Exchanging addresses** is the first thing anyone does, so it leads:
+
+- With no conversation open, the right pane is the exchange. **① Your
+  address** is shown whole, in groups that are easy to read out and compare by
+  their two ends, with **Copy address** and, where the platform has a share
+  sheet, **Share…** (a ready-to-forward message: the address and where to paste
+  it). **② Start a new chat** takes theirs
+- Pasting is the whole gesture: the npub is picked out of whatever arrived — a
+  `nostr:` link, a forwarded sentence, an address broken across lines — and the
+  search runs without pressing Search. A **Paste** button appears where the
+  browser can read the clipboard, and a cut-off npub is flagged as you type
+- The grouped address is separate elements with no whitespace between them, so
+  even a hand selection copies as one unbroken address
+- Your whole address is also one tap away from the list (the button next to
+  Copy), and tapping the peer in a conversation header shows **their** address
+  and the EVM address the handshake verified — both in a native dialog, a
+  bottom sheet on a phone. Each contact row can copy that contact's npub
+
+**The first connection** is shown, not implied:
+
+- Tapping a contact or **Request chat** opens the conversation straight away,
+  with the steps in the thread: *Chat request* → *Both of you agree* →
+  *Encrypted connection*. While waiting it says whether they look online,
+  where the request lands for them (**Chat invitations**) and how long it stays
+  valid, with **Cancel request** (the same path as Disconnect)
+- The composer stays closed until something can actually be sent, and its
+  placeholder says why; a dropped link becomes a one-line banner over the thread
+- **Accept** on an invitation answers at once and cannot be pressed twice
+
 A phone cannot show both panes, so there the panel behaves like a phone
 messenger — without a second code path: it is the same DOM, laid out
 differently.

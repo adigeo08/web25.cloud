@@ -2199,6 +2199,14 @@ input[type='checkbox'] {
     transition: background 0.12s ease;
 }
 
+.dm-show-address-btn {
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    color: var(--text-dim);
+}
+
 .dm-copy-address-btn:hover {
     background: rgba(76, 125, 255, 0.26);
     color: #fff;
@@ -2406,23 +2414,45 @@ input[type='checkbox'] {
 }
 
 .dm-contact-actions {
+    position: absolute;
+    top: 50%;
+    right: 0.4rem;
     display: inline-flex;
-    flex: 0 0 auto;
     gap: 0.1rem;
+    padding-left: 1.6rem;
+    border-radius: 0 12px 12px 0;
+    background: linear-gradient(to right, transparent, var(--surface-2) 1.4rem);
     opacity: 0;
+    transform: translateY(-50%);
     transition: opacity 0.12s ease;
+    pointer-events: none;
+}
+
+.dm-contact.is-selected .dm-contact-actions {
+    background: linear-gradient(to right, transparent, #172038 1.4rem);
 }
 
 .dm-contact:hover .dm-contact-actions,
 .dm-contact:focus-within .dm-contact-actions {
     opacity: 1;
+    pointer-events: auto;
 }
 
 /* A touch screen has no hover, and an invisible button is still a tappable
    one: there the actions are simply shown. */
 @media (hover: none) {
     .dm-contact-actions {
+        position: static;
+        flex: 0 0 auto;
+        padding: 0;
+        background: none;
         opacity: 0.8;
+        transform: none;
+        pointer-events: auto;
+    }
+
+    .dm-contact.is-selected .dm-contact-actions {
+        background: none;
     }
 }
 
@@ -2632,9 +2662,16 @@ input[type='checkbox'] {
 
 .dm-welcome {
     width: 100%;
-    max-width: 540px;
+    max-width: 880px;
     margin: auto;
     text-align: center;
+}
+
+.dm-welcome-sub {
+    max-width: 46ch;
+    margin: -0.6rem auto 1.25rem;
+    color: var(--text-dim);
+    font-size: 0.92rem;
 }
 
 .dm-welcome-art {
@@ -2654,6 +2691,15 @@ input[type='checkbox'] {
     font-size: 1.35rem;
 }
 
+/* The exchange: your address on one side, theirs on the other. */
+.dm-exchange {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    align-items: start;
+    gap: 0.85rem;
+}
+
+.dm-exchange-card,
 .dm-search {
     padding: 1rem;
     border: 1px solid var(--border);
@@ -2661,6 +2707,89 @@ input[type='checkbox'] {
     background: rgba(18, 21, 29, 0.94);
     box-shadow: var(--shadow);
     text-align: left;
+}
+
+.dm-exchange-card.hidden {
+    display: none !important;
+}
+
+/* Sections here are cards in a grid or a sheet, not page sections. */
+.dm-exchange-card,
+.dm-sheet-field {
+    margin: 0;
+}
+
+.dm-exchange-step {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0 0 0.75rem;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.dm-exchange-step em {
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-style: normal;
+    font-weight: 500;
+}
+
+.dm-exchange-step > span {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-hi);
+    font-size: 0.74rem;
+    font-weight: 700;
+}
+
+.dm-exchange-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.dm-exchange-actions .btn {
+    border-radius: 999px;
+}
+
+.dm-exchange-note {
+    margin: 0.7rem 0 0;
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.5;
+}
+
+/* An address in groups: easy to read out, easy to compare by its two ends,
+   and still one unbroken string when selected and copied. */
+.dm-address-chunks {
+    margin: 0 0 0.8rem;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    line-height: 1.8;
+    user-select: all;
+}
+
+.dm-address-chunks span {
+    margin-right: 0.42em;
+}
+
+.dm-address-chunks .is-prefix {
+    color: var(--muted);
+}
+
+.dm-address-chunks .is-edge {
+    color: var(--accent-hi);
+    font-weight: 700;
 }
 
 .dm-search.hidden {
@@ -2677,7 +2806,17 @@ input[type='checkbox'] {
 }
 
 .dm-search .hash-input-group {
-    margin: 0.5rem 0 0;
+    margin: 0;
+}
+
+/* The field gets the whole line — an address is long — and Paste and Search
+   share the one under it. */
+.dm-search .hash-input-group .hash-input {
+    flex: 1 1 100%;
+}
+
+.dm-search .hash-input-group .btn {
+    flex: 1 1 0;
 }
 
 .dm-search .hash-input-group .btn {
@@ -2696,6 +2835,10 @@ input[type='checkbox'] {
 
 .dm-search-hint.is-ok {
     color: var(--ok);
+}
+
+.dm-search-hint.is-warn {
+    color: var(--warn);
 }
 
 .dm-search-result {
@@ -2785,6 +2928,12 @@ input[type='checkbox'] {
     margin-top: 1.4rem;
 }
 
+.dm-lede .dm-exchange-step {
+    display: inline-flex;
+    margin: 0 0.25rem 0 0;
+    vertical-align: middle;
+}
+
 .dm-lede p {
     max-width: 52ch;
     margin: 0 auto;
@@ -2841,6 +2990,27 @@ input[type='checkbox'] {
     background: var(--dm-head);
 }
 
+.dm-chat-peer {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 0.7rem;
+    margin-left: -0.4rem;
+    padding: 0.25rem 0.4rem;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dm-chat-peer:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
 .dm-chat-title {
     display: flex;
     min-width: 0;
@@ -2849,6 +3019,7 @@ input[type='checkbox'] {
 }
 
 .dm-peer-label {
+    display: block;
     margin: 0;
     color: var(--text);
     font-size: 0.98rem;
@@ -3292,10 +3463,346 @@ a.file-transfer-card:hover {
     transform: scale(0.93);
 }
 
+#channels-message-input:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+.dm-send-btn:disabled,
+.dm-composer-btn:disabled {
+    opacity: 0.32;
+    box-shadow: none;
+    transform: none;
+    cursor: not-allowed;
+}
+
 /* Nothing typed yet: the button stays where it is, just quieter. */
 .dm-composer:has(#channels-message-input:placeholder-shown) .dm-send-btn {
     opacity: 0.5;
     box-shadow: none;
+}
+
+/* ── First connection ──
+   Request → both agree → encrypted connection, as steps, in the thread that
+   will hold the conversation. Over an empty thread it is a card in the middle;
+   once there are messages (a dropped link) it is a banner along the top. */
+.dm-connect {
+    z-index: 2;
+    padding: 0.75rem 1rem 0;
+}
+
+.dm-thread:has(#channels-messages:empty) .dm-connect {
+    position: absolute;
+    inset: 3.75rem 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    pointer-events: none;
+}
+
+.dm-connect-card {
+    width: min(100%, 27rem);
+    margin: 0 auto;
+    padding: 1.1rem 1.15rem;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: rgba(22, 26, 35, 0.97);
+    box-shadow: var(--shadow-lg);
+    pointer-events: auto;
+}
+
+.dm-connect-title {
+    margin: 0 0 0.85rem;
+    color: var(--text);
+    font-size: 1rem;
+    font-weight: 650;
+}
+
+.dm-connect-steps {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dm-connect-steps li {
+    position: relative;
+    display: flex;
+    gap: 0.75rem;
+    padding-bottom: 0.9rem;
+}
+
+.dm-connect-steps li:last-child {
+    padding-bottom: 0;
+}
+
+.dm-connect-steps li:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    top: 26px;
+    bottom: 3px;
+    left: 10px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--border);
+}
+
+.dm-connect-steps li[data-state='done']::after {
+    background: var(--ok);
+}
+
+.dm-connect-dot {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    border: 2px solid var(--border-strong);
+    border-radius: 50%;
+    background: var(--surface-2);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+li[data-state='done'] > .dm-connect-dot {
+    border-color: var(--ok);
+    background: var(--ok);
+}
+
+li[data-state='done'] > .dm-connect-dot::before {
+    content: '✓';
+}
+
+li[data-state='active'] > .dm-connect-dot {
+    border-color: var(--accent-line);
+    background: transparent;
+}
+
+li[data-state='active'] > .dm-connect-dot::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border: 2px solid transparent;
+    border-top-color: var(--accent-hi);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+li[data-state='error'] > .dm-connect-dot {
+    border-color: var(--err);
+    background: var(--err);
+}
+
+li[data-state='error'] > .dm-connect-dot::before {
+    content: '!';
+}
+
+.dm-connect-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.dm-connect-text b {
+    color: var(--text);
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+li[data-state='todo'] .dm-connect-text b {
+    color: var(--muted);
+}
+
+.dm-connect-text small {
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
+li[data-state='active'] .dm-connect-text small {
+    color: var(--text-dim);
+}
+
+.dm-connect-presence {
+    margin: 0.9rem 0 0;
+    padding: 0.5rem 0.7rem;
+    border-radius: 10px;
+    background: var(--surface-3);
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.dm-connect-presence.is-online {
+    background: var(--ok-soft);
+    color: #7fe3ae;
+}
+
+.dm-connect-presence:empty,
+.dm-connect-tip:empty {
+    display: none;
+}
+
+.dm-connect-tip {
+    margin: 0.6rem 0 0;
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.5;
+}
+
+#dm-connect-cancel {
+    margin-top: 0.9rem;
+    border-radius: 999px;
+}
+
+.dm-connect[data-mode='lost'] .dm-connect-steps {
+    display: none;
+}
+
+.dm-connect[data-mode='lost'] .dm-connect-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 0.75rem;
+    width: 100%;
+    max-width: 40rem;
+    padding: 0.6rem 0.75rem 0.6rem 0.9rem;
+    border-color: rgba(240, 97, 109, 0.35);
+    border-radius: 12px;
+    background: rgba(38, 20, 26, 0.96);
+    box-shadow: var(--shadow);
+}
+
+.dm-connect[data-mode='lost'] .dm-connect-title {
+    margin: 0;
+    color: #ff9aa2;
+    font-size: 0.88rem;
+}
+
+.dm-connect[data-mode='lost'] .dm-connect-tip {
+    grid-column: 1;
+    margin: 0.1rem 0 0;
+    font-size: 0.74rem;
+}
+
+.dm-connect[data-mode='lost'] #dm-connect-cancel {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    margin: 0;
+}
+
+/* ── Address sheet ──
+   A whole address to read, copy or share: yours, or the peer's. A dialog on
+   desktop, a bottom sheet on a phone. */
+.dm-sheet {
+    width: min(460px, calc(100vw - 2rem));
+    max-width: none;
+    /* The reset at the top zeroes every margin; a modal dialog centres on
+       `margin: auto`. */
+    margin: auto;
+    max-height: calc(100dvh - 2rem);
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: var(--overlay);
+    color: var(--text);
+    box-shadow: var(--shadow-lg);
+    overflow: auto;
+}
+
+.dm-sheet::backdrop {
+    background: rgba(5, 7, 11, 0.66);
+    backdrop-filter: blur(4px);
+}
+
+.dm-sheet[open] {
+    animation: modal-in 0.2s ease both;
+}
+
+.dm-sheet-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1.1rem 1.15rem 1.25rem;
+}
+
+.dm-sheet-grip {
+    display: none;
+}
+
+.dm-sheet-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.dm-sheet-titles {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.dm-sheet-titles h4 {
+    margin: 0;
+    font-size: 1.02rem;
+}
+
+.dm-sheet-titles p {
+    margin: 0.1rem 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
+.dm-sheet-close {
+    display: inline-flex;
+    color: var(--text-dim);
+}
+
+.dm-sheet-field {
+    padding: 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-2);
+}
+
+.dm-sheet-field.hidden {
+    display: none !important;
+}
+
+.dm-sheet-label {
+    margin: 0 0 0.5rem;
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.dm-sheet-mono {
+    margin: 0 0 0.7rem;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+.dm-sheet-steps {
+    display: grid;
+    gap: 0.4rem;
+    margin: 0;
+    padding-left: 1.25rem;
+    color: var(--text-dim);
+    font-size: 0.84rem;
+    line-height: 1.5;
+}
+
+.dm-sheet-steps.hidden {
+    display: none !important;
 }
 
 /* Legacy manual-handshake cards (kept styled for any code path that shows them) */
@@ -5444,14 +5951,34 @@ select,
     /* The recipient search wraps onto its own line at this width anyway, and a
        content-width button under a full-width field reads as an afterthought,
        so it spans the row — as does Request chat under the result. */
-    .dm-search .hash-input-group {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .dm-search .hash-input-group .btn,
     #channels-nostr-invite-btn {
         width: 100%;
+    }
+
+    .dm-address-chunks {
+        font-size: 0.9rem;
+    }
+
+    .dm-sheet {
+        width: 100%;
+        max-width: 100%;
+        max-height: 92dvh;
+        margin: auto 0 0;
+        border-bottom: 0;
+        border-radius: 18px 18px 0 0;
+    }
+
+    .dm-sheet-grip {
+        display: block;
+        width: 40px;
+        height: 4px;
+        margin: -0.35rem auto 0;
+        border-radius: 4px;
+        background: var(--border-strong);
+    }
+
+    .dm-sheet-card {
+        padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
     }
 
     /* The conversation header keeps the name; its two actions keep their

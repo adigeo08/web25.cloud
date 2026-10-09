@@ -26,7 +26,7 @@ const TRUST_LABELS = {
 };
 
 /**
- * @param {{ onAccept: (peerNostrPublicKey: string) => void,
+ * @param {{ onAccept: (peerNostrPublicKey: string) => unknown,
  *           onDecline: (peerNostrPublicKey: string) => void }} handlers
  */
 export function bindInvitationsPanel({ onAccept, onDecline }) {
@@ -41,8 +41,27 @@ export function bindInvitationsPanel({ onAccept, onDecline }) {
         if (!button) return;
         const peer = button.getAttribute('data-invite-peer') || '';
         if (!peer) return;
-        if (button.getAttribute('data-invite-action') === 'accept') onAccept(peer);
-        else onDecline(peer);
+        if (button.getAttribute('data-invite-action') !== 'accept') {
+            onDecline(peer);
+            return;
+        }
+
+        // Accepting takes a relay round trip before anything else moves, so
+        // the press is answered at once and a second press cannot send a
+        // second answer. The row is normally re-rendered away; if the accept
+        // failed and it is still here, it becomes pressable again.
+        const row = button.closest('.dm-invite');
+        const buttons = row ? [...row.querySelectorAll('button')] : [button];
+        buttons.forEach((each) => {
+            /** @type {HTMLButtonElement} */ (each).disabled = true;
+        });
+        button.textContent = 'Accepting…';
+        Promise.resolve(onAccept(peer)).finally(() => {
+            buttons.forEach((each) => {
+                /** @type {HTMLButtonElement} */ (each).disabled = false;
+            });
+            button.textContent = 'Accept';
+        });
     });
 }
 
