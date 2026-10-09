@@ -8,7 +8,9 @@
  * mutual. Presence and conversation are separate states here as everywhere.
  */
 
-import { shortNpub } from '../../nostr/nip19.js';
+import { npubEncode, shortNpub } from '../../nostr/nip19.js';
+import { copyToClipboard } from '../ClipboardButton.js';
+import { createAvatar } from './Avatar.js';
 
 /**
  * @param {{ onSelect: (contact: any) => void, onFilter: (query: string) => void,
@@ -32,7 +34,9 @@ export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
                 npub: action.getAttribute('data-contact-npub') || '',
                 name: action.getAttribute('data-contact-name') || ''
             };
-            if (action.getAttribute('data-contact-action') === 'rename') onRename?.(contact);
+            const kind = action.getAttribute('data-contact-action');
+            if (kind === 'copy') copyContactAddress(/** @type {HTMLElement} */ (action), contact);
+            else if (kind === 'rename') onRename?.(contact);
             else onRemove?.(contact);
             return;
         }
@@ -61,6 +65,36 @@ export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
     });
 
     filter?.addEventListener('input', () => onFilter(filter.value.trim()));
+}
+
+/**
+ * Copy a contact's address, to pass it on to somebody else.
+ *
+ * Only the public npub is copied: the friendly name is this browser's own
+ * label and means nothing to anyone else. The button answers with a tick or a
+ * cross for a moment, in place.
+ *
+ * @param {HTMLElement} button
+ * @param {{ nostrPublicKey: string, npub: string }} contact
+ */
+function copyContactAddress(button, contact) {
+    let npub = contact.npub;
+    if (!npub) {
+        try {
+            npub = npubEncode(contact.nostrPublicKey);
+        } catch (_) {
+            npub = '';
+        }
+    }
+    const flash = (/** @type {string} */ mark) => {
+        button.textContent = mark;
+        setTimeout(() => {
+            button.textContent = '📋';
+        }, 1500);
+    };
+    copyToClipboard(npub)
+        .then(() => flash('✅'))
+        .catch(() => flash('❌'));
 }
 
 /**
@@ -126,16 +160,32 @@ function renderContactRow(contact, online, selectedKey) {
     row.setAttribute('data-contact-npub', contact.npub || '');
     row.setAttribute('data-contact-name', contact.name || '');
 
+    const displayName = contact.name || shortNpub(contact.npub || contact.nostrPublicKey);
+
+    // The face, with presence as the dot on its corner.
+    const face = document.createElement('span');
+    face.className = 'dm-contact-avatar';
+    face.appendChild(createAvatar(displayName));
     const dot = document.createElement('span');
     dot.className = `dm-presence-dot${online ? ' is-online' : ''}`;
     dot.setAttribute('aria-label', online ? 'online' : 'offline');
+    face.appendChild(dot);
 
     const body = document.createElement('span');
     body.className = 'dm-contact-body';
 
+    const top = document.createElement('span');
+    top.className = 'dm-contact-top';
     const name = document.createElement('span');
     name.className = 'dm-contact-name';
-    name.textContent = contact.name || shortNpub(contact.npub || contact.nostrPublicKey);
+    name.textContent = displayName;
+    top.appendChild(name);
+    if (online) {
+        const presence = document.createElement('span');
+        presence.className = 'dm-contact-presence';
+        presence.textContent = 'online';
+        top.appendChild(presence);
+    }
 
     // Enough identity to disambiguate two contacts with the same friendly name.
     const identity = document.createElement('span');
@@ -143,16 +193,16 @@ function renderContactRow(contact, online, selectedKey) {
     const evm = contact.evmAddress ? `${contact.evmAddress.slice(0, 8)}…` : 'no EVM address';
     identity.textContent = `${shortNpub(contact.npub || contact.nostrPublicKey)} · ${evm}`;
 
-    body.appendChild(name);
+    body.appendChild(top);
     body.appendChild(identity);
-    row.appendChild(dot);
+    row.appendChild(face);
     row.appendChild(body);
     row.appendChild(renderContactActions(contact));
     return row;
 }
 
 /**
- * Rename and Remove.
+ * Copy their address, Rename and Remove.
  *
  * Removing is a local authorization change only: the peer becomes unknown
  * again and a future invitation from them needs approval. No key is deleted or
@@ -165,6 +215,7 @@ function renderContactActions(contact) {
     actions.className = 'dm-contact-actions';
 
     for (const [action, label, title] of [
+        ['copy', '📋', 'Copy their Nostr address'],
         ['rename', '✏️', 'Rename this contact'],
         ['remove', '🗑️', 'Remove this contact. Future invitations from them will need approval again.']
     ]) {

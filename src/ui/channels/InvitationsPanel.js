@@ -16,6 +16,7 @@
  */
 
 import { shortNpub } from '../../nostr/nip19.js';
+import { createAvatar } from './Avatar.js';
 
 const TRUST_LABELS = {
     unknown: { text: 'Unknown sender', className: 'dm-invite-trust is-unknown' },
@@ -25,7 +26,7 @@ const TRUST_LABELS = {
 };
 
 /**
- * @param {{ onAccept: (peerNostrPublicKey: string) => void,
+ * @param {{ onAccept: (peerNostrPublicKey: string) => unknown,
  *           onDecline: (peerNostrPublicKey: string) => void }} handlers
  */
 export function bindInvitationsPanel({ onAccept, onDecline }) {
@@ -40,8 +41,27 @@ export function bindInvitationsPanel({ onAccept, onDecline }) {
         if (!button) return;
         const peer = button.getAttribute('data-invite-peer') || '';
         if (!peer) return;
-        if (button.getAttribute('data-invite-action') === 'accept') onAccept(peer);
-        else onDecline(peer);
+        if (button.getAttribute('data-invite-action') !== 'accept') {
+            onDecline(peer);
+            return;
+        }
+
+        // Accepting takes a relay round trip before anything else moves, so
+        // the press is answered at once and a second press cannot send a
+        // second answer. The row is normally re-rendered away; if the accept
+        // failed and it is still here, it becomes pressable again.
+        const row = button.closest('.dm-invite');
+        const buttons = row ? [...row.querySelectorAll('button')] : [button];
+        buttons.forEach((each) => {
+            /** @type {HTMLButtonElement} */ (each).disabled = true;
+        });
+        button.textContent = 'Accepting…';
+        Promise.resolve(onAccept(peer)).finally(() => {
+            buttons.forEach((each) => {
+                /** @type {HTMLButtonElement} */ (each).disabled = false;
+            });
+            button.textContent = 'Accept';
+        });
     });
 }
 
@@ -94,6 +114,7 @@ export function renderInvitations(invitations) {
 function renderInvitationRow(invitation) {
     const row = document.createElement('div');
     row.className = 'dm-invite';
+    row.appendChild(createAvatar(invitation.profileName || invitation.npub || invitation.peerNostrPublicKey));
 
     const body = document.createElement('div');
     body.className = 'dm-invite-body';
@@ -130,7 +151,9 @@ function renderInvitationRow(invitation) {
 
     const meta = document.createElement('p');
     meta.className = 'dm-invite-meta';
-    const received = invitation.receivedAt ? new Date(invitation.receivedAt).toLocaleTimeString() : '';
+    const received = invitation.receivedAt
+        ? new Date(invitation.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : '';
     const label = TRUST_LABELS[invitation.trustState] || TRUST_LABELS.unknown;
     const trust = document.createElement('span');
     trust.className = label.className;

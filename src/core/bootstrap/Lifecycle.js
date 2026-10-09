@@ -33,6 +33,7 @@ import {
     clearChannelsMessages,
     clearDmSearch,
     renderDmConnectionState,
+    renderDmPeerPresence,
     showDmStep,
     updateDmNostrIdentity
 } from '../../ui/channels/ChannelsPanel.js';
@@ -63,6 +64,9 @@ const DM_SEARCH_PRESENCE_GRACE_MS = 3000;
 const HANDSHAKE_STALL_MS = 20000;
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
+
+/** Conversation states past waiting: a tap on that contact opens it, not a new request. */
+const DM_LIVE_STATES = new Set(['handshake', 'connecting-webrtc', 'connected-webrtc', 'connected-nostr']);
 
 function sameBytes(left, right) {
     if (left.length !== right.length) return false;
@@ -235,8 +239,21 @@ export function setupChannels() {
     this.dmInvitations.onChange = () => renderInvitations(this.dmInvitations.list());
 
     bindContactsPanel({
-        // Opening a contact expresses intent; it does not connect.
-        onSelect: (contact) => void this.requestChatWith(contact.nostrPublicKey, contact.name),
+        // Opening a contact expresses intent; it does not connect. What it does
+        // do is open the conversation, as a messenger does, so the request and
+        // its progress are on screen rather than only in a toast.
+        onSelect: (contact) => {
+            const key = `${contact.nostrPublicKey || ''}`.toLowerCase();
+            // A conversation already under way with them is where a tap leads;
+            // asking them again would only knock it back to waiting.
+            if (key && key === this.dmSelectedPeer && DM_LIVE_STATES.has(this.channelsService?.connectionState)) {
+                showDmStep('dm-chat-active');
+                return;
+            }
+            void this.requestChatWith(contact.nostrPublicKey, contact.name).then((ok) => {
+                if (ok === true) showDmStep('dm-chat-active');
+            });
+        },
         onFilter: (query) => {
             this.dmContactFilter = query;
             this.refreshContactList();
@@ -245,7 +262,7 @@ export function setupChannels() {
         onRemove: (contact) => void this.removeContact(contact.nostrPublicKey, contact.name)
     });
     bindInvitationsPanel({
-        onAccept: (peer) => void this.acceptDmInvitation(peer),
+        onAccept: (peer) => this.acceptDmInvitation(peer),
         onDecline: (peer) => void this.declineDmInvitation(peer)
     });
     renderInvitations([]);
@@ -335,7 +352,7 @@ export function setupChannels() {
         // `peer-count` and `disconnected` all fold into this single state
         // inside ChannelsService, so nothing else renders connection status.
         if (event.type === 'connection-state') {
-            renderDmConnectionState(event.state, { peerLabel: this.dmPeerLabel() });
+            renderDmConnectionState(event.state, { peerLabel: this.dmPeerLabel(), ...this.dmPeerDetails?.() });
             return;
         }
         if (
@@ -357,7 +374,9 @@ export function setupChannels() {
                 fileName: event.fileName,
                 fileSize: event.fileSize || event.total || 0,
                 received: event.received || 0,
-                direction: 'in'
+                // The sender's own announcement comes back through here too,
+                // marked local; it is the start of an outgoing bubble.
+                direction: event.local === true ? 'out' : 'in'
             });
         } else if (event.type === 'file-send-start' || event.type === 'file-send-progress') {
             // The sender needs its own row: over the relay a file is paced
@@ -931,6 +950,27 @@ export async function removeContact(nostrPublicKey, name = '') {
     }
 }
 
+/**
+ * What the conversation can show about the peer beyond a name: their address
+ * to view and copy, the EVM address the handshake verified, and whether their
+ * presence beacon is current.
+ */
+export function dmPeerDetails() {
+    const peer = this.dmSelectedPeer;
+    if (!peer) return { peerNpub: '', peerAddress: '', peerOnline: null };
+    let peerNpub = '';
+    try {
+        peerNpub = npubEncode(peer);
+    } catch (_) {
+        peerNpub = '';
+    }
+    return {
+        peerNpub,
+        peerAddress: this.channelsService?.peerAddress || '',
+        peerOnline: Boolean(this.presenceService?.isOnline(peer))
+    };
+}
+
 /** Short label for whoever the current conversation is with. */
 export function dmPeerLabel() {
     const peer = this.dmSelectedPeer;
@@ -988,6 +1028,10 @@ export function handlePresenceChange(pubkey) {
     const peer = `${pubkey || ''}`.toLowerCase();
     if (this.dmSearchedPeer && peer === this.dmSearchedPeer) {
         renderSearchPresence(Boolean(this.presenceService?.isOnline(this.dmSearchedPeer)));
+    }
+    // A request waiting on someone says whether they are around to see it.
+    if (this.dmSelectedPeer && peer === this.dmSelectedPeer) {
+        renderDmPeerPresence(Boolean(this.presenceService?.isOnline(peer)));
     }
     void this.refreshContactList();
 }
@@ -1066,7 +1110,7 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
         }
 
         this.channelsService.setPreConnectionState('awaiting-peer');
-        renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel() });
+        renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel(), ...this.dmPeerDetails?.() });
         this.toast.info('Request sent. It waits as an invitation for them to accept.', 'Direct Messenger');
         return true;
     } catch (error) {
@@ -1102,7 +1146,7 @@ export async function startMutualConversation(peer) {
     this.dmSelectedPeer = `${peer}`.toLowerCase();
     this.nostrDmSession.setPeer(this.dmSelectedPeer);
     this.channelsService.setPreConnectionState('handshake');
-    renderDmConnectionState('handshake', { peerLabel: this.dmPeerLabel() });
+    renderDmConnectionState('handshake', { peerLabel: this.dmPeerLabel(), ...this.dmPeerDetails?.() });
 
     if (!this.presenceService.shouldInitiate(this.dmSelectedPeer)) {
         // The other side offers; our invitation will arrive over Nostr. If it
@@ -1152,7 +1196,7 @@ export function armHandshakeStallTimer(peer) {
         if (this.dmSelectedPeer !== peer) return;
 
         this.channelsService.setPreConnectionState('awaiting-peer');
-        renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel() });
+        renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel(), ...this.dmPeerDetails?.() });
         this.toast.info(
             'They have not answered yet. Your invitation stays valid — the chat opens on its own if they come back.',
             'Direct Messenger'
@@ -1887,7 +1931,10 @@ export function setupAuthAwareUi(state) {
         npub: nostrReachable ? state.npub || null : null,
         enabled: state.nostrEnabled !== false
     });
-    renderDmConnectionState(this.channelsService?.connectionState || 'idle', { peerLabel: this.dmPeerLabel?.() || '' });
+    renderDmConnectionState(this.channelsService?.connectionState || 'idle', {
+        peerLabel: this.dmPeerLabel?.() || '',
+        ...this.dmPeerDetails?.()
+    });
 
     // An identity that is reachable at its npub subscribes the inbox, so an
     // inbound invitation arrives without the user having to send one first.

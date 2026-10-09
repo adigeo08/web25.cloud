@@ -64,17 +64,56 @@ test('the recipient search leads the messenger panel, ahead of the explanation',
     assert.match(panel, /id="dm-search-result"/);
 });
 
-test('the recipient search button spans the row on a phone, like Copy my address', () => {
+test('the address field gets its own line, with Paste and Search sharing the next', () => {
+    // An address is long: the field takes the row, the two actions split the
+    // one under it, and on a phone Request chat spans its row too.
+    assert.match(STYLES, /\.dm-search \.hash-input-group \.hash-input \{\s*flex: 1 1 100%;/);
+    assert.match(STYLES, /\.dm-search \.hash-input-group \.btn \{\s*flex: 1 1 0;/);
     const phone = STYLES.slice(STYLES.lastIndexOf('@media (max-width: 640px)'));
-    // The copy button is full width at every size; the search button only needs
-    // to be at this one, where its field already takes the whole row and a
-    // content-width control under it reads as an afterthought.
-    assert.match(STYLES, /\.dm-copy-address-btn \{[\s\S]*?width: 100%;/);
-    assert.match(phone, /\.dm-search \.hash-input-group \{[\s\S]*?flex-direction: column;/);
-    assert.match(phone, /\.dm-search \.hash-input-group \.btn \{[\s\S]*?width: 100%;/);
-    // Both controls live in the messenger panel, which is what makes the
-    // mismatch visible in the first place.
+    assert.match(phone, /#channels-nostr-invite-btn \{[\s\S]*?width: 100%;/);
+    // Your own address heads the chat list, ahead of the way to start a chat.
     assert.match(MARKUP, /id="dm-copy-own-npub-btn"[\s\S]*?id="dm-nostr-search-btn"/);
+});
+
+test('the welcome screen is the exchange: your address, then theirs, then what happens next', () => {
+    const panel = MARKUP.slice(MARKUP.indexOf('id="dm-choose-role"'), MARKUP.indexOf('SUB-PANEL 2'));
+    const mine = panel.indexOf('id="dm-my-address-card"');
+    const theirs = panel.indexOf('class="dm-search"');
+    const next = panel.indexOf('class="dm-lede"');
+    assert.ok(mine > -1 && mine < theirs && theirs < next, `order: ${mine}, ${theirs}, ${next}`);
+
+    // Yours: whole, grouped, with Copy and (where the platform has one) Share.
+    assert.match(panel, /id="dm-welcome-npub" class="dm-address-chunks"/);
+    assert.match(panel, /id="dm-welcome-copy-btn"/);
+    assert.match(panel, /id="dm-welcome-share-btn"[^>]*class="[^"]*hidden/);
+    // Theirs: a Paste button, hidden until the browser can read the clipboard.
+    assert.match(panel, /id="dm-paste-btn"[^>]*class="[^"]*hidden/);
+});
+
+test('your whole address and the peer’s are one tap away, in a native dialog', () => {
+    assert.match(MARKUP, /<dialog id="dm-address-sheet" class="dm-sheet"/);
+    assert.match(MARKUP, /<form method="dialog" class="dm-sheet-card">/);
+    // Copy is where focus lands; Copy and Share must not submit the form.
+    assert.match(MARKUP, /id="dm-sheet-copy" type="button"[^>]*autofocus/);
+    assert.match(MARKUP, /id="dm-sheet-share" type="button"/);
+    assert.match(MARKUP, /id="dm-show-address-btn"[^>]*aria-label="Show my whole address"/);
+    // The peer in the conversation header is the button that opens theirs.
+    const head = MARKUP.slice(MARKUP.indexOf('class="dm-chat-head"'), MARKUP.indexOf('id="channels-messages"'));
+    assert.match(
+        head,
+        /<button\s+id="dm-peer-info-btn"[\s\S]*?id="dm-peer-avatar"[\s\S]*?id="dm-connection-status"[\s\S]*?<\/button>/
+    );
+    // A dialog is centred by margin: auto, which the global reset would zero.
+    assert.match(STYLES, /\.dm-sheet \{[\s\S]*?margin: auto;/);
+});
+
+test('until it can send, the thread shows the connection step by step', () => {
+    const thread = MARKUP.slice(MARKUP.indexOf('class="dm-thread"'), MARKUP.indexOf('id="channels-messages"'));
+    assert.match(thread, /id="dm-connect" class="dm-connect hidden" aria-live="polite"/);
+    const steps = [...thread.matchAll(/data-step="([a-z]+)"/g)].map((match) => match[1]);
+    assert.deepEqual(steps, ['request', 'accept', 'secure']);
+    assert.match(thread, /id="dm-connect-presence"/);
+    assert.match(thread, /id="dm-connect-cancel"/);
 });
 
 test('the viewer strip stays one row on a phone, and shrinks instead of wrapping', () => {
@@ -95,25 +134,34 @@ test('the viewer strip stays one row on a phone, and shrinks instead of wrapping
     assert.match(MARKUP, /id="viewer-forget"[\s\S]{0,320}<span class="viewer-action-label">Delete data<\/span>/);
 });
 
-test('the contacts sidebar becomes a toolbar with a list under it on a phone', () => {
-    const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 860px)'));
+test('your address is one line with a copy button that survives its own flash', () => {
+    // The address is truncated to a line, like a profile row in a chat list;
+    // the whole value is still the element's text, which is what gets copied.
+    assert.match(STYLES, /\.dm-own-pubkey-value \{[\s\S]*?white-space: nowrap;[\s\S]*?text-overflow: ellipsis;/);
 
-    // The identity card collapses to the one control that does something, and
-    // shares a line with the contact filter.
-    assert.match(phone, /#dm-my-npub-panel \{[\s\S]*?display: contents;/);
-    assert.match(phone, /\.dm-copy-address-label \{[\s\S]*?display: none;/);
-    assert.match(phone, /\.dm-contacts \.dm-copy-address-btn \{[\s\S]*?order: 1;/);
-    assert.match(phone, /\.dm-contacts input\.dm-contacts-filter \{[\s\S]*?order: 2;/);
-    // Invitations sit under that toolbar, and the list under them.
-    assert.match(phone, /#dm-invitations \{[\s\S]*?order: 4;/);
-    assert.match(phone, /\.dm-contacts-list \{[\s\S]*?order: 6;/);
-
-    // Hiding the wording needs the button to say it some other way.
+    // The copy flash swaps the button's text and puts it back as plain text,
+    // so the button holds plain text only — and says what it does in
+    // `aria-label`, since "Copy" alone does not.
     assert.match(MARKUP, /id="dm-copy-own-npub-btn"[\s\S]{0,300}aria-label="Copy my Nostr address"/);
-    assert.match(MARKUP, /<span class="dm-copy-address-label">Copy my address<\/span>/);
+    assert.match(MARKUP, /id="dm-copy-own-npub-btn"[^>]*>📋 Copy<\/button>/);
+
+    // Order on the list screen: who you are, the filter, invitations, then
+    // the contacts.
+    const aside = MARKUP.slice(MARKUP.indexOf('class="dm-contacts"'), MARKUP.indexOf('class="dm-main"'));
+    const order = ['dm-my-npub-panel', 'dm-contacts-filter', 'dm-invitations', 'dm-contacts-list'].map((id) =>
+        aside.indexOf(`id="${id}"`)
+    );
+    assert.ok(
+        order.every((at, i) => at > -1 && (i === 0 || at > order[i - 1])),
+        `sidebar order: ${order}`
+    );
+
+    // On a phone the list is part of the page scroll, not a box inside it.
+    const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 860px)'));
+    assert.match(phone, /\.dm-sidebar-scroll,\s*#dm-choose-role \{\s*overflow: visible;/);
 });
 
-test('a conversation takes the whole tab on a phone, and desktop keeps both panes', () => {
+test('a conversation takes the whole screen on a phone, and desktop keeps both panes', () => {
     const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 860px)'));
 
     // Both rules are conditional on a conversation actually being open, so the
@@ -137,10 +185,43 @@ test('a conversation takes the whole tab on a phone, and desktop keeps both pane
         /\.dm-layout:has\(#dm-chat-active:not\(\.hidden\)\) \.dm-back-to-contacts \{[\s\S]*?display: inline-flex;/
     );
 
-    // Back leads the conversation head, ahead of the avatar and the peer name.
-    assert.match(phone, /\.dm-back-to-contacts \{[\s\S]*?order: -3;/);
+    // The whole screen, not just the tab — and only while the conversation is
+    // the pane on show.
+    assert.match(
+        phone,
+        /#tab-channels \.quick-upload\.dm-app:has\(#dm-chat-active:not\(\.hidden\)\):not\(:has\(\.dm-show-contacts\)\) \{[\s\S]*?position: fixed;[\s\S]*?inset: 0;/
+    );
+
+    // Desktop: list and conversation side by side.
+    assert.match(
+        STYLES,
+        /\.dm-layout \{\s*display: grid;\s*grid-template-columns: minmax\(270px, 340px\) minmax\(0, 1fr\);/
+    );
+
+    // Back leads the conversation head, ahead of the avatar and the peer name;
+    // Save and Disconnect sit in the head too, not under the composer.
     const head = MARKUP.slice(MARKUP.indexOf('class="dm-chat-head"'), MARKUP.indexOf('id="channels-messages"'));
-    assert.ok(head.indexOf('dm-back-to-contacts') < head.indexOf('dm-connection-status'));
+    assert.ok(head.indexOf('dm-back-to-contacts') < head.indexOf('id="dm-peer-avatar"'));
+    assert.ok(head.indexOf('id="dm-peer-avatar"') < head.indexOf('dm-connection-status'));
+    assert.match(head, /id="dm-save-contact-btn"[\s\S]*?id="channels-leave-btn"/);
+});
+
+test('the thread is a log with a composer pinned under it, and files live in the thread', () => {
+    const chat = MARKUP.slice(MARKUP.indexOf('id="dm-chat-active"'), MARKUP.indexOf('── BROWSE TAB ──'));
+    assert.match(chat, /id="channels-messages"[\s\S]{0,120}role="log"/);
+    assert.match(
+        chat,
+        /class="dm-composer"[\s\S]*?id="channels-attach-btn"[\s\S]*?id="channels-message-input"[\s\S]*?id="channels-send-btn"/
+    );
+    // The old strip of file chips under the composer is gone: transfers are
+    // bubbles in the thread.
+    assert.ok(!MARKUP.includes('id="channels-files"'));
+    // Icon-only controls still have names.
+    for (const id of ['channels-attach-btn', 'channels-send-btn', 'dm-back-to-contacts', 'dm-scroll-bottom']) {
+        assert.match(chat, new RegExp(`id="${id}"[^>]*aria-label="`), `${id} has an accessible name`);
+    }
+    // The thread scrolls inside the window instead of growing the page.
+    assert.match(STYLES, /\.channels-messages \{[\s\S]*?flex: 1 1 auto;[\s\S]*?overflow-y: auto;/);
 });
 
 test('the search toggle offers the local cached history, by that name', () => {
