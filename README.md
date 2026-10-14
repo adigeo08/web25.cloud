@@ -505,6 +505,17 @@ is never auto-answered:
   without that a week-old request would be presented as a decision to make now;
   a timestamp in the future is clamped, so nobody can mint an invitation that
   never expires
+- **every request and invitation is acted on once, in one session.** Relays
+  hand stored events back on every reconnect, every resubscription and every
+  page load (the inbox asks for days of history). An inbox ledger
+  (`web25-inbox`: truncated hashes and times only, kept just longer than any
+  relay will replay) claims each gift wrap, and the request or invitation
+  inside it, the first time it is seen; a repeat is dropped before any
+  decryption, here or after a reload. An offer created before this page's inbox
+  opened (with a few minutes' grace for clock skew or a reload mid-handshake)
+  was made for an earlier session and is neither answered nor shown. Without
+  this, an old request from a trusted contact made the browser send a fresh
+  request and offer back on every reload, and an old offer was answered again
 - the count of waiting invitations also sits on the Direct Messenger tab, so an
   invitation that arrives while you are on another tab is still there when the
   toast has gone

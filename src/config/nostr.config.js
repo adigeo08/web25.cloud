@@ -92,6 +92,13 @@ export const NOSTR_CONFIG = Object.freeze({
     /** Lifetime of a Nostr-delivered WebRTC invitation. */
     INVITATION_TTL_MS: 15 * 60 * 1000,
     /**
+     * An offer is made for one session: the one in which both sides agreed.
+     * One created before this page's inbox started belongs to an earlier
+     * session and is neither answered nor shown. The margin absorbs clock
+     * skew and a reload in the middle of a handshake.
+     */
+    OFFER_SESSION_GRACE_MS: 5 * 60 * 1000,
+    /**
      * How long a WebRTC connection attempt may run before the transport gives
      * up and falls back to the relay path.
      */
