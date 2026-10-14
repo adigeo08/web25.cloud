@@ -73,7 +73,7 @@ export class PendingInvitations {
      *
      * @param {{ bootstrap?: any, senderNostrPublicKey: string, npub?: string,
      *           profileName?: string, trustState?: string,
-     *           kind?: 'offer'|'request', expiresAt?: number }} input
+     *           kind?: 'offer'|'request', expiresAt?: number, sentAt?: number }} input
      */
     add({
         bootstrap = null,
@@ -82,7 +82,8 @@ export class PendingInvitations {
         profileName = '',
         trustState = 'unknown',
         kind = 'offer',
-        expiresAt = 0
+        expiresAt = 0,
+        sentAt = 0
     }) {
         const peer = `${senderNostrPublicKey || ''}`.trim().toLowerCase();
         if (!peer) throw new Error('A pending invitation needs a sender Nostr public key.');
@@ -107,6 +108,9 @@ export class PendingInvitations {
             // session, so the caller passes the intent TTL instead.
             expiresAt: Number(bootstrap?.session?.expiresAt || expiresAt || 0),
             receivedAt: this.now(),
+            // When the sender wrote it, by their clock: how a declined request
+            // is recognised if a relay delivers it again.
+            sentAt: Number(sentAt) || 0,
             trustState,
             // Held so Accept can answer without asking the peer to re-offer.
             // Never rendered, never stored, never logged. Null for a request,

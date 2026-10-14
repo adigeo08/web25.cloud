@@ -48,6 +48,7 @@ const {
     answerDmInvitation,
     acceptDmInvitation,
     declineDmInvitation,
+    isDmBlocked,
     armHandshakeStallTimer,
     clearHandshakeStallTimer
 } = await import('../src/core/bootstrap/Lifecycle.js');
@@ -216,7 +217,9 @@ async function makeApp({ unlocked = true } = {}) {
         contactsStore: new ContactsStore({ signer: wallet.signer }),
         dmInvitations: new PendingInvitations(),
         dmConsentedPeers: new Set(),
-        dmDeclinedPeers: new Set(),
+        dmDeclinedRequests: new Map(),
+        dmDeclinedSessions: new Set(),
+        dmBlocked: new Set(),
         channelsService: new LeakCountingChannels(),
         nostrDmSession: new RecordingDmSession(),
         presenceService: makePresence((peer) => mutual.push(peer)),
@@ -247,6 +250,7 @@ async function makeApp({ unlocked = true } = {}) {
     app.answerDmInvitation = answerDmInvitation.bind(app);
     app.acceptDmInvitation = acceptDmInvitation.bind(app);
     app.declineDmInvitation = declineDmInvitation.bind(app);
+    app.isDmBlocked = isDmBlocked.bind(app);
     app.armHandshakeStallTimer = armHandshakeStallTimer.bind(app);
     app.clearHandshakeStallTimer = clearHandshakeStallTimer.bind(app);
 
@@ -550,7 +554,7 @@ test('a trusted contact', async (t) => {
     });
 });
 
-// ─── 5. Declining stays silent, and stays silent on repeats ──────────────
+// ─── 5. Declining answers one invitation; blocking answers the person ────
 
 test('declining tells the sender nothing at all', async () => {
     const app = await makeApp();
@@ -565,17 +569,69 @@ test('declining tells the sender nothing at all', async () => {
     }
 });
 
-test('a declined peer cannot nag: their retries never re-open the panel', async () => {
+test('the declined request, delivered again, does not come back', async () => {
     const app = await makeApp();
     try {
-        await app.handleChatRequest(MALLORY.nostrPublicKey);
+        // Relays repeat stored events on reconnect, with their original
+        // timestamp: the same request is not a new question.
+        const sentAt = Math.floor(Date.now() / 1000) - 60;
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: sentAt });
         await app.declineDmInvitation(MALLORY.nostrPublicKey);
 
-        await app.handleChatRequest(MALLORY.nostrPublicKey);
-        await app.handleChatRequest(MALLORY.nostrPublicKey);
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: sentAt });
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: sentAt - 5 });
 
-        assert.equal(app.dmInvitations.size, 0, 'repeats are dropped in silence');
-        assertNothingRevealed(app, 'a declined peer retrying');
+        assert.equal(app.dmInvitations.size, 0, 'the same or an older request is dropped in silence');
+        assertNothingRevealed(app, 'a declined request delivered again');
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('declining answers that invitation only: a later request is shown again', async () => {
+    const app = await makeApp();
+    try {
+        const first = Math.floor(Date.now() / 1000) - 120;
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: first });
+        await app.declineDmInvitation(MALLORY.nostrPublicKey);
+
+        // They ask again, later: that is a new decision to make.
+        await app.handleChatRequest(MALLORY.nostrPublicKey, { createdAtSeconds: first + 60 });
+
+        assert.equal(app.dmInvitations.size, 1, 'a new request is a new invitation');
+        assertNothingRevealed(app, 'a new request after a decline');
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a blocked peer cannot nag: nothing they send reaches the panel, or their intent', async () => {
+    const app = await makeApp();
+    try {
+        await app.contactsStore.block({ nostrPublicKey: MALLORY.nostrPublicKey, npub: MALLORY.npub });
+
+        await app.handleChatRequest(MALLORY.nostrPublicKey);
+        await app.handleChatRequest(MALLORY.nostrPublicKey);
+        await app.handleNostrInvitation(offerFrom(MALLORY), { senderNostrPublicKey: MALLORY.nostrPublicKey });
+
+        assert.equal(app.dmInvitations.size, 0, 'nothing is queued');
+        assert.equal(app.presenceService.state(MALLORY.nostrPublicKey), 'none', 'no intent is recorded');
+        assertNothingRevealed(app, 'a blocked peer');
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a block holds across sessions: it is read from the store until the list is loaded', async () => {
+    const app = await makeApp();
+    try {
+        await app.contactsStore.block({ nostrPublicKey: MALLORY.nostrPublicKey });
+        // A fresh page: nothing mirrored yet, the inbox already delivering.
+        app.dmBlocked = new Set();
+        app.dmBlockedLoaded = false;
+
+        await app.handleChatRequest(MALLORY.nostrPublicKey);
+        assert.equal(app.dmInvitations.size, 0);
     } finally {
         app.fake.restore();
     }
@@ -594,20 +650,42 @@ test('declining drops their intent, so a later pair cannot form behind the decis
     }
 });
 
-test("a declined peer's offer is dropped, not answered and not re-queued", async () => {
+test("after a decline, a peer's offer waits for a decision again and is never answered", async () => {
     const app = await makeApp();
     try {
         await app.handleChatRequest(MALLORY.nostrPublicKey);
         await app.declineDmInvitation(MALLORY.nostrPublicKey);
 
-        // An offer is not a way around the refusal either: parking it would put
-        // the peer back in the panel and raise a notification, which is exactly
-        // the nagging the refusal exists to stop.
+        // Declining withdrew no consent that was ever given, so an offer is
+        // parked like any stranger's: shown, not answered.
         await app.handleNostrInvitation(offerFrom(MALLORY), { senderNostrPublicKey: MALLORY.nostrPublicKey });
 
-        assert.equal(app.channelsService.calls.createAnswer, 0, 'still never answered');
-        assert.equal(app.dmInvitations.size, 0, 'and it does not come back as a fresh decision');
-        assertNothingRevealed(app, 'a declined peer offering');
+        assert.equal(app.channelsService.calls.createAnswer, 0, 'never answered');
+        assert.equal(app.dmInvitations.size, 1, 'shown as a decision to make');
+        assertNothingRevealed(app, 'an offer after a decline');
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('the declined offer, delivered again, stays declined', async () => {
+    const app = await makeApp();
+    try {
+        await app.handleNostrInvitation(offerFrom(MALLORY, { sessionId: 'offer-a' }), {
+            senderNostrPublicKey: MALLORY.nostrPublicKey
+        });
+        await app.declineDmInvitation(MALLORY.nostrPublicKey);
+
+        await app.handleNostrInvitation(offerFrom(MALLORY, { sessionId: 'offer-a' }), {
+            senderNostrPublicKey: MALLORY.nostrPublicKey
+        });
+        assert.equal(app.dmInvitations.size, 0, 'the same session is not asked about twice');
+
+        await app.handleNostrInvitation(offerFrom(MALLORY, { sessionId: 'offer-b' }), {
+            senderNostrPublicKey: MALLORY.nostrPublicKey
+        });
+        assert.equal(app.dmInvitations.size, 1, 'a new one is');
+        assertNothingRevealed(app, 'offers after a decline');
     } finally {
         app.fake.restore();
     }
@@ -623,7 +701,7 @@ test('changing your mind works: a declined peer can be accepted after asking aga
         // clears the refusal, because it is the same person deciding again.
         await app.consentToChatWith(ALICE.nostrPublicKey);
 
-        assert.equal(app.dmDeclinedPeers.has(ALICE.nostrPublicKey), false);
+        assert.equal(app.dmDeclinedRequests.has(ALICE.nostrPublicKey), false);
         assert.equal(app.dmConsentedPeers.has(ALICE.nostrPublicKey), true);
     } finally {
         app.fake.restore();
@@ -775,12 +853,15 @@ test('a request is parked before anything is sent, never after', async () => {
     const handler = code.slice(code.indexOf('export async function handleChatRequest'));
     const body = handler.slice(0, handler.indexOf('export async function holdChatRequest'));
 
-    const declined = body.indexOf('dmDeclinedPeers');
+    const blocked = body.indexOf('isDmBlocked');
+    const declined = body.indexOf('dmDeclinedRequests');
+    const intent = body.indexOf('receiveChatRequest(');
     const trust = body.indexOf('isTrusted(');
     const consent = body.indexOf('consentToChatWith(');
     const hold = body.indexOf('holdChatRequest(');
 
-    assert.ok(declined > -1 && trust > -1 && consent > -1 && hold > -1, 'all four steps are present');
+    assert.ok(blocked > -1 && declined > -1 && trust > -1 && consent > -1 && hold > -1, 'all the steps are present');
+    assert.ok(blocked < intent && declined < intent, 'a block or a declined request records no intent');
     assert.ok(declined < trust, 'a refusal is honoured before anything else is considered');
     assert.ok(trust < consent, 'only a trusted contact reaches automatic consent');
     assert.ok(consent < hold, 'everybody else falls through to the panel');

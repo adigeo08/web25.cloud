@@ -684,6 +684,25 @@
                                         <span id="dm-contacts-count" class="dm-contacts-count">0</span>
                                     </div>
                                     <div id="dm-contacts-list" class="dm-contacts-list"></div>
+
+                                    <!--
+                                        People you blocked. Folded away: it is
+                                        somewhere to undo a decision, not
+                                        something to look at every day.
+                                    -->
+                                    <section id="dm-blocked" class="dm-blocked hidden" aria-label="Blocked">
+                                        <details>
+                                            <summary class="dm-contacts-head">
+                                                <span class="dm-contacts-title">Blocked</span>
+                                                <span id="dm-blocked-count" class="dm-contacts-count">0</span>
+                                            </summary>
+                                            <p class="dm-invitations-hint">
+                                                Their requests and invitations are dropped without telling them.
+                                            </p>
+                                            <div id="dm-blocked-list" class="dm-blocked-list"></div>
+                                        </details>
+                                    </section>
+
                                     <p class="dm-contacts-hint">
                                         Names are stored only in this browser and are never published.
                                     </p>
@@ -819,22 +838,35 @@
                                         >
                                             <span id="dm-peer-avatar" class="dm-avatar" aria-hidden="true">?</span>
                                             <span class="dm-chat-title">
-                                                <span id="dm-peer-label" class="dm-peer-label"></span>
+                                                <span class="dm-peer-line">
+                                                    <span id="dm-peer-label" class="dm-peer-label"></span>
+                                                    <span id="dm-retention-badge" class="dm-retention-badge hidden"></span>
+                                                </span>
                                                 <span id="dm-connection-status" class="status-chip status-pending">Not connected</span>
                                             </span>
                                         </button>
                                         <div class="dm-chat-actions">
+                                            <!--
+                                                Three states, set from the
+                                                script: not saved, saving once
+                                                the keys are verified, saved
+                                                (where it renames).
+                                            -->
                                             <button
                                                 id="dm-save-contact-btn"
                                                 type="button"
-                                                class="dm-head-btn"
+                                                class="dm-head-btn dm-save-btn"
+                                                data-state="save"
                                                 title="Save as contact"
                                                 aria-label="Save as contact"
                                             >
-                                                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                                <svg class="dm-icon-save" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                                                     <path d="M15 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19 8v6M22 11h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                                 </svg>
-                                                <span class="dm-head-btn-label">Save contact</span>
+                                                <svg class="dm-icon-saved" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                                    <path d="M15 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM16 11l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                                </svg>
+                                                <span id="dm-save-contact-label" class="dm-head-btn-label">Save contact</span>
                                             </button>
                                             <button
                                                 id="channels-leave-btn"
@@ -985,11 +1017,59 @@
                                     <button id="dm-sheet-copy-evm" type="button" class="btn btn-secondary btn-sm">📋 Copy EVM address</button>
                                 </div>
                             </section>
+                            <!--
+                                Per conversation, on this device only: how long
+                                its messages stay, sealed with the wallet, before
+                                they are deleted by their timestamp.
+                            -->
+                            <section id="dm-sheet-retention-field" class="dm-sheet-field hidden">
+                                <p id="dm-sheet-retention-label" class="dm-sheet-label">Keep messages on this device</p>
+                                <div class="dm-segmented" role="radiogroup" aria-labelledby="dm-sheet-retention-label">
+                                    <button type="button" role="radio" aria-checked="true" data-retention="0">Off</button>
+                                    <button type="button" role="radio" aria-checked="false" data-retention="86400000">24 h</button>
+                                    <button type="button" role="radio" aria-checked="false" data-retention="259200000">3 days</button>
+                                    <button type="button" role="radio" aria-checked="false" data-retention="604800000">7 days</button>
+                                </div>
+                                <p class="dm-sheet-note">
+                                    Encrypted with your wallet and deleted by each message's timestamp, at most a
+                                    week later. Only here: the other person decides for their own device.
+                                </p>
+                            </section>
+                            <button id="dm-sheet-block" type="button" class="btn btn-danger dm-sheet-block hidden">🚫 Block</button>
                             <ol id="dm-sheet-steps" class="dm-sheet-steps hidden">
                                 <li>Send it to the person you want to talk to — any app will do.</li>
                                 <li>They paste it under <b>Start a new chat</b> and press <b>Request chat</b>.</li>
                                 <li>Their request shows up here under <b>Chat invitations</b>. Accept it and the encrypted chat opens.</li>
                             </ol>
+                        </form>
+                    </dialog>
+
+                    <!--
+                        Naming a contact and confirming a remove or a block.
+                        Replaces window.prompt/confirm, which in-app browsers
+                        suppress — a suppressed prompt reads as Cancel, so
+                        Save contact used to do nothing there. Confirm comes
+                        first in the form so Enter in the name field confirms.
+                    -->
+                    <dialog id="dm-prompt-dialog" class="dm-sheet dm-prompt" aria-labelledby="dm-prompt-title">
+                        <form method="dialog" class="dm-sheet-card">
+                            <div class="dm-sheet-grip" aria-hidden="true"></div>
+                            <header class="dm-sheet-head">
+                                <span id="dm-prompt-avatar" class="dm-avatar" aria-hidden="true"></span>
+                                <div class="dm-sheet-titles">
+                                    <h4 id="dm-prompt-title"></h4>
+                                    <p id="dm-prompt-subtitle" class="dm-prompt-subtitle"></p>
+                                </div>
+                            </header>
+                            <label id="dm-prompt-field" class="dm-prompt-field hidden">
+                                <span>Name</span>
+                                <input id="dm-prompt-input" type="text" maxlength="64" autocomplete="off" spellcheck="false" />
+                            </label>
+                            <p id="dm-prompt-body" class="dm-prompt-body hidden"></p>
+                            <div class="dm-prompt-actions">
+                                <button id="dm-prompt-confirm" value="confirm" class="btn btn-primary">Save</button>
+                                <button value="cancel" class="btn btn-secondary">Cancel</button>
+                            </div>
                         </form>
                     </dialog>
                 </div>

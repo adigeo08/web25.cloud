@@ -230,10 +230,29 @@ async function shareText(text, fallbackAddress) {
 let ownNpub = '';
 
 /** Who the open conversation is with, as last rendered. */
-let currentPeer = { label: '', npub: '', evm: '', online: /** @type {boolean|null} */ (null), state: 'idle' };
+let currentPeer = {
+    label: '',
+    npub: '',
+    evm: '',
+    online: /** @type {boolean|null} */ (null),
+    state: 'idle',
+    retention: 0
+};
 
 /** What the address sheet is showing, so its buttons act on that. */
 const sheetContent = { address: '', evm: '', share: '' };
+
+/** Ids of the messages in the thread, so none is shown twice. */
+const renderedMessageIds = new Set();
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** @param {number} ms */
+function retentionLabel(ms) {
+    const days = Math.round((Number(ms) || 0) / DAY_MS);
+    if (days <= 0) return 'no time';
+    return days === 1 ? '24 hours' : `${days} days`;
+}
 
 /**
  * A message that can be forwarded as is: the address, and what to do with it.
@@ -256,8 +275,11 @@ function setText(id, text) {
 /**
  * Open the address sheet for yourself or for the peer.
  *
+ * For the peer it is their contact card: besides the address, how long this
+ * conversation keeps its messages here, and Block.
+ *
  * @param {{ title: string, subtitle?: string, self?: boolean, address: string,
- *           addressLabel?: string, evm?: string, steps?: boolean, share?: string }} content
+ *           addressLabel?: string, evm?: string, steps?: boolean, share?: string, peer?: boolean }} content
  */
 function openAddressSheet({
     title,
@@ -267,7 +289,8 @@ function openAddressSheet({
     addressLabel = 'Nostr address',
     evm = '',
     steps = false,
-    share = ''
+    share = '',
+    peer = false
 }) {
     const dialog = /** @type {HTMLDialogElement|null} */ (document.getElementById('dm-address-sheet'));
     if (!dialog || !address) return;
@@ -295,6 +318,9 @@ function openAddressSheet({
     document.getElementById('dm-sheet-evm-field')?.classList.toggle('hidden', !evm);
     document.getElementById('dm-sheet-steps')?.classList.toggle('hidden', !steps);
     document.getElementById('dm-sheet-share')?.classList.toggle('hidden', !(share && canShare()));
+    document.getElementById('dm-sheet-retention-field')?.classList.toggle('hidden', !peer);
+    document.getElementById('dm-sheet-block')?.classList.toggle('hidden', !peer);
+    if (peer) renderDmRetention(currentPeer.retention);
 
     if (typeof dialog.showModal === 'function') {
         if (!dialog.open) dialog.showModal();
@@ -320,10 +346,12 @@ function showOwnAddress() {
  *   onSearch: (query: string) => Promise<any>,
  *   onStartChat: (result: any) => Promise<boolean>,
  *   onLeave: () => void,
- *   onSend: (text: string) => void
+ *   onSend: (text: string) => void,
+ *   onBlockPeer?: () => void,
+ *   onRetentionChange?: (ms: number) => void
  * }} handlers
  */
-export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend }) {
+export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend, onBlockPeer, onRetentionChange }) {
     const searchBtn = document.getElementById('dm-nostr-search-btn');
     const startChatBtn = document.getElementById('channels-nostr-invite-btn');
     const leaveBtn = document.getElementById('channels-leave-btn');
@@ -470,8 +498,23 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend }) {
             subtitle: label.text,
             address: currentPeer.npub,
             addressLabel: 'Their Nostr address',
-            evm: currentPeer.evm
+            evm: currentPeer.evm,
+            peer: true
         });
+    });
+
+    // Their card: how long this conversation keeps its messages here …
+    document.getElementById('dm-sheet-retention-field')?.addEventListener('click', (event) => {
+        const choice = /** @type {HTMLElement} */ (event.target).closest('[data-retention]');
+        if (!choice) return;
+        const ms = Number(choice.getAttribute('data-retention')) || 0;
+        renderDmRetention(ms);
+        onRetentionChange?.(ms);
+    });
+    // … and Block, which closes the card first: what follows is its own question.
+    document.getElementById('dm-sheet-block')?.addEventListener('click', () => {
+        sheet?.close();
+        onBlockPeer?.();
     });
 
     // Cancelling while it connects is leaving the conversation, by the same
@@ -663,6 +706,52 @@ function renderConnectProgress(state, name) {
 }
 
 /**
+ * What the conversation's Save button says.
+ *
+ * `pending` is a save asked for before the peer's keys were verified: it
+ * completes on its own when the chat connects. `saved` renames.
+ *
+ * @param {'save'|'saved'|'pending'} state
+ */
+export function renderDmSaveContact(state) {
+    const button = document.getElementById('dm-save-contact-btn');
+    if (!button) return;
+    const copy = {
+        save: { label: 'Save contact', title: 'Save as contact' },
+        pending: { label: 'Saving…', title: 'Saved as a contact as soon as the chat connects' },
+        saved: { label: 'Saved', title: 'Saved contact — rename' }
+    }[state] || { label: 'Save contact', title: 'Save as contact' };
+    button.setAttribute('data-state', state);
+    button.setAttribute('title', copy.title);
+    button.setAttribute('aria-label', copy.title);
+    setText('dm-save-contact-label', copy.label);
+}
+
+/**
+ * How long this conversation keeps its messages here: the choice in the
+ * contact card, and a badge by the name while it is on.
+ *
+ * @param {number} ms 0 is off
+ */
+export function renderDmRetention(ms) {
+    const value = Number(ms) || 0;
+    currentPeer.retention = value;
+    const field = document.getElementById('dm-sheet-retention-field');
+    field?.querySelectorAll('[data-retention]').forEach((choice) => {
+        choice.setAttribute('aria-checked', `${Number(choice.getAttribute('data-retention')) === value}`);
+    });
+    const badge = document.getElementById('dm-retention-badge');
+    if (badge) {
+        // Short beside the name; the full wording is in the title.
+        badge.textContent = value
+            ? `🕓 ${Math.round(value / DAY_MS) === 1 ? '24h' : `${Math.round(value / DAY_MS)}d`}`
+            : '';
+        badge.classList.toggle('hidden', !value);
+        badge.setAttribute('title', value ? `Messages are kept on this device for ${retentionLabel(value)}` : '');
+    }
+}
+
+/**
  * Whether the peer looks reachable, while a request waits for them.
  *
  * A presence beacon that has not arrived is not proof of absence, so "offline"
@@ -723,7 +812,14 @@ function renderComposerAvailability(state) {
  */
 export function renderDmConnectionState(
     state,
-    { peerLabel = '', peerNpub = '', peerAddress = '', peerOnline = null } = {}
+    {
+        peerLabel = '',
+        peerNpub = '',
+        peerAddress = '',
+        peerOnline = null,
+        peerSaveState = /** @type {'save'|'saved'|'pending'} */ ('save'),
+        peerRetention = /** @type {number|null} */ (null)
+    } = {}
 ) {
     const el = document.getElementById('dm-connection-status');
     if (el) {
@@ -732,7 +828,12 @@ export function renderDmConnectionState(
         el.className = label.className;
     }
 
-    currentPeer = { label: peerLabel, npub: peerNpub, evm: peerAddress, online: peerOnline, state };
+    // Unknown retention keeps what was shown for the same peer, and is off for another.
+    const retention =
+        peerRetention === null ? (currentPeer.npub === peerNpub ? currentPeer.retention : 0) : peerRetention;
+    currentPeer = { label: peerLabel, npub: peerNpub, evm: peerAddress, online: peerOnline, state, retention };
+    renderDmSaveContact(peerSaveState);
+    renderDmRetention(retention);
 
     const peerEl = document.getElementById('dm-peer-label');
     if (peerEl) peerEl.textContent = peerLabel;
@@ -756,6 +857,7 @@ export function clearChannelsMessages() {
         // The next message starts a new day chip, whatever day it is.
         delete container.dataset.day;
     }
+    renderedMessageIds.clear();
     document.getElementById('dm-scroll-bottom')?.classList.add('hidden');
 }
 
@@ -880,6 +982,7 @@ function markDay(container, date) {
 
     const chip = document.createElement('div');
     chip.className = 'channels-day';
+    chip.dataset.day = key;
     chip.setAttribute('role', 'separator');
     const label = document.createElement('span');
     label.textContent = dayLabel(date);
@@ -913,16 +1016,36 @@ function messageStamp(date) {
 export function appendChannelsMessage(message, isOwn = false) {
     const container = messagesContainer();
     if (!container) return;
+    // The same message from the relay and from what this device kept is one
+    // bubble, not two.
+    const id = `${message?.id || ''}`;
+    if (id && renderedMessageIds.has(id)) return;
 
     // Someone reading back through the thread stays where they are; your own
     // message always brings you to the bottom.
     const follow = isOwn || isNearBottom(container);
+    buildMessage(container, message, isOwn);
+
+    if (follow) scrollThreadToBottom(container);
+    else syncScrollButton(container);
+}
+
+/**
+ * Build one bubble (and the day chip it needs) at the end of `container`.
+ *
+ * @param {HTMLElement} container the thread, or a scratch element for history
+ * @param {any} message
+ * @param {boolean} isOwn
+ */
+function buildMessage(container, message, isOwn) {
     const date = messageDate(message.timestamp);
     markDay(container, date);
 
     const system = message.from === 'system';
     const side = system ? 'system' : isOwn ? 'out' : 'in';
     const from = `${message.from || ''}`;
+    const id = `${message?.id || ''}`;
+    if (id) renderedMessageIds.add(id);
 
     const item = document.createElement('div');
     item.className = ['channels-message', side === 'out' ? 'is-own' : '', system ? 'is-system' : '']
@@ -951,6 +1074,47 @@ export function appendChannelsMessage(message, isOwn = false) {
 
     item.appendChild(body);
     container.appendChild(item);
+    return item;
+}
+
+/**
+ * Put a conversation's kept messages above the live thread.
+ *
+ * They are built in a scratch element with the same rules as live bubbles —
+ * day chips, grouping, tails — and moved in front of whatever has already
+ * arrived, with a note saying where they came from. A message already on
+ * screen is not repeated, and where history and the live thread share a day
+ * only one chip for it is kept.
+ *
+ * @param {Array<{ id?: string, from: string, text: string, timestamp: string, own?: boolean }>} messages
+ * @param {{ retentionMs?: number }} [options]
+ */
+export function prependChannelsHistory(messages, { retentionMs = 0 } = {}) {
+    const container = messagesContainer();
+    if (!container) return;
+    const fresh = (messages || []).filter((message) => !message?.id || !renderedMessageIds.has(`${message.id}`));
+    if (fresh.length === 0) return;
+
+    const follow = isNearBottom(container);
+    const scratch = document.createElement('div');
+
+    const note = document.createElement('div');
+    note.className = 'channels-message is-system channels-kept-note';
+    const noteBody = document.createElement('div');
+    noteBody.className = 'channels-message-body';
+    noteBody.textContent = `🕓 Kept on this device for ${retentionLabel(retentionMs)}, encrypted with your wallet`;
+    note.appendChild(noteBody);
+    scratch.appendChild(note);
+
+    for (const message of fresh) buildMessage(scratch, message, message.own === true);
+
+    const first = /** @type {HTMLElement|null} */ (container.firstElementChild);
+    if (first?.classList.contains('channels-day') && first.dataset.day === scratch.dataset.day) first.remove();
+    const anchor = container.firstChild;
+    while (scratch.firstChild) container.insertBefore(scratch.firstChild, anchor);
+    // An empty live thread takes its day from the history, so the next message
+    // on the same day does not open a second chip.
+    if (!container.dataset.day && scratch.dataset.day) container.dataset.day = scratch.dataset.day;
 
     if (follow) scrollThreadToBottom(container);
     else syncScrollButton(container);

@@ -755,6 +755,28 @@ pre.code-block {
     border-color: rgba(240, 97, 109, 0.55);
 }
 
+.btn-danger {
+    border-color: transparent;
+    background: #d9475a;
+    color: #fff;
+}
+
+.btn-danger:hover {
+    background: #e85d6f;
+}
+
+/* Quiet until hovered: an action that is available, not one being pushed. */
+.btn-danger-ghost {
+    border-color: rgba(240, 97, 109, 0.35);
+    background: transparent;
+    color: #ff8f99;
+}
+
+.btn-danger-ghost:hover {
+    background: var(--err-soft);
+    border-color: rgba(240, 97, 109, 0.55);
+}
+
 .btn-debug,
 .btn-back {
     border-color: var(--border-strong);
@@ -2432,6 +2454,15 @@ input[type='checkbox'] {
     background: linear-gradient(to right, transparent, #172038 1.4rem);
 }
 
+/* With a pointer the actions appear on hover, so "⋯" has nothing to open. */
+.dm-contact-action[data-contact-action='more'] {
+    display: none;
+}
+
+.dm-contact-action[data-contact-action='block']:hover {
+    background: var(--err-soft);
+}
+
 .dm-contact:hover .dm-contact-actions,
 .dm-contact:focus-within .dm-contact-actions {
     opacity: 1;
@@ -2441,18 +2472,58 @@ input[type='checkbox'] {
 /* A touch screen has no hover, and an invisible button is still a tappable
    one: there the actions are simply shown. */
 @media (hover: none) {
+    /* Four actions do not fit beside a name on a phone, and hover cannot reveal
+       them: the row shows "⋯", which opens them on a line of their own. */
+    .dm-contact {
+        flex-wrap: wrap;
+    }
+
     .dm-contact-actions {
         position: static;
         flex: 0 0 auto;
         padding: 0;
         background: none;
-        opacity: 0.8;
+        opacity: 1;
         transform: none;
         pointer-events: auto;
     }
 
     .dm-contact.is-selected .dm-contact-actions {
         background: none;
+    }
+
+    /* Two classes, so the base `.dm-contact-action` rule further down the
+       file cannot win this back. */
+    .dm-contact-actions .dm-contact-action {
+        display: none;
+    }
+
+    .dm-contact-actions .dm-contact-action[data-contact-action='more'] {
+        display: inline-grid;
+        color: var(--text-dim);
+        font-size: 1.1rem;
+    }
+
+    .dm-contact.is-actions-open .dm-contact-actions {
+        flex: 1 1 100%;
+        justify-content: flex-end;
+        gap: 0.35rem;
+        padding: 0.35rem 0 0.1rem 3.6rem;
+    }
+
+    .dm-contact.is-actions-open .dm-contact-actions .dm-contact-action {
+        display: inline-grid;
+        width: 40px;
+        height: 36px;
+        border-radius: 10px;
+        background: var(--surface-3);
+    }
+
+    /* "⋯" stays where it was, at the end of the name line. */
+    .dm-contact.is-actions-open .dm-contact-actions .dm-contact-action[data-contact-action='more'] {
+        order: -1;
+        margin-right: auto;
+        background: var(--accent-soft);
     }
 }
 
@@ -2596,6 +2667,10 @@ input[type='checkbox'] {
 .dm-invite-actions .btn {
     flex: 1 1 0;
     border-radius: 999px;
+}
+
+.dm-invite-actions .btn-danger-ghost {
+    flex: 0 0 auto;
 }
 
 /* The phone's two pane switches. Off on desktop, where both panes are on
@@ -3018,6 +3093,24 @@ input[type='checkbox'] {
     flex-direction: column;
 }
 
+.dm-peer-line {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.dm-retention-badge {
+    flex: 0 0 auto;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    background: var(--surface-3);
+    color: var(--text-dim);
+    font-size: 0.68rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
 .dm-peer-label {
     display: block;
     margin: 0;
@@ -3083,6 +3176,23 @@ input[type='checkbox'] {
     color: var(--text);
 }
 
+.dm-save-btn .dm-icon-saved,
+.dm-save-btn[data-state='saved'] .dm-icon-save {
+    display: none;
+}
+
+.dm-save-btn[data-state='saved'] .dm-icon-saved {
+    display: inline;
+}
+
+.dm-save-btn[data-state='saved'] {
+    color: #7fe3ae;
+}
+
+.dm-save-btn[data-state='pending'] {
+    color: var(--warn);
+}
+
 .dm-head-btn.is-danger:hover {
     background: var(--err-soft);
     color: #ff8a92;
@@ -3139,8 +3249,10 @@ input[type='checkbox'] {
     text-align: center;
 }
 
-/* Few messages sit at the bottom, by the composer, not under the header. */
-.channels-messages > :first-child {
+/* Few messages sit at the bottom, by the composer, not under the header —
+   including when the first thing in the thread is a notice. */
+.channels-messages > :first-child,
+.channels-messages > .channels-message:first-child {
     margin-top: auto;
 }
 
@@ -3803,6 +3915,190 @@ li[data-state='active'] .dm-connect-text small {
 
 .dm-sheet-steps.hidden {
     display: none !important;
+}
+
+/* Where kept history begins, above the live thread. */
+.channels-kept-note {
+    background: rgba(76, 125, 255, 0.12);
+    color: #b9cbff;
+}
+
+/* ── Contact card extras: how long messages stay, and Block ── */
+.dm-segmented {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border-radius: 12px;
+    background: var(--surface-3);
+}
+
+.dm-segmented button {
+    padding: 0.45rem 0.3rem;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.dm-segmented button:hover {
+    color: var(--text);
+}
+
+.dm-segmented button[aria-checked='true'] {
+    background: var(--accent);
+    color: #fff;
+}
+
+.dm-sheet-note {
+    margin: 0.6rem 0 0;
+    color: var(--muted);
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+
+.dm-sheet-block {
+    align-self: flex-start;
+    border-radius: 999px;
+}
+
+.dm-sheet-block.hidden {
+    display: none !important;
+}
+
+/* ── Blocked ── */
+.dm-blocked {
+    margin-top: 0.6rem;
+    border-top: 1px solid var(--dm-line);
+}
+
+.dm-blocked.hidden {
+    display: none !important;
+}
+
+.dm-blocked details {
+    border: 0;
+    border-radius: 0;
+    background: none;
+}
+
+.dm-blocked details > *:not(summary) {
+    padding: 0;
+}
+
+.dm-blocked details[open] > summary {
+    border-bottom: 0;
+}
+
+.dm-blocked summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.dm-blocked details > summary:hover {
+    background: none;
+}
+
+.dm-blocked summary::-webkit-details-marker {
+    display: none;
+}
+
+.dm-blocked summary .dm-contacts-title::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 0.4rem;
+    transition: transform 0.15s ease;
+}
+
+.dm-blocked details[open] summary .dm-contacts-title::before {
+    transform: rotate(90deg);
+}
+
+.dm-blocked-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0 0.4rem;
+}
+
+.dm-blocked-row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: 12px;
+    opacity: 0.85;
+}
+
+.dm-blocked-row .dm-avatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+    font-size: 0.8rem;
+    filter: grayscale(1);
+}
+
+.dm-blocked-row .btn {
+    flex: 0 0 auto;
+    border-radius: 999px;
+}
+
+/* ── The small dialog: naming a contact, confirming a remove or a block ── */
+.dm-prompt {
+    width: min(420px, calc(100vw - 2rem));
+}
+
+.dm-prompt-subtitle {
+    font-family: var(--font-mono);
+    font-size: 0.72rem !important;
+    overflow-wrap: anywhere;
+}
+
+.dm-prompt-field {
+    display: grid;
+    gap: 0.35rem;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.dm-prompt-field.hidden,
+.dm-prompt-body.hidden {
+    display: none !important;
+}
+
+.dm-prompt-field input {
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    font-size: 1rem;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.dm-prompt-body {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.86rem;
+    line-height: 1.55;
+}
+
+/* Confirm is first in the form, so Enter confirms; on screen it sits last. */
+.dm-prompt-actions {
+    display: flex;
+    flex-direction: row-reverse;
+    gap: 0.5rem;
+}
+
+.dm-prompt-actions .btn {
+    flex: 1 1 0;
+    border-radius: 999px;
 }
 
 /* Legacy manual-handshake cards (kept styled for any code path that shows them) */

@@ -38,6 +38,7 @@ const {
     answerDmInvitation,
     acceptDmInvitation,
     declineDmInvitation,
+    isDmBlocked,
     removeContact
 } = await import('../src/core/bootstrap/Lifecycle.js');
 import { ContactsStore, TRUST, verifyIdentityTuple } from '../src/channels/ContactsStore.js';
@@ -172,7 +173,9 @@ async function makeApp({ unlocked = true } = {}) {
         // The two consent sets the real app keeps: peers approved in this
         // session, and peers refused in it.
         dmConsentedPeers: new Set(),
-        dmDeclinedPeers: new Set(),
+        dmDeclinedRequests: new Map(),
+        dmDeclinedSessions: new Set(),
+        dmBlocked: new Set(),
         channelsService: new LeakCountingChannels(),
         nostrDmSession: new RecordingDmSession(),
         presenceService: {
@@ -227,6 +230,7 @@ async function makeApp({ unlocked = true } = {}) {
     app.answerDmInvitation = answerDmInvitation.bind(app);
     app.acceptDmInvitation = acceptDmInvitation.bind(app);
     app.declineDmInvitation = declineDmInvitation.bind(app);
+    app.isDmBlocked = isDmBlocked.bind(app);
     app.removeContact = removeContact.bind(app);
 
     return app;

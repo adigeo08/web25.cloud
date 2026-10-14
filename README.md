@@ -486,10 +486,20 @@ is never auto-answered:
   makes the pair mutual and starts the handshake. There is no SDP in a request,
   so there is nothing to answer yet and nothing to verify yet; the identity
   tuple is checked when the offer arrives
-- **Decline** discards the invitation: no answer, no connection, no contact. The
-  peer is not notified, because that would confirm the npub is live, and every
-  later request *or offer* from them is dropped in silence for the rest of the
-  session, so a refusal cannot be worn down by repetition
+- **Decline** discards *that* invitation: no answer, no connection, no contact.
+  The peer is not notified, because that would confirm the npub is live. It
+  answers the invitation, not the person: a request they send later is shown
+  again. The declined one is remembered — a request by its timestamp, an offer
+  by its session — so a relay delivering it again on reconnect does not bring
+  it back
+- **Block** (on an invitation, a contact row, or the contact card in a
+  conversation) answers the person: their requests and offers are dropped from
+  then on before any intent is recorded, any invitation of theirs goes, a
+  friendship ends, a conversation with them closes and history kept from it is
+  deleted. They are not told. A block needs only the npub — a request carries
+  nothing else — and is stored sealed to the wallet like the contacts, so it
+  holds across sessions. **Blocked** under the contact list undoes it; an
+  unblocked peer is a stranger again, not a friend
 - a request ages on the **sender's** clock, taken from the timestamp inside the
   sealed rumor. The inbox deliberately looks days back on every start, so
   without that a week-old request would be presented as a decision to make now;
@@ -523,9 +533,35 @@ else: no peer key, no EVM address, no display name. **No private key, PRF output
 or derived secret is persisted.** A locked wallet cannot read the list at all,
 locking clears it from memory, and unlocking restores it.
 
-The Friends list offers open, rename and remove. Removing is a local
-authorization change only — the peer is unknown again and their next invitation
-needs approval; **no key is deleted or rotated** on either side.
+The Friends list offers open, copy address, rename, remove and block (behind
+**⋯** on a touch screen). Removing is a local authorization change only — the
+peer is unknown again and their next invitation needs approval; **no key is
+deleted or rotated** on either side.
+
+**Saving a contact** needs the peer's verified identity tuple, which exists only
+once the handshake has verified it. The conversation's **Save contact** button
+is there from the moment a conversation opens, so pressed earlier it no longer
+fails on a missing key: the name is taken and the save completes by itself
+when the chat connects (the button reads *Saving…* until then, *Saved* after,
+and renames from there on). Names, removals and blocks are asked in the app's
+own dialog — `window.prompt`/`confirm` are suppressed by many in-app browsers,
+and a suppressed prompt reads as Cancel, which is why Save contact used to do
+nothing there.
+
+**Keeping messages** is per conversation and off by default. The contact card
+(tap the peer in the conversation header) offers *Off · 24 h · 3 days · 7
+days*; while it is on, a 🕓 badge sits by the name and the thread says so.
+Messages are stored in their own IndexedDB database (`web25-messages`), each
+one sealed with NIP-44 v2 to the wallet's own key, next to an opaque
+conversation tag (a hash of both public keys), its time and its expiry — no
+text, no key, no address in the clear. Expiry is the message's own timestamp
+plus the window, a peer's future-dated timestamp is clamped to now, and seven
+days is a hard cap. Expired rows are deleted on start and every ten minutes;
+that reads only the expiry, so it runs with the wallet locked too. Turning it
+on keeps the session so far; turning it off deletes what was kept. Kept
+messages come back above the live thread when the conversation reconnects.
+Chat text only — files and service notices are not kept — and only on this
+device: the other person decides for theirs.
 
 Presence is a separate state again:
 

@@ -32,8 +32,11 @@ import {
     clearChannelsComposer,
     clearChannelsMessages,
     clearDmSearch,
+    prependChannelsHistory,
     renderDmConnectionState,
     renderDmPeerPresence,
+    renderDmRetention,
+    renderDmSaveContact,
     showDmStep,
     updateDmNostrIdentity
 } from '../../ui/channels/ChannelsPanel.js';
@@ -41,12 +44,15 @@ import {
     bindContactsPanel,
     bindSaveContact,
     renderContacts,
+    renderBlockedContacts,
     renderContactsLocked,
     renderSearchPresence
 } from '../../ui/channels/ContactsPanel.js';
 import { bindInvitationsPanel, renderInvitations } from '../../ui/channels/InvitationsPanel.js';
 import { NostrPresenceService, INTENT } from '../../channels/NostrPresenceService.js';
 import { ContactsStore, TRUST, filterContacts, verifyIdentityTuple } from '../../channels/ContactsStore.js';
+import { MessageArchive } from '../../channels/MessageArchive.js';
+import { askConfirm, askContactName } from '../../ui/channels/ContactDialog.js';
 import { PendingInvitations } from '../../channels/PendingInvitations.js';
 import { GoFileService } from '../../gofile/GoFileService.js';
 import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
@@ -64,6 +70,12 @@ const DM_SEARCH_PRESENCE_GRACE_MS = 3000;
 const HANDSHAKE_STALL_MS = 20000;
 const DEPLOY_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const WEBTORRENT_CDN_URL = 'https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js';
+
+/** The most of this session's messages held to keep if retention is turned on. */
+const DM_SESSION_MESSAGES_MAX = 500;
+
+/** How often expired kept messages are purged while the app is open. */
+const DM_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 
 /** Conversation states past waiting: a tap on that contact opens it, not a new request. */
 const DM_LIVE_STATES = new Set(['handshake', 'connecting-webrtc', 'connected-webrtc', 'connected-nostr']);
@@ -226,12 +238,48 @@ export function setupChannels() {
     /** @type {ReturnType<typeof setTimeout>|null} */
     this.dmHandshakeStallTimer = null;
     /**
-     * Peers whose request was declined here. They are dropped in silence rather
-     * than re-opening the panel on every retry — and still told nothing, since
-     * an answer of any kind would confirm the npub is live.
+     * The invitations declined here, so the same one is not offered twice.
+     *
+     * Declining answers one invitation, not the person: a request they send
+     * later is shown again (Block is how you stop hearing from somebody). What
+     * must not come back is the declined invitation itself — relays deliver a
+     * request again on reconnect, with its original timestamp — so a request is
+     * remembered by when it was sent, and an offer by its session.
+     *
+     * Nothing is ever sent to the peer either way: an answer of any kind would
+     * confirm the npub is live.
+     * @type {Map<string, number>} peer → sent-at of the request declined
+     */
+    this.dmDeclinedRequests = new Map();
+    /** @type {Set<string>} offer sessions declined */
+    this.dmDeclinedSessions = new Set();
+    /**
+     * People blocked, mirrored from the encrypted store so the inbox can drop
+     * them without a worker round trip per event. Loaded with the contacts.
      * @type {Set<string>}
      */
-    this.dmDeclinedPeers = new Set();
+    this.dmBlocked = new Set();
+    this.dmBlockedList = [];
+    this.dmBlockedLoaded = false;
+    /** A "Save contact" asked for before the peer's keys were verified. */
+    this.dmPendingContactSave = null;
+
+    // Messages kept on this device, per conversation, up to a week, sealed to
+    // the wallet. Expired rows go by their timestamp; that needs no key, so
+    // the purge also runs while the wallet is locked.
+    this.messageArchive = new MessageArchive({ signer });
+    /** @type {Map<string, number>} peer → retention in ms */
+    this.dmRetention = new Map();
+    /** The peer whose kept history is on screen, so it is shown once per thread. */
+    this.dmHistoryShown = '';
+    /** This session's messages, so turning retention on keeps them too. */
+    this.dmSessionMessages = [];
+    const purgeMessages = () =>
+        void this.messageArchive.purgeExpired().catch((error) => this.log(`Message purge: ${error.message}`));
+    purgeMessages();
+    this._dmPurgeTimer = setInterval(purgeMessages, DM_PURGE_INTERVAL_MS);
+    // Housekeeping only: never the reason a process stays alive.
+    /** @type {any} */ (this._dmPurgeTimer)?.unref?.();
 
     // Requests and offers from peers who are not approved contacts wait here.
     // Nothing is answered from this queue without a person pressing Accept.
@@ -259,11 +307,14 @@ export function setupChannels() {
             this.refreshContactList();
         },
         onRename: (contact) => void this.renameContact(contact.nostrPublicKey, contact.name),
-        onRemove: (contact) => void this.removeContact(contact.nostrPublicKey, contact.name)
+        onRemove: (contact) => void this.removeContact(contact.nostrPublicKey, contact.name),
+        onBlock: (contact) => void this.blockDmPeer(contact.nostrPublicKey, contact),
+        onUnblock: (contact) => void this.unblockDmPeer(contact.nostrPublicKey, contact.name)
     });
     bindInvitationsPanel({
         onAccept: (peer) => this.acceptDmInvitation(peer),
-        onDecline: (peer) => void this.declineDmInvitation(peer)
+        onDecline: (peer) => void this.declineDmInvitation(peer),
+        onBlock: (peer, details) => void this.blockDmPeer(peer, details)
     });
     renderInvitations([]);
     bindSaveContact(() => void this.saveCurrentPeerAsContact());
@@ -283,6 +334,9 @@ export function setupChannels() {
             const identity = this.authController.getActiveIdentity();
             if (!identity?.address) {
                 throw new Error('Unlock your wallet to search for a Nostr address.');
+            }
+            if (await this.isDmBlocked(nostrPublicKey)) {
+                throw new Error('You blocked this address. Unblock it under Blocked to chat again.');
             }
 
             let profile = null;
@@ -313,20 +367,16 @@ export function setupChannels() {
                 result.profile?.displayName || result.profile?.name || ''
             );
         },
-        onLeave: async () => {
-            this.clearHandshakeStallTimer();
-            await this.channelsService.leaveChannel();
-            // Stay subscribed: leaving a conversation should not stop the user
-            // being reachable at their npub.
-            this.nostrDmSession?.clearPeer();
-            if (this.dmSelectedPeer) this.presenceService?.clearIntent(this.dmSelectedPeer);
-            this.dmSelectedPeer = '';
-            this.dmOfferSessionId = null;
-            this.stopWatchingSearchedPeer();
-            clearDmSearch();
-            renderDmConnectionState('idle');
-            showDmStep('dm-choose-role');
+        onLeave: () => this.leaveDmConversation(),
+        onBlockPeer: () => {
+            const peer = this.dmSelectedPeer;
+            if (!peer) return;
+            // A saved name if there is one; the npub stands in otherwise, never
+            // the short hex label the header falls back to.
+            const contact = (this.dmContacts || []).find((entry) => entry.nostrPublicKey === peer);
+            void this.blockDmPeer(peer, { name: contact?.name || '' });
         },
+        onRetentionChange: (ms) => void this.setDmRetention(ms),
         onSend: async (text) => {
             try {
                 const identity = this.authController.getActiveIdentity();
@@ -353,6 +403,12 @@ export function setupChannels() {
         // inside ChannelsService, so nothing else renders connection status.
         if (event.type === 'connection-state') {
             renderDmConnectionState(event.state, { peerLabel: this.dmPeerLabel(), ...this.dmPeerDetails?.() });
+            if (event.state === 'connected-webrtc' || event.state === 'connected-nostr') {
+                // Their keys are verified now: a save asked for earlier can
+                // complete, and the kept history belongs on screen.
+                void this.completePendingContactSave?.();
+                void this.restoreDmHistory?.();
+            }
             return;
         }
         if (
@@ -366,8 +422,16 @@ export function setupChannels() {
         }
         if (event.type === 'left') {
             clearChannelsMessages();
+            // A new thread: whatever history was shown went with the old one.
+            this.dmHistoryShown = '';
+            this.dmSessionMessages = [];
         } else if (event.type === 'message') {
             appendChannelsMessage(event.message, event.local === true);
+            this.dmSessionMessages?.push({ message: event.message, own: event.local === true });
+            // Enough to keep a session when retention is turned on mid-way,
+            // without holding an unbounded transcript in memory.
+            if (this.dmSessionMessages?.length > DM_SESSION_MESSAGES_MAX) this.dmSessionMessages.shift();
+            void this.archiveDmMessage?.(event.message, event.local === true);
         } else if (event.type === 'file-incoming' || event.type === 'file-progress') {
             appendFileTransfer({
                 fileId: event.fileId,
@@ -430,12 +494,17 @@ export async function handleNostrInvitation(bootstrap, context) {
             // contact is parked, and nothing is sent back.
             const sender = `${context.senderNostrPublicKey}`.toLowerCase();
 
-            // A refusal holds for everything this peer sends, not only for
-            // their requests. Parking an unsolicited offer from somebody who
-            // was already declined would put them back in the panel and raise a
-            // notification — exactly the nagging the refusal is meant to stop.
-            if (this.dmDeclinedPeers?.has(sender)) {
-                this.log(`Ignoring an offer from ${sender}: previously declined.`);
+            // A block holds for everything this peer sends, not only for
+            // their requests: parking an offer from them would put them back
+            // in the panel, which is exactly what blocking stops.
+            if (await this.isDmBlocked?.(sender)) {
+                this.log(`Ignoring an offer from ${sender}: blocked.`);
+                return;
+            }
+            // The offer that was declined, delivered again, stays declined.
+            const offerSession = `${bootstrap?.session?.sessionId || ''}`;
+            if (offerSession && this.dmDeclinedSessions?.has(offerSession)) {
+                this.log(`Ignoring an offer from ${sender}: that one was declined.`);
                 return;
             }
 
@@ -538,16 +607,24 @@ export async function handleChatRequest(peerNostrPublicKey, { createdAtSeconds =
         return;
     }
 
+    // Somebody blocked is dropped before anything else, intent included, so
+    // no pair can ever form with them. They are told nothing.
+    if (await this.isDmBlocked?.(sender)) {
+        this.log(`Ignoring a chat request from ${sender}: blocked.`);
+        return;
+    }
+
+    // The request that was declined, delivered again (relays repeat stored
+    // events on reconnect), is not a new question. A request sent after it is.
+    const declinedAt = this.dmDeclinedRequests?.get(sender);
+    if (declinedAt !== undefined && sentAt <= declinedAt) {
+        this.log(`Ignoring a chat request from ${sender}: that one was declined.`);
+        return;
+    }
+
     // Intent is recorded either way: it is what makes the pair mutual once the
     // local user consents, and it costs nothing to know somebody asked.
     this.presenceService?.receiveChatRequest(sender, sentAt);
-
-    // Somebody who was already declined here is dropped in silence. They are
-    // told nothing — an answer of any kind confirms the npub is live.
-    if (this.dmDeclinedPeers?.has(sender)) {
-        this.log(`Ignoring a repeat chat request from ${sender}: previously declined.`);
-        return;
-    }
 
     // Already decided in the other direction: no second decision to make.
     if (this.dmConsentedPeers?.has(sender)) return;
@@ -603,6 +680,7 @@ export async function holdChatRequest(sender, sentAt = Date.now()) {
         npub: npubEncode(sender),
         profileName,
         trustState: 'unknown',
+        sentAt,
         // A request is intent, and intent goes stale: the queue drops it on the
         // same clock that stops it counting towards a mutual pair — the
         // sender's, so an hour-old request in the inbox history is not offered
@@ -633,7 +711,7 @@ export async function consentToChatWith(peerNostrPublicKey) {
     // Recorded before the send: an offer that crosses with our request must
     // find consent already in place, or it would be parked for no reason.
     this.dmConsentedPeers.add(peer);
-    this.dmDeclinedPeers.delete(peer);
+    this.dmDeclinedRequests?.delete(peer);
     this.dmSelectedPeer = peer;
 
     // Any entry still waiting in the panel for this peer is answered by the
@@ -838,7 +916,7 @@ export async function acceptDmInvitation(peerNostrPublicKey) {
 
     try {
         this.dmConsentedPeers.add(sender);
-        this.dmDeclinedPeers.delete(sender);
+        this.dmDeclinedRequests?.delete(sender);
         const answerSignal = await this.answerDmInvitation(bootstrap, sender, identity);
 
         // Persisted as a friend only now, once the authenticated identity and
@@ -893,16 +971,21 @@ export async function declineDmInvitation(peerNostrPublicKey) {
     if (!invitation) return false;
 
     const sender = invitation.peerNostrPublicKey;
-    // A declined peer stays declined for this session: repeats are dropped
-    // without re-opening the panel, so somebody cannot nag their way in. Any
-    // intent they announced is dropped too, or a later request of our own to
-    // an unrelated peer could find a stale pair waiting to turn mutual.
-    this.dmDeclinedPeers.add(sender);
+    // This invitation, not the person: a request they send later is shown
+    // again, and Block is there for somebody who will not take no for an
+    // answer. What is remembered is enough to recognise this one if a relay
+    // delivers it again. Any intent they announced is dropped too, or a later
+    // request of our own could find a stale pair waiting to turn mutual.
+    this.dmDeclinedRequests?.set(sender, Number(invitation.sentAt) || Number(invitation.receivedAt) || Date.now());
+    if (invitation.sessionId) this.dmDeclinedSessions?.add(invitation.sessionId);
     this.dmConsentedPeers.delete(sender);
     this.presenceService?.clearIntent(sender);
 
     this.log(`Declined a Direct Messenger invitation from ${sender}.`);
-    this.toast.info('Invitation declined.', 'Chat invitation');
+    this.toast.info(
+        'Invitation declined. If they ask again you will see it; Block stops them for good.',
+        'Chat invitation'
+    );
     return true;
 }
 
@@ -912,7 +995,13 @@ export async function declineDmInvitation(peerNostrPublicKey) {
  * @param {string} currentName
  */
 export async function renameContact(nostrPublicKey, currentName = '') {
-    const name = window.prompt('Name for this contact (stored only in this browser):', currentName);
+    const name = await askContactName({
+        title: 'Rename contact',
+        npub: npubEncode(nostrPublicKey),
+        name: currentName,
+        note: 'The name stays in this browser and is never published.',
+        confirmLabel: 'Rename'
+    });
     if (name === null) return false;
     try {
         await this.contactsStore.rename(nostrPublicKey, name);
@@ -936,9 +1025,14 @@ export async function renameContact(nostrPublicKey, currentName = '') {
  */
 export async function removeContact(nostrPublicKey, name = '') {
     const label = name || shortNpub(npubEncode(nostrPublicKey));
-    if (!window.confirm(`Remove ${label}? Future invitations from them will need your approval again.`)) {
-        return false;
-    }
+    const confirmed = await askConfirm({
+        title: `Remove ${label}?`,
+        subtitle: npubEncode(nostrPublicKey),
+        body: 'They become an unknown peer again: their next invitation waits for your approval. Nothing is sent to them.',
+        confirmLabel: 'Remove',
+        tone: 'danger'
+    });
+    if (!confirmed) return false;
     try {
         await this.contactsStore.remove(nostrPublicKey);
         await this.refreshContactList();
@@ -957,7 +1051,7 @@ export async function removeContact(nostrPublicKey, name = '') {
  */
 export function dmPeerDetails() {
     const peer = this.dmSelectedPeer;
-    if (!peer) return { peerNpub: '', peerAddress: '', peerOnline: null };
+    if (!peer) return { peerNpub: '', peerAddress: '', peerOnline: null, peerSaveState: 'save', peerRetention: null };
     let peerNpub = '';
     try {
         peerNpub = npubEncode(peer);
@@ -967,8 +1061,37 @@ export function dmPeerDetails() {
     return {
         peerNpub,
         peerAddress: this.channelsService?.peerAddress || '',
-        peerOnline: Boolean(this.presenceService?.isOnline(peer))
+        peerOnline: Boolean(this.presenceService?.isOnline(peer)),
+        peerSaveState: this.dmSaveContactState?.() || 'save',
+        peerRetention: this.dmRetention?.has(peer) ? this.dmRetention.get(peer) : null
     };
+}
+
+/**
+ * What the conversation's Save button can honestly say: already a contact,
+ * saving as soon as the keys are verified, or not saved.
+ * @returns {'save'|'saved'|'pending'}
+ */
+export function dmSaveContactState() {
+    const peer = this.dmSelectedPeer;
+    if (!peer) return 'save';
+    if ((this.dmContacts || []).some((contact) => contact.nostrPublicKey === peer)) return 'saved';
+    if (this.dmPendingContactSave?.peer === peer) return 'pending';
+    return 'save';
+}
+
+/** Is this peer blocked? The mirrored set once loaded, the store before that. */
+export async function isDmBlocked(nostrPublicKey) {
+    const peer = `${nostrPublicKey || ''}`.toLowerCase();
+    if (!peer) return false;
+    if (this.dmBlocked?.has(peer)) return true;
+    if (this.dmBlockedLoaded) return false;
+    try {
+        return (await this.contactsStore?.isBlocked?.(peer)) === true;
+    } catch (_) {
+        // A locked wallet cannot read the list; nothing reaches it then anyway.
+        return false;
+    }
 }
 
 /** Short label for whoever the current conversation is with. */
@@ -994,10 +1117,24 @@ export async function refreshContactList() {
     } catch (error) {
         this.log(`Contacts unavailable: ${error.message}`);
         this.dmContacts = [];
+        this.dmBlocked = new Set();
+        this.dmBlockedList = [];
+        this.dmBlockedLoaded = false;
         this.presenceService?.watch([]);
         renderContactsLocked();
+        renderBlockedContacts([]);
         return;
     }
+
+    try {
+        this.dmBlockedList = (await this.contactsStore.listBlocked?.()) || [];
+        this.dmBlocked = new Set(this.dmBlockedList.map((entry) => entry.nostrPublicKey));
+        this.dmBlockedLoaded = true;
+    } catch (error) {
+        this.log(`Blocked list unavailable: ${error.message}`);
+    }
+    renderBlockedContacts(this.dmBlockedList);
+    renderDmSaveContact(this.dmSaveContactState());
 
     this.watchPresenceTargets();
 
@@ -1092,6 +1229,11 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
         return false;
     }
 
+    if (await this.isDmBlocked?.(nostrPublicKey)) {
+        this.toast.warning('You blocked this address. Unblock it under Blocked to chat again.', 'Direct Messenger');
+        return false;
+    }
+
     try {
         this.dmPendingContactName = suggestedName;
 
@@ -1111,6 +1253,7 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
 
         this.channelsService.setPreConnectionState('awaiting-peer');
         renderDmConnectionState('awaiting-peer', { peerLabel: this.dmPeerLabel(), ...this.dmPeerDetails?.() });
+        void this.restoreDmHistory?.();
         this.toast.info('Request sent. It waits as an invitation for them to accept.', 'Direct Messenger');
         return true;
     } catch (error) {
@@ -1212,7 +1355,17 @@ export function clearHandshakeStallTimer() {
     this.dmHandshakeStallTimer = null;
 }
 
-/** Save whoever the current conversation is with, under a name of your choosing. */
+/**
+ * Save whoever the current conversation is with, under a name of your choosing.
+ *
+ * A contact is stored with the peer's verified identity — Nostr key, ECIES key
+ * and EVM address, checked as one key — and those exist only once the
+ * handshake has verified them. Asked for earlier (the button is there from the
+ * moment a conversation opens), the save is not refused with a key error: it
+ * is held, and completes on its own when the connection verifies them.
+ *
+ * Already a contact, the same button renames them.
+ */
 export async function saveCurrentPeerAsContact() {
     const peer = this.dmSelectedPeer;
     if (!peer) {
@@ -1220,10 +1373,37 @@ export async function saveCurrentPeerAsContact() {
         return false;
     }
 
-    const suggested = this.dmPendingContactName || '';
-    const name = window.prompt('Name for this contact (stored only in this browser):', suggested);
+    const existing = (this.dmContacts || []).find((contact) => contact.nostrPublicKey === peer);
+    if (existing) return this.renameContact(peer, existing.name || '');
+
+    const verified = this.channelsService?.hasVerifiedPeerIdentity?.() === true;
+    const name = await askContactName({
+        title: 'Save contact',
+        npub: npubEncode(peer),
+        name:
+            this.dmPendingContactSave?.peer === peer ? this.dmPendingContactSave.name : this.dmPendingContactName || '',
+        note: verified
+            ? 'Saved in this browser only, encrypted with your wallet, and never published. Trusted contacts reconnect without asking.'
+            : 'Their keys are verified when the chat connects; the contact is saved then, under this name.',
+        confirmLabel: verified ? 'Save contact' : 'Save when connected'
+    });
     if (name === null) return false;
 
+    if (!verified) {
+        this.dmPendingContactSave = { peer, name };
+        renderDmSaveContact(this.dmSaveContactState());
+        this.toast.info('Saved as soon as the chat connects and their keys are verified.', 'Contacts');
+        return true;
+    }
+    return this.storeVerifiedPeerAsContact(peer, name);
+}
+
+/**
+ * Write the contact, from the keys the live conversation verified.
+ * @param {string} peer
+ * @param {string} name
+ */
+export async function storeVerifiedPeerAsContact(peer, name) {
     try {
         // The peer's full ECIES key and EVM address are known only because an
         // invitation was cryptographically verified; the store re-checks that
@@ -1236,6 +1416,7 @@ export async function saveCurrentPeerAsContact() {
             name,
             trust: TRUST.TRUSTED
         });
+        if (this.dmPendingContactSave?.peer === peer) this.dmPendingContactSave = null;
         await this.refreshContactList();
         this.toast.success('Contact saved locally and trusted for direct reconnects.', 'Contacts');
         return true;
@@ -1243,6 +1424,222 @@ export async function saveCurrentPeerAsContact() {
         this.toast.error(error.message, 'Contacts');
         return false;
     }
+}
+
+/** A save asked for before the keys were verified, completed once they are. */
+export async function completePendingContactSave() {
+    const pending = this.dmPendingContactSave;
+    if (!pending || pending.peer !== this.dmSelectedPeer) return false;
+    if (this.channelsService?.hasVerifiedPeerIdentity?.() !== true) return false;
+    return this.storeVerifiedPeerAsContact(pending.peer, pending.name);
+}
+
+/**
+ * Leave the conversation: the one path behind Disconnect, Cancel request and
+ * blocking the person you are talking to.
+ */
+export async function leaveDmConversation() {
+    this.clearHandshakeStallTimer?.();
+    await this.channelsService.leaveChannel();
+    // Stay subscribed: leaving a conversation should not stop the user
+    // being reachable at their npub.
+    this.nostrDmSession?.clearPeer();
+    if (this.dmSelectedPeer) this.presenceService?.clearIntent(this.dmSelectedPeer);
+    if (this.dmPendingContactSave) {
+        this.dmPendingContactSave = null;
+        this.toast?.info('Contact not saved: the chat ended before their keys were verified.', 'Contacts');
+    }
+    this.dmSelectedPeer = '';
+    this.dmOfferSessionId = null;
+    this.stopWatchingSearchedPeer?.();
+    clearDmSearch();
+    renderDmConnectionState('idle');
+    showDmStep('dm-choose-role');
+}
+
+/**
+ * Block somebody: an invitation's sender or a friend.
+ *
+ * Their requests and offers are dropped from then on without a word to them,
+ * any invitation of theirs goes, a friendship ends, a conversation with them
+ * closes, and history kept from it is deleted. Stored sealed with the wallet,
+ * so it holds across sessions.
+ *
+ * @param {string} nostrPublicKey
+ * @param {{ name?: string, npub?: string }} [details]
+ */
+export async function blockDmPeer(nostrPublicKey, { name = '', npub = '' } = {}) {
+    const peer = `${nostrPublicKey || ''}`.toLowerCase();
+    if (!peer) return false;
+    let address = npub;
+    try {
+        address = address || npubEncode(peer);
+    } catch (_) {
+        return false;
+    }
+    const label = name || shortNpub(address);
+
+    const confirmed = await askConfirm({
+        title: `Block ${label}?`,
+        subtitle: address,
+        avatar: label,
+        body:
+            'Their chat requests and invitations are dropped from now on, and they are not told. ' +
+            'They leave your contacts, and messages kept from this chat are deleted. You can unblock them later.',
+        confirmLabel: 'Block',
+        tone: 'danger'
+    });
+    if (!confirmed) return false;
+
+    try {
+        await this.contactsStore.block({ nostrPublicKey: peer, npub: address, name });
+    } catch (error) {
+        this.toast.error(error.message, 'Contacts');
+        return false;
+    }
+
+    this.dmBlocked.add(peer);
+    this.dmInvitations?.remove(peer);
+    this.dmConsentedPeers?.delete(peer);
+    this.presenceService?.clearIntent(peer);
+    if (this.dmSelectedPeer === peer) await this.leaveDmConversation();
+    this.dmRetention?.delete(peer);
+    await this.messageArchive
+        ?.forget(peer)
+        .catch((error) => this.log(`Could not delete kept messages: ${error.message}`));
+    await this.refreshContactList();
+    this.toast.success(`${label} is blocked. They are not told.`, 'Contacts');
+    return true;
+}
+
+/**
+ * Unblock somebody. They become an unknown peer again — not a friend — so a
+ * new invitation from them waits for approval like anybody's.
+ *
+ * @param {string} nostrPublicKey
+ * @param {string} [name]
+ */
+export async function unblockDmPeer(nostrPublicKey, name = '') {
+    const peer = `${nostrPublicKey || ''}`.toLowerCase();
+    try {
+        await this.contactsStore.unblock(peer);
+    } catch (error) {
+        this.toast.error(error.message, 'Contacts');
+        return false;
+    }
+    this.dmBlocked.delete(peer);
+    this.dmDeclinedRequests?.delete(peer);
+    await this.refreshContactList();
+    this.toast.info(`${name || 'They'} can send you chat requests again.`, 'Contacts');
+    return true;
+}
+
+/**
+ * How long the conversation with a peer keeps its messages here (0 is off).
+ * @param {string} peer
+ */
+export async function dmRetentionFor(peer) {
+    if (!peer) return 0;
+    if (this.dmRetention.has(peer)) return this.dmRetention.get(peer);
+    let ms = 0;
+    try {
+        ms = await this.messageArchive.getRetention(peer);
+    } catch (error) {
+        this.log(`Message retention unavailable: ${error.message}`);
+        return 0;
+    }
+    this.dmRetention.set(peer, ms);
+    return ms;
+}
+
+/**
+ * Change how long this conversation keeps its messages on this device.
+ *
+ * Turning it on keeps this session's messages too — what is on screen is what
+ * the person expects to find again. Turning it off deletes what was kept. The
+ * thread gets a notice either way; nothing is sent to the peer, whose own
+ * device decides for itself.
+ *
+ * @param {number} ms
+ */
+export async function setDmRetention(ms) {
+    const peer = this.dmSelectedPeer;
+    if (!peer) return;
+    let applied;
+    try {
+        applied = await this.messageArchive.setRetention(peer, ms);
+    } catch (error) {
+        this.toast.error(error.message, 'Message history');
+        return;
+    }
+    this.dmRetention.set(peer, applied);
+    renderDmRetention(applied);
+
+    if (applied > 0) {
+        for (const { message, own } of this.dmSessionMessages || []) {
+            if (message?.from === 'system') continue;
+            await this.messageArchive
+                .record(peer, message, { own, retentionMs: applied })
+                .catch((error) => this.log(`Could not keep a message: ${error.message}`));
+        }
+    }
+
+    const days = Math.round(applied / (24 * 60 * 60 * 1000));
+    appendChannelsMessage(
+        {
+            from: 'system',
+            text: applied
+                ? `🕓 Messages in this chat are kept on this device for ${days === 1 ? '24 hours' : `${days} days`}, encrypted, then deleted.`
+                : '🕓 Messages in this chat are no longer kept on this device. What was kept is deleted.',
+            timestamp: new Date().toISOString()
+        },
+        true
+    );
+}
+
+/**
+ * Keep one message, if this conversation keeps messages. Service notices are
+ * never kept, and nothing is kept while the wallet is locked.
+ *
+ * @param {any} message
+ * @param {boolean} own
+ */
+export async function archiveDmMessage(message, own) {
+    const peer = this.dmSelectedPeer;
+    if (!peer || !message || message.from === 'system') return;
+    const retentionMs = await this.dmRetentionFor(peer);
+    if (!retentionMs) return;
+    try {
+        await this.messageArchive.record(peer, message, { own, retentionMs });
+    } catch (error) {
+        this.log(`Could not keep a message: ${error.message}`);
+    }
+}
+
+/**
+ * Put this conversation's kept messages back above the live ones, once per
+ * thread. Expired ones were purged first, so nothing past its window shows.
+ */
+export async function restoreDmHistory() {
+    const peer = this.dmSelectedPeer;
+    if (!peer || this.dmHistoryShown === peer) return;
+    this.dmHistoryShown = peer;
+
+    const retentionMs = await this.dmRetentionFor(peer);
+    if (this.dmSelectedPeer !== peer) return;
+    renderDmRetention(retentionMs);
+    if (!retentionMs) return;
+
+    let history = [];
+    try {
+        history = await this.messageArchive.history(peer);
+    } catch (error) {
+        this.log(`Kept messages unavailable: ${error.message}`);
+        return;
+    }
+    // The conversation may have moved on while the worker decrypted.
+    if (this.dmSelectedPeer !== peer || this.dmHistoryShown !== peer) return;
+    prependChannelsHistory(history, { retentionMs });
 }
 
 export function showDirectMessageProgress(message) {
@@ -1980,9 +2377,20 @@ export function setupAuthAwareUi(state) {
         // Consent is a decision about a conversation, and the conversation is
         // over: a locked wallet starts from nobody approved and nobody refused.
         this.dmConsentedPeers?.clear();
-        this.dmDeclinedPeers?.clear();
+        this.dmDeclinedRequests?.clear();
+        this.dmDeclinedSessions?.clear();
+        // Nothing decrypted stays behind: the blocklist mirror, retention
+        // settings and this session's messages all go with the key.
+        this.dmBlocked = new Set();
+        this.dmBlockedList = [];
+        this.dmBlockedLoaded = false;
+        this.dmRetention?.clear();
+        this.dmSessionMessages = [];
+        this.dmHistoryShown = '';
+        this.dmPendingContactSave = null;
         renderInvitations([]);
         renderContactsLocked();
+        renderBlockedContacts([]);
         return;
     }
 

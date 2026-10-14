@@ -27,9 +27,10 @@ const TRUST_LABELS = {
 
 /**
  * @param {{ onAccept: (peerNostrPublicKey: string) => unknown,
- *           onDecline: (peerNostrPublicKey: string) => void }} handlers
+ *           onDecline: (peerNostrPublicKey: string) => void,
+ *           onBlock?: (peerNostrPublicKey: string, details: { name: string, npub: string }) => void }} handlers
  */
-export function bindInvitationsPanel({ onAccept, onDecline }) {
+export function bindInvitationsPanel({ onAccept, onDecline, onBlock }) {
     const list = document.getElementById('dm-invitations-list');
     if (!list || list.dataset.bound) return;
     list.dataset.bound = '1';
@@ -41,7 +42,15 @@ export function bindInvitationsPanel({ onAccept, onDecline }) {
         if (!button) return;
         const peer = button.getAttribute('data-invite-peer') || '';
         if (!peer) return;
-        if (button.getAttribute('data-invite-action') !== 'accept') {
+        const kind = button.getAttribute('data-invite-action');
+        if (kind === 'block') {
+            onBlock?.(peer, {
+                name: button.getAttribute('data-invite-name') || '',
+                npub: button.getAttribute('data-invite-npub') || ''
+            });
+            return;
+        }
+        if (kind !== 'accept') {
             onDecline(peer);
             return;
         }
@@ -184,8 +193,21 @@ function renderInvitationRow(invitation) {
     decline.setAttribute('data-invite-action', 'decline');
     decline.setAttribute('data-invite-peer', invitation.peerNostrPublicKey);
 
+    // Declining answers this invitation; Block is for somebody you never want
+    // to hear from, and it covers everything they send from then on.
+    const block = document.createElement('button');
+    block.type = 'button';
+    block.className = 'btn btn-danger-ghost btn-sm';
+    block.textContent = 'Block';
+    block.title = 'Block: their requests and invitations are dropped from now on, and they are not told.';
+    block.setAttribute('data-invite-action', 'block');
+    block.setAttribute('data-invite-peer', invitation.peerNostrPublicKey);
+    block.setAttribute('data-invite-name', invitation.profileName || '');
+    block.setAttribute('data-invite-npub', invitation.npub || '');
+
     actions.appendChild(accept);
     actions.appendChild(decline);
+    actions.appendChild(block);
 
     row.appendChild(body);
     row.appendChild(actions);
