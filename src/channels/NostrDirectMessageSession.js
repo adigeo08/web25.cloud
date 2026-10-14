@@ -19,10 +19,12 @@ import {
     createNostrChatEvent,
     createNostrDMInvitation,
     createNostrGiftWrappedRumor,
+    nostrCore,
     openNostrGiftWrap,
     subscribeNostrInbox,
     verifyNostrDMInvitation
 } from './NostrDirectMessageBootstrap.js';
+import { InboxLedger } from './InboxLedger.js';
 
 export class NostrDirectMessageSession {
     /**
@@ -34,7 +36,9 @@ export class NostrDirectMessageSession {
      *   onChatRequest?: (senderNostrPublicKey: string,
      *                     context: { createdAtSeconds: number }) => void|Promise<void>,
      *   onError?: (error: Error) => void,
-     *   config?: typeof NOSTR_CONFIG
+     *   config?: typeof NOSTR_CONFIG,
+     *   ledger?: InboxLedger,
+     *   now?: () => number
      * }} options
      */
     constructor({
@@ -44,7 +48,9 @@ export class NostrDirectMessageSession {
         onChatEnvelope = null,
         onChatRequest = null,
         onError = null,
-        config = NOSTR_CONFIG
+        config = NOSTR_CONFIG,
+        ledger = new InboxLedger(),
+        now = Date.now
     }) {
         this.pool = pool;
         this.signer = signer;
@@ -53,6 +59,11 @@ export class NostrDirectMessageSession {
         this.onChatEnvelope = onChatEnvelope;
         this.onChatRequest = onChatRequest;
         this.onError = onError;
+        /** What this browser already acted on, across reconnects and reloads. */
+        this.ledger = ledger;
+        this.now = now;
+        /** When this page's inbox subscription began; older offers are not ours. */
+        this.startedAt = 0;
 
         this.localNostrPublicKey = '';
         this.localNpub = '';
@@ -94,7 +105,11 @@ export class NostrDirectMessageSession {
         }
 
         this._starting = (async () => {
+            // Before the first event can arrive: replays of anything an
+            // earlier page already handled are recognised from the start.
+            await this.ledger.load(this.localNostrPublicKey);
             await this.pool.connect();
+            if (!this.startedAt) this.startedAt = this.now();
             this.subscription = subscribeNostrInbox({
                 pool: this.pool,
                 localNostrPublicKey: this.localNostrPublicKey,
@@ -226,6 +241,10 @@ export class NostrDirectMessageSession {
      * @param {any} giftWrap
      */
     async _handleGiftWrap(giftWrap) {
+        // The same gift wrap again — another relay, a reconnect, a reload — is
+        // dropped before any decryption.
+        if (giftWrap?.id && !this.ledger.claim(`wrap:${giftWrap.id}`)) return;
+
         let opened;
         try {
             opened = await openNostrGiftWrap({
@@ -240,6 +259,14 @@ export class NostrDirectMessageSession {
         }
 
         const { rumor, senderNostrPublicKey } = opened;
+
+        // A request or an invitation is acted on once, ever: re-wrapped or
+        // re-published, the same rumor is still the same question. The hash is
+        // computed here — a sender's claimed id is not trusted to be unique.
+        if (rumor.kind === this.config.WEB25_CHAT_REQUEST_KIND || rumor.kind === this.config.WEB25_SIGNALING_KIND) {
+            const rumorHash = nostrCore.getEventHash({ ...rumor, pubkey: senderNostrPublicKey });
+            if (!this.ledger.claim(`rumor:${rumorHash}`)) return;
+        }
 
         if (rumor.kind === this.config.WEB25_CHAT_REQUEST_KIND) {
             // Intent only. Nothing is negotiated here — a handshake starts
@@ -279,6 +306,15 @@ export class NostrDirectMessageSession {
                 localAddress: this.localAddress,
                 expectedReplyToSessionId: bootstrapIsAnswer(rumor, this.offerSessionId)
             });
+            // An offer belongs to the session it was made for. One from before
+            // this page's inbox began was made for an earlier one: answering
+            // it, or asking about it again, would start a conversation nobody
+            // is waiting for.
+            const createdAt = Number(bootstrap?.session?.createdAt) || 0;
+            if (bootstrap.role === 'offer' && createdAt < this.startedAt - this.config.OFFER_SESSION_GRACE_MS) {
+                this._fail(new Error('Ignoring an offer made for an earlier session.'));
+                return;
+            }
             await this.onInvitation?.(bootstrap, { senderNostrPublicKey });
         } catch (error) {
             this._fail(error);

@@ -105,6 +105,40 @@ class FakeStore {
     }
 }
 
+/**
+ * A store as seen through one transaction: usable until that transaction has
+ * finished, then every request throws the way the browser does.
+ *
+ * @param {{ finished: boolean }} tx
+ * @param {FakeStore} store
+ */
+function guardStore(tx, store) {
+    if (!store) return store;
+    const check = (method) => {
+        if (tx.finished) {
+            throw new DOMException(
+                `Failed to execute '${method}' on 'IDBObjectStore': The transaction has finished.`,
+                'TransactionInactiveError'
+            );
+        }
+    };
+    return {
+        name: store.name,
+        keyPath: store.keyPath,
+        get: (key) => (check('get'), store.get(key)),
+        getAll: () => (check('getAll'), store.getAll()),
+        getAllKeys: () => (check('getAllKeys'), store.getAllKeys()),
+        put: (value) => (check('put'), store.put(value)),
+        delete: (key) => (check('delete'), store.delete(key)),
+        clear: () => (check('clear'), store.clear()),
+        createIndex: (name, keyPath) => store.createIndex(name, keyPath),
+        index: (name) => {
+            const index = store.index(name);
+            return { getAll: (value) => (check('getAll'), index.getAll(value)) };
+        }
+    };
+}
+
 class FakeDatabase {
     constructor(name) {
         this.name = name;
@@ -149,18 +183,23 @@ class FakeDatabase {
         const tx = {
             mode,
             error: null,
+            finished: false,
             oncomplete: null,
             onabort: null,
             onerror: null,
-            objectStore: (name) => this.stores.get(name === undefined ? requested[0] : name),
+            objectStore: (name) => guardStore(tx, this.stores.get(name === undefined ? requested[0] : name)),
             abort() {
                 this.error = this.error || new Error('AbortError');
                 setTimeout(() => this.onabort?.(), 0);
             }
         };
 
-        // After the request callbacks, which run on microtasks.
+        // After the request callbacks, which run on microtasks. This is also
+        // when a real transaction ends: once control returns to the event loop
+        // with nothing pending, it commits, and a request made on it after
+        // that — say, after awaiting a wallet worker — throws.
         setTimeout(() => {
+            tx.finished = true;
             if (aborting) {
                 tx.error = new Error('QuotaExceededError');
                 tx.onabort?.();
