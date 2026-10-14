@@ -290,6 +290,38 @@ export class ContactsStore {
     }
 
     /**
+     * Seal a record and write it.
+     *
+     * The order is the whole point. Sealing goes through the wallet worker,
+     * which answers on a later task, and an IndexedDB transaction commits as
+     * soon as control returns to the event loop with nothing pending. Opening
+     * the transaction first and awaiting the seal inside `put(...)` — as this
+     * store once did — hands `put` a transaction that has already finished:
+     * "Failed to execute 'put' on 'IDBObjectStore': The transaction has
+     * finished." So the ciphertext exists before the transaction does, and the
+     * transaction lives for exactly one request.
+     *
+     * @param {IDBDatabase} db
+     * @param {string} storeName
+     * @param {string} owner
+     * @param {string} id
+     * @param {any} record
+     * @param {number} [at] timestamp for a record that carries none of its own
+     */
+    async _put(db, storeName, owner, id, record, at = this.now()) {
+        const ciphertext = await this._seal(owner, record);
+        await promisify(
+            store(db, 'readwrite', storeName).put({
+                id,
+                ownerTag: contactOwnerTag(owner),
+                ciphertext,
+                createdAt: record.createdAt || at,
+                updatedAt: record.updatedAt || at
+            })
+        );
+    }
+
+    /**
      * @param {string} owner
      * @param {string} ciphertext
      */
@@ -342,6 +374,8 @@ export class ContactsStore {
                     updatedAt: now
                 };
 
+                // Sealed before the transaction opens: see `_put`.
+                const ciphertext = await this._seal(owner, contact);
                 await promisify(
                     db
                         .transaction(STORE_CONTACTS, 'readwrite')
@@ -349,7 +383,7 @@ export class ContactsStore {
                         .put({
                             id: contactRecordId(owner, nostrPublicKey),
                             ownerTag: contactOwnerTag(owner),
-                            ciphertext: await this._seal(owner, contact),
+                            ciphertext,
                             createdAt: contact.createdAt,
                             updatedAt: contact.updatedAt
                         })
@@ -413,15 +447,7 @@ export class ContactsStore {
                 updatedAt: now
             };
 
-            await promisify(
-                store(db, 'readwrite').put({
-                    id,
-                    ownerTag: contactOwnerTag(owner),
-                    ciphertext: await this._seal(owner, contact),
-                    createdAt: contact.createdAt,
-                    updatedAt: contact.updatedAt
-                })
-            );
+            await this._put(db, STORE_CONTACTS, owner, id, contact);
             return contact;
         } finally {
             db.close();
@@ -563,15 +589,7 @@ export class ContactsStore {
                 name: safeName(input.name),
                 blockedAt: now
             };
-            await promisify(
-                store(db, 'readwrite', STORE_BLOCKED).put({
-                    id: blockedRecordId(owner, key),
-                    ownerTag: contactOwnerTag(owner),
-                    ciphertext: await this._seal(owner, record),
-                    createdAt: now,
-                    updatedAt: now
-                })
-            );
+            await this._put(db, STORE_BLOCKED, owner, blockedRecordId(owner, key), record, now);
             // A blocked friend is no longer a friend: the contact record goes, so
             // nothing about them is trusted any more.
             await promisify(store(db, 'readwrite').delete(contactRecordId(owner, key)));
