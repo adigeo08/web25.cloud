@@ -49,9 +49,18 @@ const DB_NAME = 'web25-contacts';
  * call, so the plaintext rows are re-encrypted and deleted immediately rather
  * than lingering.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 /** The encrypted store. */
 const STORE_CONTACTS = 'secure_contacts';
+/**
+ * v3: people you blocked, sealed the same way.
+ *
+ * Separate from the contacts because a block has to be possible with nothing
+ * but an npub: a chat request carries no ECIES key and no EVM address, so the
+ * identity tuple a contact record requires does not exist for the person you
+ * most need to block.
+ */
+const STORE_BLOCKED = 'secure_blocked';
 /** The v1 plaintext store, kept only long enough to migrate out of. */
 const LEGACY_STORE = 'contacts';
 /** Secondary index so one owner's records can be listed without decrypting. */
@@ -103,6 +112,17 @@ export function contactRecordId(ownerNostrPublicKey, peerNostrPublicKey) {
     return hashHex(`web25-contact:${ownerNostrPublicKey}:${peerNostrPublicKey}`);
 }
 
+/**
+ * Opaque per-owner id for a block, in a different domain from a contact id so
+ * the two stores never share a key.
+ *
+ * @param {string} ownerNostrPublicKey
+ * @param {string} peerNostrPublicKey
+ */
+export function blockedRecordId(ownerNostrPublicKey, peerNostrPublicKey) {
+    return hashHex(`web25-blocked:${ownerNostrPublicKey}:${peerNostrPublicKey}`);
+}
+
 /** @param {string} ownerNostrPublicKey */
 export function contactOwnerTag(ownerNostrPublicKey) {
     return hashHex(`web25-contact-owner:${ownerNostrPublicKey}`);
@@ -143,9 +163,17 @@ function openDb() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = () => {
             const db = request.result;
-            if (db.objectStoreNames.contains(STORE_CONTACTS)) db.deleteObjectStore(STORE_CONTACTS);
-            const created = db.createObjectStore(STORE_CONTACTS, { keyPath: 'id' });
-            created.createIndex(INDEX_OWNER, 'ownerTag', { unique: false });
+            // Created when missing, never recreated: from v3 on an upgrade
+            // runs over a database that already holds encrypted contacts, and
+            // dropping the store to rebuild it would delete every one of them.
+            if (!db.objectStoreNames.contains(STORE_CONTACTS)) {
+                const created = db.createObjectStore(STORE_CONTACTS, { keyPath: 'id' });
+                created.createIndex(INDEX_OWNER, 'ownerTag', { unique: false });
+            }
+            if (!db.objectStoreNames.contains(STORE_BLOCKED)) {
+                const blocked = db.createObjectStore(STORE_BLOCKED, { keyPath: 'id' });
+                blocked.createIndex(INDEX_OWNER, 'ownerTag', { unique: false });
+            }
             // `LEGACY_STORE` is deliberately left alone here: it still holds the
             // v1 rows, and `_drainLegacy()` is what moves them across.
         };
@@ -157,9 +185,10 @@ function openDb() {
 /**
  * @param {IDBDatabase} db
  * @param {IDBTransactionMode} mode
+ * @param {string} [name]
  */
-function store(db, mode) {
-    return db.transaction(STORE_CONTACTS, mode).objectStore(STORE_CONTACTS);
+function store(db, mode, name = STORE_CONTACTS) {
+    return db.transaction(name, mode).objectStore(name);
 }
 
 /** @param {IDBRequest} request */
@@ -314,13 +343,16 @@ export class ContactsStore {
                 };
 
                 await promisify(
-                    db.transaction(STORE_CONTACTS, 'readwrite').objectStore(STORE_CONTACTS).put({
-                        id: contactRecordId(owner, nostrPublicKey),
-                        ownerTag: contactOwnerTag(owner),
-                        ciphertext: await this._seal(owner, contact),
-                        createdAt: contact.createdAt,
-                        updatedAt: contact.updatedAt
-                    })
+                    db
+                        .transaction(STORE_CONTACTS, 'readwrite')
+                        .objectStore(STORE_CONTACTS)
+                        .put({
+                            id: contactRecordId(owner, nostrPublicKey),
+                            ownerTag: contactOwnerTag(owner),
+                            ciphertext: await this._seal(owner, contact),
+                            createdAt: contact.createdAt,
+                            updatedAt: contact.updatedAt
+                        })
                 );
                 result.migrated += 1;
             } else {
@@ -505,6 +537,110 @@ export class ContactsStore {
             db.close();
         }
     }
+
+    /**
+     * Block somebody.
+     *
+     * Kept on the same wallet-sealed terms as the contacts, in the same database:
+     * the list of who you refuse to hear from is as private as the list of who you
+     * talk to. Only an npub is needed — a block must work on a bare chat request,
+     * which carries nothing else.
+     *
+     * @param {{ nostrPublicKey: string, npub?: string, name?: string }} input
+     */
+    async block(input) {
+        const key = `${input?.nostrPublicKey || ''}`.trim().toLowerCase();
+        if (!HEX32_RE.test(key)) throw new Error('Refusing to block: Nostr public key is malformed.');
+
+        const owner = await this._owner();
+        const db = await openDb();
+        try {
+            await this._drainLegacy(db, owner);
+            const now = this.now();
+            const record = {
+                nostrPublicKey: key,
+                npub: `${input.npub || ''}`.trim(),
+                name: safeName(input.name),
+                blockedAt: now
+            };
+            await promisify(
+                store(db, 'readwrite', STORE_BLOCKED).put({
+                    id: blockedRecordId(owner, key),
+                    ownerTag: contactOwnerTag(owner),
+                    ciphertext: await this._seal(owner, record),
+                    createdAt: now,
+                    updatedAt: now
+                })
+            );
+            // A blocked friend is no longer a friend: the contact record goes, so
+            // nothing about them is trusted any more.
+            await promisify(store(db, 'readwrite').delete(contactRecordId(owner, key)));
+            return record;
+        } finally {
+            db.close();
+        }
+    }
+
+    /** @param {string} nostrPublicKey */
+    async unblock(nostrPublicKey) {
+        const key = `${nostrPublicKey || ''}`.trim().toLowerCase();
+        if (!HEX32_RE.test(key)) return false;
+        const owner = await this._owner();
+        const db = await openDb();
+        try {
+            await promisify(store(db, 'readwrite', STORE_BLOCKED).delete(blockedRecordId(owner, key)));
+            return true;
+        } finally {
+            db.close();
+        }
+    }
+
+    /** @returns {Promise<any[]>} newest block first */
+    async listBlocked() {
+        const owner = await this._owner();
+        const db = await openDb();
+        try {
+            const rows = /** @type {any[]} */ (
+                (await promisify(
+                    store(db, 'readonly', STORE_BLOCKED).index(INDEX_OWNER).getAll(contactOwnerTag(owner))
+                )) || []
+            );
+            const blocked = [];
+            for (const row of rows) {
+                try {
+                    const record = await this._open(owner, row.ciphertext);
+                    // A record re-keyed to somebody else would block the wrong person.
+                    if (row.id === blockedRecordId(owner, record?.nostrPublicKey || '')) blocked.push(record);
+                } catch (_) {
+                    // Skip anything this wallet cannot open.
+                }
+            }
+            return blocked.sort((a, b) => (b.blockedAt || 0) - (a.blockedAt || 0));
+        } finally {
+            db.close();
+        }
+    }
+
+    /** @param {string} nostrPublicKey */
+    async isBlocked(nostrPublicKey) {
+        const key = `${nostrPublicKey || ''}`.trim().toLowerCase();
+        if (!HEX32_RE.test(key)) return false;
+        const owner = await this._owner();
+        const db = await openDb();
+        try {
+            const row = /** @type {any} */ (
+                await promisify(store(db, 'readonly', STORE_BLOCKED).get(blockedRecordId(owner, key)))
+            );
+            if (!row?.ciphertext) return false;
+            try {
+                return (await this._open(owner, row.ciphertext))?.nostrPublicKey === key;
+            } catch (_) {
+                return false;
+            }
+        } finally {
+            db.close();
+        }
+    }
 }
 
 /**
@@ -525,3 +661,4 @@ export function filterContacts(contacts, query) {
 export const CONTACTS_DB_NAME = DB_NAME;
 export const CONTACTS_DB_VERSION = DB_VERSION;
 export const CONTACTS_STORE_NAME = STORE_CONTACTS;
+export const BLOCKED_STORE_NAME = STORE_BLOCKED;

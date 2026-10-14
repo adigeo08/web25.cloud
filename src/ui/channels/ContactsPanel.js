@@ -14,9 +14,10 @@ import { createAvatar } from './Avatar.js';
 
 /**
  * @param {{ onSelect: (contact: any) => void, onFilter: (query: string) => void,
- *           onRename?: (contact: any) => void, onRemove?: (contact: any) => void }} handlers
+ *           onRename?: (contact: any) => void, onRemove?: (contact: any) => void,
+ *           onBlock?: (contact: any) => void, onUnblock?: (contact: any) => void }} handlers
  */
-export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
+export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove, onBlock, onUnblock }) {
     const list = document.getElementById('dm-contacts-list');
     const filter = /** @type {HTMLInputElement|null} */ (document.getElementById('dm-contacts-filter'));
 
@@ -35,8 +36,21 @@ export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
                 name: action.getAttribute('data-contact-name') || ''
             };
             const kind = action.getAttribute('data-contact-action');
+            if (kind === 'more') {
+                // A touch screen has no hover to reveal the actions, so "⋯"
+                // opens them under the row instead — one row at a time.
+                const row = action.closest('.dm-contact');
+                const open = !row?.classList.contains('is-actions-open');
+                list.querySelectorAll('.dm-contact.is-actions-open').forEach((other) => {
+                    other.classList.remove('is-actions-open');
+                });
+                row?.classList.toggle('is-actions-open', open);
+                action.setAttribute('aria-expanded', `${open}`);
+                return;
+            }
             if (kind === 'copy') copyContactAddress(/** @type {HTMLElement} */ (action), contact);
             else if (kind === 'rename') onRename?.(contact);
+            else if (kind === 'block') onBlock?.(contact);
             else onRemove?.(contact);
             return;
         }
@@ -65,6 +79,73 @@ export function bindContactsPanel({ onSelect, onFilter, onRename, onRemove }) {
     });
 
     filter?.addEventListener('input', () => onFilter(filter.value.trim()));
+
+    document.getElementById('dm-blocked-list')?.addEventListener('click', (event) => {
+        const button = /** @type {HTMLElement} */ (event.target).closest('[data-unblock-key]');
+        if (!button) return;
+        onUnblock?.({
+            nostrPublicKey: button.getAttribute('data-unblock-key') || '',
+            name: button.getAttribute('data-unblock-name') || ''
+        });
+    });
+}
+
+/**
+ * The people you blocked, folded away under the contacts with a way to undo
+ * each one. Hidden altogether while there is nobody on it.
+ *
+ * @param {any[]} blocked
+ */
+export function renderBlockedContacts(blocked) {
+    const section = document.getElementById('dm-blocked');
+    const list = document.getElementById('dm-blocked-list');
+    const count = document.getElementById('dm-blocked-count');
+    const entries = blocked || [];
+    if (count) count.textContent = `${entries.length}`;
+    if (section) section.classList.toggle('hidden', entries.length === 0);
+    if (!list) return;
+
+    list.textContent = '';
+    for (const entry of entries) {
+        const npub = entry.npub || safeNpub(entry.nostrPublicKey);
+        const label = entry.name || shortNpub(npub);
+
+        const row = document.createElement('div');
+        row.className = 'dm-blocked-row';
+        row.appendChild(createAvatar(label));
+
+        const body = document.createElement('span');
+        body.className = 'dm-contact-body';
+        const name = document.createElement('span');
+        name.className = 'dm-contact-name';
+        name.textContent = label;
+        const identity = document.createElement('span');
+        identity.className = 'dm-contact-identity';
+        identity.textContent = shortNpub(npub);
+        body.appendChild(name);
+        body.appendChild(identity);
+        row.appendChild(body);
+
+        const unblock = document.createElement('button');
+        unblock.type = 'button';
+        unblock.className = 'btn btn-secondary btn-sm';
+        unblock.textContent = 'Unblock';
+        unblock.setAttribute('aria-label', `Unblock ${label}`);
+        unblock.setAttribute('data-unblock-key', entry.nostrPublicKey);
+        unblock.setAttribute('data-unblock-name', entry.name || '');
+        row.appendChild(unblock);
+
+        list.appendChild(row);
+    }
+}
+
+/** @param {string} nostrPublicKey */
+function safeNpub(nostrPublicKey) {
+    try {
+        return npubEncode(nostrPublicKey);
+    } catch (_) {
+        return nostrPublicKey || '';
+    }
 }
 
 /**
@@ -202,7 +283,7 @@ function renderContactRow(contact, online, selectedKey) {
 }
 
 /**
- * Copy their address, Rename and Remove.
+ * Copy their address, Rename, Remove and Block — behind "⋯" on a touch screen.
  *
  * Removing is a local authorization change only: the peer becomes unknown
  * again and a future invitation from them needs approval. No key is deleted or
@@ -215,9 +296,11 @@ function renderContactActions(contact) {
     actions.className = 'dm-contact-actions';
 
     for (const [action, label, title] of [
+        ['more', '⋯', 'More actions'],
         ['copy', '📋', 'Copy their Nostr address'],
         ['rename', '✏️', 'Rename this contact'],
-        ['remove', '🗑️', 'Remove this contact. Future invitations from them will need approval again.']
+        ['remove', '🗑️', 'Remove this contact. Future invitations from them will need approval again.'],
+        ['block', '🚫', 'Block. Their requests and invitations are dropped, and they are not told.']
     ]) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -229,6 +312,7 @@ function renderContactActions(contact) {
         button.setAttribute('data-contact-key', contact.nostrPublicKey);
         button.setAttribute('data-contact-npub', contact.npub || '');
         button.setAttribute('data-contact-name', contact.name || '');
+        if (action === 'more') button.setAttribute('aria-expanded', 'false');
         actions.appendChild(button);
     }
 
