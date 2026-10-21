@@ -5,19 +5,19 @@
  * what PasskeyVault actually does: the PRF output is the only secret, and it is
  * what the vault key is wrapped under. A reader deciding whether to trust the
  * thing with a wallet needs that, so it is a contract rather than prose.
+ *
+ * The card is the Markdown chapter content/about/identity.md, which the About
+ * page renders; that file is where the wording is checked.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const MARKUP = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const VAULT = readFileSync(new URL('../src/auth/PasskeyVault.js', import.meta.url), 'utf8');
 
-const CARD = MARKUP.slice(
-    MARKUP.indexOf('🪪 Identity: one local key, three addresses'),
-    MARKUP.indexOf('📦 Publishing: Bundle pipeline')
-);
+// Whitespace collapsed, so re-wrapping the Markdown cannot break a sentence apart.
+const CARD = readFileSync(new URL('../content/about/identity.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 
 test('the Identity card names the PRF extension and what it derives', () => {
     assert.ok(CARD.includes('PRF'), 'the card names PRF');

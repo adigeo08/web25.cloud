@@ -1,0 +1,156 @@
+<!--
+  Frozen copy of the six Deep dive chapters exactly as they were hardcoded in
+  index.html (inside `.lp-showcase-cards`) before they moved into
+  content/about/*.md. tests/about-chapters-markdown.test.mjs renders the
+  Markdown and compares it with this file, so the migration cannot silently
+  drop copy, links, inline formatting or feature grids.
+
+  Intentional copy edits belong in content/about/*.md. Make them in the same
+  commit that updates the matching article below.
+-->
+<article class="about-card lp-reveal">
+    <h3>🪪 Identity: one local key, three addresses</h3>
+    <p>
+        The identity model is local-first and is inspired by
+        <a href="https://github.com/mylofi/local-data-lock" target="_blank" rel="noopener noreferrer">mylofi/local-data-lock</a>:
+        key material stays in-browser and WebAuthn passkeys gate unlock/signing sessions.
+        A single secp256k1 key backs all three identities shown on the Account page —
+        there is no second seed and no second private key.
+    </p>
+    <div class="feature-grid">
+        <div class="feature">🏷️ EVM address for signing deploys — <code>0x…</code></div>
+        <div class="feature">🔑 ECIES public key for encrypted messaging — <code>04…</code></div>
+        <div class="feature">🪐 Nostr address for being reached by others — <code>npub1…</code></div>
+        <div class="feature">🔐 Local wallet, no mandatory external wallet extension</div>
+        <div class="feature">🧬 WebAuthn PRF unlock with Face ID / Touch ID / device PIN</div>
+        <div class="feature">🗝️ Several passkeys, one wallet — each wraps the same key</div>
+        <div class="feature">🧹 Session key lifecycle with explicit lock/clear behavior</div>
+    </div>
+    <p>
+        The passkey does more than gate the unlock — it is what the key is wrapped
+        <em>with</em>. Web25 requires the WebAuthn <strong>PRF</strong> extension, and the
+        secret the authenticator returns during a user-verified assertion is stretched
+        through HKDF-SHA256 into a non-extractable AES-GCM key that wraps the vault. That
+        secret never leaves the call stack and is never written to storage, so nothing
+        persisted on the device is enough on its own to derive the wallet. A browser or
+        security key without PRF is refused rather than quietly handed a weaker path.
+    </p>
+    <p>
+        The Account page shows all three side by side, each with its own copy button.
+        The Nostr address can be added or removed there: removing it takes you off the
+        relays and hides the address, and adding it back restores the same
+        <code>npub</code> — because it was never a separate key to begin with.
+    </p>
+</article>
+
+<article class="about-card lp-reveal">
+    <h3>📦 Publishing: Bundle pipeline + .torrentchain</h3>
+    <p>
+        Static-site deploys run through a bundle pipeline (default: gzip), then attach a signed <code>.torrentchain</code>
+        manifest carrying publisher identity and integrity metadata.
+    </p>
+    <div class="feature-grid">
+        <div class="feature">🗜️ Default bundle mode: gzip</div>
+        <div class="feature">🧾 Signed .torrentchain generated at publish time</div>
+        <div class="feature">✍️ Publisher EVM identity embedded in deploy artifact</div>
+        <div class="feature">✅ Identity/integrity checks applied during load</div>
+    </div>
+</article>
+
+<article class="about-card lp-reveal">
+    <h3>💬 Direct Messenger: search an address, start a chat</h3>
+    <p>
+        Messaging UX started from
+        <a href="https://github.com/michal-wrzosek/p2p-chat" target="_blank" rel="noopener noreferrer">michal-wrzosek/p2p-chat</a>
+        and replaced its manual offer/answer step entirely. You enter someone's Nostr
+        address, and the encrypted WebRTC invitation is delivered for you through public
+        Nostr relays — no magnet links or key pasting.
+    </p>
+    <div class="feature-grid">
+        <div class="feature">🔍 Search by <code>npub</code>, then request a chat</div>
+        <div class="feature">🎁 Invitations sealed and gift-wrapped (NIP-44 / NIP-59)</div>
+        <div class="feature">🙈 SDP, ICE, EVM address and keys never publicly readable</div>
+        <div class="feature">🛑 An unknown peer is never auto-answered — you decide</div>
+        <div class="feature">🪪 Peer verification from public key to EVM address</div>
+        <div class="feature">✍️ Per-message signatures verified on receive</div>
+        <div class="feature">🧊 STUN used: <code>stun:stun.l.google.com:19302</code></div>
+    </div>
+    <p>
+        WebRTC stays the preferred transport. If a direct connection cannot be
+        established, messages fall back to the relays — still signed and ECIES-encrypted
+        exactly as before, with NIP-44 on top. The chat header says which path is in use:
+        <strong>Connected · WebRTC</strong> or <strong>Connected · Nostr</strong> — one indicator, green either way.
+    </p>
+</article>
+
+<article class="about-card lp-reveal">
+    <h3>🤝 Cryptographic validity is not consent</h3>
+    <p>
+        Verifying an invitation proves the sender <em>is who they claim</em>. It does not
+        mean you want to talk to them — and anyone who knows your <code>npub</code> can
+        produce a perfectly valid offer. Answering one is not free: it reveals your full
+        ECIES public key, your EVM address, and, through ICE gathering, your machine's
+        network addresses.
+    </p>
+    <p>
+        So an invitation from anyone who is not already a trusted contact simply
+        <strong>waits</strong>. No answer is created, no ICE is gathered, and nothing is
+        sent back until you press Accept. Declining discards it silently — the sender is
+        not told, because telling them would confirm the address is live — and their
+        retries are dropped, so a refusal cannot be worn down by repetition.
+    </p>
+    <div class="feature-grid">
+        <div class="feature">🔔 Pending invitations show npub, name, EVM address and time</div>
+        <div class="feature">📨 A stranger's chat request arrives there too — one ask is enough</div>
+        <div class="feature">✅ Accept re-checks expiry and identity, then answers</div>
+        <div class="feature">🚫 Decline sends nothing at all</div>
+        <div class="feature">🤝 Trusted friends reconnect directly, crypto checks and all</div>
+        <div class="feature">🔐 Contacts are encrypted with your wallet identity</div>
+        <div class="feature">🔒 Lock the wallet and the contact list is unreadable</div>
+    </div>
+    <p>
+        Trust is authorization layered on top of authentication — it replaces none of the
+        existing checks. A trusted friend's invitation is still verified end to end, and
+        its identity tuple (Nostr key, ECIES key, EVM address) must both validate and match
+        what was stored, so taking over an <code>npub</code> does not inherit the trust
+        attached to it. Removing a contact is a local change only: they become unknown
+        again, and no key is deleted or rotated on either side.
+    </p>
+</article>
+
+<article class="about-card lp-reveal">
+    <h3>🛰️ Nostr relay: browser to relay, directly</h3>
+    <p>
+        The app talks straight to one public relay over a WebSocket. There is no Web25
+        relay, no proxy and no signalling server — just a rendezvous both sides agree on.
+    </p>
+    <p>
+        Two browsers can only meet on a relay they both use. Spreading over several
+        relays looks sturdier and behaves worse: a message accepted by one relay and a
+        subscription healthy on another never meet, and the invitation is lost while
+        every relay involved reports success. One relay makes finding each other
+        predictable, at an honest cost: while that relay is down, the messenger is
+        down with it.
+    </p>
+    <div class="feature-grid">
+        <div class="feature">🌐 Rendezvous: <code>wss://nos.lol</code></div>
+        <div class="feature">⚙️ One array in the config — point it at your own relay</div>
+        <div class="feature">🧯 Reconnects with backoff; a dropped socket is not a lost session</div>
+        <div class="feature">🧬 Every event is re-verified locally; duplicates collapse</div>
+    </div>
+</article>
+
+<article class="about-card lp-reveal">
+    <h3>🛡️ Security profile</h3>
+    <p>
+        WEB25.cloud validates signed publisher metadata and sanitizes rendered HTML with DOMPurify at load time.
+        The sanitizer is intentionally configured in a compatibility-oriented profile (more permissive than strict defaults)
+        to support richer static websites.
+    </p>
+    <div class="feature-grid">
+        <div class="feature">🧾 Signed-manifest verification before render gates</div>
+        <div class="feature">🧼 DOMPurify sanitization applied to loaded HTML</div>
+        <div class="feature">🧩 Extended tag/attribute/protocol allowance for compatibility</div>
+        <div class="feature">⚖️ Explicit trade-off: broader compatibility vs stricter hardening</div>
+    </div>
+</article>

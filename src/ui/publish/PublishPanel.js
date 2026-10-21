@@ -1,4 +1,21 @@
 // @ts-check
+import { onAboutChaptersRendered } from '../about/AboutChapters.js';
+
+/**
+ * Keep the About copy aligned with the deploy default without duplicating
+ * another large static section in index.html. Safe to call repeatedly.
+ */
+function addPublishingMirrorNote() {
+    const aboutCards = Array.from(document.querySelectorAll('.about-card'));
+    const publishingCard = aboutCards.find((card) => card.querySelector('h3')?.textContent?.includes('Publishing:'));
+    if (publishingCard && !publishingCard.querySelector('[data-gofile-default-note]')) {
+        const note = document.createElement('p');
+        note.dataset.gofileDefaultNote = 'true';
+        note.innerHTML =
+            'The optional GoFile mirror is <strong>preselected by default</strong> for new deploys because it is what keeps a site reachable when no peer answers. WEB25 loads in the order local cache → WebTorrent/P2P → GoFile: the swarm gets one 8-second attempt first, and the mirror only ever serves what that attempt could not. You can uncheck it before deployment.';
+        publishingCard.appendChild(note);
+    }
+}
 
 export function bindPublishActions({ onSign, onPublish }) {
     const signBtn = document.getElementById('sign-publish-btn');
@@ -14,17 +31,9 @@ export function bindPublishActions({ onSign, onPublish }) {
     // option after user interaction.
     if (gofileMirror) gofileMirror.checked = true;
 
-    // Keep the About copy aligned with the deploy default without duplicating
-    // another large static section in index.html.
-    const aboutCards = Array.from(document.querySelectorAll('.about-card'));
-    const publishingCard = aboutCards.find((card) => card.querySelector('h3')?.textContent?.includes('Publishing:'));
-    if (publishingCard && !publishingCard.querySelector('[data-gofile-default-note]')) {
-        const note = document.createElement('p');
-        note.dataset.gofileDefaultNote = 'true';
-        note.innerHTML =
-            'The optional GoFile mirror is <strong>preselected by default</strong> for new deploys because it is what keeps a site reachable when no peer answers. WEB25 loads in the order local cache → WebTorrent/P2P → GoFile: the swarm gets one 8-second attempt first, and the mirror only ever serves what that attempt could not. You can uncheck it before deployment.';
-        publishingCard.appendChild(note);
-    }
+    // The Publishing chapter is rendered from Markdown after the page loads, and
+    // again whenever its fetch is retried, so the note follows each render.
+    onAboutChaptersRendered(addPublishingMirrorNote);
 }
 
 export function setPublishButtonsState({ canSign, canDeploy }) {
