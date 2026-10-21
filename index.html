@@ -113,6 +113,15 @@
                     💬 Chat
                     <span id="dm-tab-badge" class="tab-badge hidden" aria-hidden="true">0</span>
                 </button>
+                <!--
+                    Local AI. Signed-in only, like Chat: hidden in the markup
+                    and revealed by setupAuthAwareUi once an unlocked,
+                    onboarded identity exists. Opening it is the first time
+                    any WebLLM code loads.
+                -->
+                <button class="tab-btn" data-tab="webllm" role="tab" aria-selected="false" style="display: none">
+                    🦙 WebLLM
+                </button>
                 <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">ℹ️ About</button>
             </nav>
 
@@ -1139,6 +1148,167 @@
                             </div>
                         </form>
                     </dialog>
+                </div>
+
+                <!--
+                    ── WEBLLM TAB ──
+                    A local AI chat, entirely in this browser: WebLLM runs
+                    Llama 3.2 1B on WebGPU in a dedicated worker. Nothing here
+                    talks to Nostr, WebRTC, the wallet or the Chat service.
+                    The install screen and the chat are swapped by
+                    src/ui/webllm/WebLLMPanel.js.
+                -->
+                <div id="tab-webllm" class="tab-panel" role="tabpanel" style="display: none">
+                    <section id="webllm-install" class="card-base webllm-install" aria-labelledby="webllm-install-title">
+                        <div class="webllm-install-art" aria-hidden="true">🦙</div>
+                        <span class="section-kicker">LOCAL AI · WEBGPU</span>
+                        <h2 id="webllm-install-title">Install Llama in Your Browser</h2>
+                        <p class="webllm-install-lede">
+                            Download Llama directly into your browser and chat with a local AI. The model runs entirely
+                            on your device, without external inference servers. Once downloaded, it stays cached for
+                            future sessions.
+                        </p>
+                        <ul class="webllm-facts" aria-label="About this model">
+                            <li><b>~750 MB</b> one-time download</li>
+                            <li><b>WebGPU</b> runs on your GPU</li>
+                            <li><b>Private</b> no servers, no API keys</li>
+                        </ul>
+
+                        <p id="webllm-device" class="webllm-device" role="status"></p>
+
+                        <div id="webllm-progress" class="webllm-progress hidden" aria-live="polite">
+                            <div class="webllm-progress-head">
+                                <span id="webllm-progress-label">Preparing…</span>
+                                <span id="webllm-progress-percent" class="webllm-progress-percent">0%</span>
+                            </div>
+                            <div
+                                id="webllm-progress-track"
+                                class="webllm-progress-track"
+                                role="progressbar"
+                                aria-valuemin="0"
+                                aria-valuemax="100"
+                                aria-valuenow="0"
+                                aria-labelledby="webllm-progress-label"
+                            >
+                                <div id="webllm-progress-bar" class="webllm-progress-bar"></div>
+                            </div>
+                            <ol class="webllm-steps">
+                                <li data-step="download" data-state="todo">Download</li>
+                                <li data-step="cache" data-state="todo">Load weights</li>
+                                <li data-step="shaders" data-state="todo">Prepare GPU</li>
+                            </ol>
+                        </div>
+
+                        <p id="webllm-error" class="webllm-error hidden" role="alert"></p>
+
+                        <button id="webllm-install-btn" type="button" class="btn btn-primary btn-lg webllm-install-btn">
+                            Install Llama 3.2 1B
+                        </button>
+
+                        <p class="webllm-footer">
+                            Llama 3.2 by Meta · © Meta Platforms, Inc. ·
+                            <a
+                                id="webllm-license-link"
+                                href="https://www.llama.com/llama3_2/license/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                >Llama 3.2 Community License</a
+                            >
+                        </p>
+                    </section>
+
+                    <!-- The chat: the Direct Messenger's window and bubbles, none of its networking. -->
+                    <section id="webllm-chat" class="quick-upload card-base dm-app webllm-app hidden" aria-label="Local AI chat">
+                        <div class="dm-main webllm-main">
+                            <div class="dm-chat-head">
+                                <span class="dm-avatar webllm-avatar" aria-hidden="true">🦙</span>
+                                <span class="dm-chat-title">
+                                    <span class="dm-peer-label">Llama 3.2 1B · Local AI</span>
+                                    <span id="webllm-chat-status" class="status-chip status-success">Running on this device</span>
+                                </span>
+                                <div class="dm-chat-actions">
+                                    <button
+                                        id="webllm-new-chat-btn"
+                                        type="button"
+                                        class="dm-head-btn"
+                                        title="Start a new chat"
+                                        aria-label="Start a new chat"
+                                    >
+                                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                            <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                                        </svg>
+                                        <span class="dm-head-btn-label">New chat</span>
+                                    </button>
+                                    <button
+                                        id="webllm-remove-btn"
+                                        type="button"
+                                        class="dm-head-btn is-danger"
+                                        title="Remove the downloaded model from this browser"
+                                        aria-label="Remove the downloaded model from this browser"
+                                    >
+                                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                            <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                        </svg>
+                                        <span class="dm-head-btn-label">Remove model</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="dm-thread">
+                                <div
+                                    id="webllm-messages"
+                                    class="channels-messages webllm-messages"
+                                    role="log"
+                                    aria-live="polite"
+                                    aria-label="Conversation with Llama"
+                                ></div>
+                                <button
+                                    id="webllm-scroll-bottom"
+                                    type="button"
+                                    class="dm-scroll-bottom hidden"
+                                    title="Jump to the latest message"
+                                    aria-label="Jump to the latest message"
+                                >
+                                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                                        <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <form id="webllm-composer" class="dm-composer webllm-composer">
+                                <textarea
+                                    id="webllm-input"
+                                    class="webllm-input"
+                                    rows="1"
+                                    placeholder="Message Llama…"
+                                    aria-label="Message"
+                                    autocomplete="off"
+                                    enterkeyhint="send"
+                                    maxlength="4000"
+                                ></textarea>
+                                <button id="webllm-send-btn" type="submit" class="dm-send-btn" title="Send" aria-label="Send">
+                                    <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+                                        <path d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15 12 3.4 13.8Z" fill="currentColor" />
+                                    </svg>
+                                </button>
+                                <button
+                                    id="webllm-stop-btn"
+                                    type="button"
+                                    class="dm-send-btn webllm-stop-btn hidden"
+                                    title="Stop generating"
+                                    aria-label="Stop generating"
+                                >
+                                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                        <rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor" />
+                                    </svg>
+                                </button>
+                            </form>
+                            <p class="webllm-disclaimer">
+                                Llama runs locally and can make mistakes. Conversations are kept in memory only and are
+                                cleared when you lock your wallet.
+                            </p>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- ── BROWSE TAB ── -->

@@ -24,6 +24,7 @@ import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
 import { DEFAULT_NOSTR_DM_RELAYS, NOSTR_CONFIG } from '../../config/nostr.config.js';
 import { createLocalWalletSigner } from '../../auth/LocalWalletService.js';
 import { rememberTab, readResumeHint } from '../../auth/SessionResumeHint.js';
+import { setWebLLMAccess } from '../../webllm/WebLLMTab.js';
 import { bindLibraryPanel, isLibrarySearchMode, renderLibrary } from '../../ui/browse/LibraryPanel.js';
 import {
     appendChannelsMessage,
@@ -2798,6 +2799,8 @@ export function setupAuthAwareUi(state) {
     const channelsTabPanel = document.getElementById('tab-channels');
     const pagesTabBtn = document.querySelector('[data-tab="pages"]');
     const pagesTabPanel = document.getElementById('tab-pages');
+    const webllmTabBtn = document.querySelector('[data-tab="webllm"]');
+    const webllmTabPanel = document.getElementById('tab-webllm');
     const hasIdentity = isSignedIn(state);
     const isAuthenticated = hasIdentity;
     const hasJustAuthenticated = !this._hadAuthenticatedIdentity && isAuthenticated;
@@ -2838,6 +2841,17 @@ export function setupAuthAwareUi(state) {
     if (channelsTabPanel) {
         channelsTabPanel.style.display = hasIdentity ? '' : 'none';
     }
+
+    // The local AI chat is signed-in only, like Chat. Locking ends its session
+    // (engine released, conversation dropped); the downloaded model stays
+    // cached for the next unlock. Nothing WebLLM loads until the tab is opened.
+    if (webllmTabBtn) {
+        webllmTabBtn.style.display = hasIdentity ? 'inline-flex' : 'none';
+    }
+    if (webllmTabPanel) {
+        webllmTabPanel.style.display = hasIdentity ? '' : 'none';
+    }
+    setWebLLMAccess(hasIdentity);
 
     // A publisher's own deployments are behind the wallet, exactly like Chat:
     // the sites go on seeding with it locked — that is the whole point of the
@@ -2901,7 +2915,7 @@ export function setupAuthAwareUi(state) {
         // `renderPages` already moves a reader off a tab that does disappear.
         const activeTab = document.querySelector('.tab-btn.active');
         const activeName = activeTab?.getAttribute('data-tab');
-        if (activeName === 'auth' || activeName === 'channels') {
+        if (activeName === 'auth' || activeName === 'channels' || activeName === 'webllm') {
             const browseTab = document.querySelector('[data-tab="browse"]');
             if (browseTab instanceof HTMLElement) browseTab.click();
         }
