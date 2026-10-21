@@ -6810,6 +6810,11 @@ select,
     color: #ff8a92;
 }
 
+/* A reply the loop guard cut off: not an error, but not a finished answer. */
+.webllm-message.is-looped .webllm-message-note {
+    color: var(--warn);
+}
+
 /* A reply still being written: dots before the first token, a caret after. */
 .webllm-typing {
     display: inline-flex;

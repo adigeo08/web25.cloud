@@ -726,6 +726,58 @@ Chat service.
   GPU) and drops the in-memory conversation. The model files stay cached for
   the next unlock; only **Remove model** in the chat header deletes them.
 
+#### Generation settings and reply quality
+
+Sent with every chat completion (`WEBLLM_GENERATION` in `src/webllm/webllmConfig.js`;
+there is no other place to change them):
+
+| Setting              | Value | Why                                                                                                            |
+| -------------------- | ----- | -------------------------------------------------------------------------------------------------------------- |
+| `temperature`        | 0.6   | Meta's recommended sampling for the Llama 3 Instruct models; a 1B model drifts and loops more the hotter it runs |
+| `top_p`              | 0.9   | Same                                                                                                           |
+| `repetition_penalty` | 1.1   | Applied by WebLLM only to tokens the model has generated in this reply (never the prompt); mild on purpose, since it hits every distinct token already used |
+| `frequency_penalty`  | 0     | Off — it would push the model off words it must reuse; the loop guard is the safety net instead              |
+| `presence_penalty`   | 0     | Off                                                                                                            |
+| `max_tokens`         | 384   | About 280 words. A ceiling, not a target: the system prompt asks for short answers. Hitting it gives `finish_reason: "length"` |
+
+All six pass the range checks WebLLM applies before generating
+(`postInitAndCheckGenerationConfigValues` in `@mlc-ai/web-llm@0.2.85`: temperature ≥ 0,
+0 < top_p ≤ 1, repetition_penalty > 0, penalties in [-2, 2], max_tokens > 0).
+These values come from the model's published recommendations and WebLLM's source;
+they have **not** been tuned against live output, which needs a WebGPU device and
+the downloaded weights. To compare alternatives, change the constants and try, on a
+WebGPU device: `hey`, `hello`, `What is the capital of France?`, a few follow-ups that
+refer back (`My name is Sam.` … `What is my name?`), and `Explain how neural networks
+work` — watching reply length, the finish reason, and whether anything repeats.
+
+- **Prompt format.** MLC serves Llama 3.x with its `llama-3_1` conversation template:
+  `<|begin_of_text|>` then each message as `<|start_header_id|>role<|end_header_id|>\n\n…<|eot_id|>`,
+  ending on the assistant header. Generation stops on token ids 128001
+  (`<|end_of_text|>`), 128008 (`<|eom_id|>`) and 128009 (`<|eot_id|>`), which are those
+  tokens' ids in Meta's tokenizer. The page sends a `system` message first (the
+  template's default system prompt is replaced) and never builds the template itself.
+- **System prompt.** `WEBLLM_SYSTEM_PROMPT`: a few plain sentences — direct English,
+  answer size matched to the question (a greeting gets one or two short sentences),
+  no repeated phrases, no filler. No example replies, which small models echo.
+- **Context.** The prompt and the reply share the 4096-token window, so the prompt may
+  use `4096 − max_tokens − 192` = **3520** estimated tokens. The estimate errs high
+  (3 characters per token, 1.5 per non-ASCII character, 5 tokens of template per message).
+  The oldest whole exchanges are dropped first; the system prompt and newest message always
+  stay; a message too large to fit alone is refused. If WebLLM still reports the prompt as
+  too long, it is asked once more with 60% of the budget.
+- **What is passed back.** Only exchanges whose reply finished (`stop`) or reached the
+  length limit. A reply that failed, that the user stopped, or that the loop guard cut off
+  is left out together with its question, so history stays user/assistant alternating and a
+  bad reply is never fed back to the model.
+- **Loop guard** (`src/webllm/webllmLoopGuard.js`, run in the inference worker on the
+  stream). It ends a reply when the last sentences repeat as a cycle (3×), one long
+  sentence keeps coming back (6×), or the text ends in a repeating stretch of characters.
+  It ignores short words and sentences, lists, table rules, and code (fenced code only
+  trips on a long, runaway repeat), and is relaxed when the user's message asks for
+  repetition (_times_, _repeat_, _chorus_, _song_, _poem_…). The reply is cut back to its
+  first occurrence and shows "Stopped automatically: Llama started repeating itself."
+  Finish reasons reach the page as `stop`, `length`, `abort` (the user's Stop), or `loop`.
+
 ---
 
 ## Security profile (current)

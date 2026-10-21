@@ -61,7 +61,8 @@ function updateBubble(item, message) {
         'webllm-message',
         message.role === 'user' ? 'is-own' : 'is-assistant',
         message.pending ? 'is-streaming' : '',
-        message.error ? 'is-error' : ''
+        message.error ? 'is-error' : '',
+        message.finishReason === 'loop' ? 'is-looped' : ''
     ]
         .filter(Boolean)
         .join(' ');
@@ -79,7 +80,7 @@ function updateBubble(item, message) {
         body.textContent = message.content;
     }
 
-    const note = message.error || (message.stopped ? 'Stopped.' : '');
+    const note = message.error || message.notice || (message.stopped ? 'Stopped.' : '');
     let noteEl = item.querySelector('.webllm-message-note');
     if (note) {
         if (!noteEl) {

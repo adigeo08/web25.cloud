@@ -9,7 +9,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyError, describeProgress, parseInitProgress, trimHistory } from '../src/webllm/webllmProgress.js';
+import {
+    classifyError,
+    describeProgress,
+    estimateTokens,
+    parseInitProgress,
+    selectContextMessages,
+    trimHistory
+} from '../src/webllm/webllmProgress.js';
+import {
+    WEBLLM_CONTEXT_SAFETY_TOKENS,
+    WEBLLM_CONTEXT_WINDOW,
+    WEBLLM_GENERATION,
+    WEBLLM_PROMPT_TOKEN_BUDGET
+} from '../src/webllm/webllmConfig.js';
 
 test('a download report gives the real percentage and megabytes', () => {
     const progress = parseInitProgress({
@@ -74,20 +87,109 @@ test('errors are classified into what the user can do about them', () => {
     assert.equal(unknown.detail, 'boom');
 });
 
-test('history trimming keeps the system prompt and the newest turns, starting on a user turn', () => {
+test('token estimates err high for prose and code, and count non-ASCII text at more than one token per character', () => {
+    assert.equal(estimateTokens(''), 0);
+    assert.equal(estimateTokens('hey'), 1);
+    // Llama 3 averages ~4 characters per token on prose and ~3 on code: never undercounted.
+    const prose = 'WebGPU lets web pages use the graphics card for general computation. '.repeat(20);
+    assert.ok(estimateTokens(prose) >= prose.length / 4);
+    const code = 'for (let i = 0; i < n; i++) { total += values[i] * weights[i]; }\n'.repeat(10);
+    assert.ok(estimateTokens(code) >= code.length / 3);
+    assert.ok(estimateTokens('你好，世界') >= 5 * 1.5);
+});
+
+const turn = (role, chars) => ({ role, content: 'x'.repeat(chars) });
+
+test('trimming keeps the system prompt and the newest message, and drops the oldest exchanges first', () => {
     const messages = [
         { role: 'system', content: 'S' },
-        { role: 'user', content: 'a'.repeat(50) },
-        { role: 'assistant', content: 'b'.repeat(50) },
-        { role: 'user', content: 'c'.repeat(50) },
-        { role: 'assistant', content: 'd'.repeat(50) },
-        { role: 'user', content: 'e'.repeat(10) }
+        turn('user', 300),
+        turn('assistant', 300),
+        turn('user', 300),
+        turn('assistant', 300),
+        { role: 'user', content: 'latest question' }
     ];
-    const trimmed = trimHistory(messages, 120);
+    // Each 300-character turn is ~105 tokens with its framing.
+    const all = trimHistory(messages, { budget: 10000 });
+    assert.equal(all.messages.length, 6);
+    assert.equal(all.dropped, 0);
+    assert.equal(all.fits, true);
+
+    const trimmed = trimHistory(messages, { budget: 280 });
     assert.deepEqual(
-        trimmed.map((message) => message.content[0]),
-        ['S', 'c', 'd', 'e']
+        trimmed.messages.map((message) => message.role),
+        ['system', 'user', 'assistant', 'user']
     );
-    // A single message larger than the budget is still sent.
-    assert.equal(trimHistory([{ role: 'user', content: 'x'.repeat(500) }], 10).length, 1);
+    assert.equal(trimmed.messages.at(-1).content, 'latest question');
+    assert.equal(trimmed.dropped, 2);
+    assert.ok(trimmed.tokens <= 280, `${trimmed.tokens} tokens in a 280 budget`);
+});
+
+test('a trimmed conversation never starts on a reply to a question that was cut', () => {
+    const messages = [
+        { role: 'system', content: 'S' },
+        turn('user', 3000),
+        turn('assistant', 30),
+        { role: 'user', content: 'next' }
+    ];
+    // The reply fits but its question does not: the reply goes with it.
+    const trimmed = trimHistory(messages, { budget: 120 });
+    assert.deepEqual(
+        trimmed.messages.map((message) => message.role),
+        ['system', 'user']
+    );
+    assert.equal(trimmed.dropped, 2);
+    assert.ok(trimmed.tokens <= 120);
+});
+
+test('a newest message too big for the window is reported, not silently sent', () => {
+    const trimmed = trimHistory(
+        [
+            { role: 'system', content: 'S' },
+            { role: 'user', content: 'y'.repeat(20000) }
+        ],
+        { budget: 3520 }
+    );
+    assert.equal(trimmed.fits, false);
+    assert.equal(trimmed.messages.at(-1).content.length, 20000);
+});
+
+test('the prompt budget leaves the reply and a margin inside the 4096-token window', () => {
+    assert.equal(
+        WEBLLM_PROMPT_TOKEN_BUDGET + WEBLLM_GENERATION.max_tokens + WEBLLM_CONTEXT_SAFETY_TOKENS,
+        WEBLLM_CONTEXT_WINDOW
+    );
+    assert.equal(WEBLLM_CONTEXT_WINDOW, 4096);
+    // A conversation that overflows is cut to the budget, estimated framing included.
+    const long = [{ role: 'system', content: 'S' }];
+    for (let i = 0; i < 60; i += 1) long.push(turn(i % 2 ? 'assistant' : 'user', 600));
+    long.push({ role: 'user', content: 'now' });
+    const trimmed = trimHistory(long);
+    assert.ok(trimmed.tokens <= WEBLLM_PROMPT_TOKEN_BUDGET);
+    assert.ok(trimmed.dropped > 0);
+});
+
+test('only finished exchanges are passed back as context', () => {
+    const exchange = (id, extra) => [
+        { role: 'user', content: `question ${id}`, pending: false, error: null, stopped: false },
+        { role: 'assistant', content: `answer ${id}`, pending: false, error: null, stopped: false, ...extra }
+    ];
+    const messages = [
+        ...exchange(1, { finishReason: 'stop' }),
+        ...exchange(2, { finishReason: 'abort', stopped: true }),
+        ...exchange(3, { finishReason: 'loop' }),
+        ...exchange(4, { finishReason: 'error', error: 'It broke', content: '' }),
+        ...exchange(5, { finishReason: 'length' }),
+        // Still being written: not context yet.
+        ...exchange(6, { finishReason: null, pending: true }),
+        // Nothing came back at all.
+        ...exchange(7, { finishReason: 'stop', content: '  ' })
+    ];
+    assert.deepEqual(selectContextMessages(messages), [
+        { role: 'user', content: 'question 1' },
+        { role: 'assistant', content: 'answer 1' },
+        { role: 'user', content: 'question 5' },
+        { role: 'assistant', content: 'answer 5' }
+    ]);
+    assert.deepEqual(selectContextMessages([]), []);
 });

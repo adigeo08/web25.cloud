@@ -8,8 +8,28 @@
  * in `@mlc-ai/web-llm@0.2.85`); anything unrecognised is shown as generic
  * initialisation so a wording change upstream degrades, never breaks.
  *
+ * It also holds what the controller needs to keep a conversation inside the
+ * model's context window (token estimate, which exchanges to pass back, trimming)
+ * and the wording shown when a reply ends early.
+ *
  * Pure functions, no DOM: the controller and the tests share them.
  */
+
+import {
+    WEBLLM_MESSAGE_FRAMING_TOKENS,
+    WEBLLM_PROMPT_TOKEN_BUDGET,
+    WEBLLM_REQUEST_FRAMING_TOKENS
+} from './webllmConfig.js';
+
+/** Shown under a reply the loop guard cut off. */
+export const LOOP_NOTICE =
+    'Stopped automatically: Llama started repeating itself. Try rephrasing, or start a new chat.';
+
+/** Shown under a reply that hit the length limit. */
+export const LENGTH_NOTICE = 'This reply reached the length limit. Ask Llama to continue if you want more.';
+
+/** Shown when the newest message alone is more than the model can read at once. */
+export const MESSAGE_TOO_LONG = 'That message is too long for Llama to read at once. Try a shorter one.';
 
 /**
  * @typedef {'download'|'cache'|'shaders'|'init'|'done'} LoadPhase
@@ -209,28 +229,97 @@ export function classifyError(error) {
 }
 
 /**
- * Keep the conversation inside the model's context window.
+ * Rough token count for a piece of text.
  *
- * Token counts are only known inside the engine, so this budgets characters
- * (about three per token for English, which errs on the safe side) and drops
- * the oldest turns first. The system prompt and the newest message always stay.
+ * The real count lives in the tokenizer, inside the engine, and is not
+ * available before the request is sent. This errs high: the Llama 3 tokenizer
+ * averages about four characters per token on English prose and about three on
+ * code, so three characters per token never undercounts either; characters
+ * outside ASCII (accents, CJK, emoji) cost more and are counted at 1.5.
  *
- * @param {{ role: string, content: string }[]} messages
- * @param {number} [maxChars]
+ * @param {string} text
  */
-export function trimHistory(messages, maxChars = 9000) {
+export function estimateTokens(text) {
+    const value = `${text || ''}`;
+    let ascii = 0;
+    for (let i = 0; i < value.length; i += 1) {
+        if (value.charCodeAt(i) < 128) ascii += 1;
+    }
+    return Math.ceil(ascii / 3 + (value.length - ascii) * 1.5);
+}
+
+/** @param {{ content: string }} message */
+const messageTokens = (message) => estimateTokens(message.content) + WEBLLM_MESSAGE_FRAMING_TOKENS;
+
+/**
+ * What of the conversation the model is shown.
+ *
+ * Only exchanges whose reply finished — it ended on its own, or at the length
+ * limit — are passed back. A reply that failed, that the user stopped, or that
+ * the loop guard cut off is not context, it is the problem: handing a looping
+ * answer back is the quickest way to get another one. Its question goes with
+ * it, so what the model sees still alternates user and assistant and no
+ * question is answered twice.
+ *
+ * @param {{ role: string, content: string, pending?: boolean, error?: string|null,
+ *           stopped?: boolean, finishReason?: string|null }[]} messages
+ * @returns {{ role: 'user'|'assistant', content: string }[]}
+ */
+export function selectContextMessages(messages) {
+    /** @type {{ role: 'user'|'assistant', content: string }[]} */
+    const context = [];
+    for (let i = 0; i + 1 < messages.length; i += 1) {
+        const question = messages[i];
+        const answer = messages[i + 1];
+        if (question.role !== 'user' || answer.role !== 'assistant') continue;
+        i += 1;
+
+        const finished =
+            !answer.pending &&
+            !answer.error &&
+            !answer.stopped &&
+            (answer.finishReason === 'stop' || answer.finishReason === 'length') &&
+            answer.content.trim() !== '';
+        if (!finished) continue;
+        context.push({ role: 'user', content: question.content }, { role: 'assistant', content: answer.content });
+    }
+    return context;
+}
+
+/**
+ * Keep the prompt inside the model's context window, with room left to reply.
+ *
+ * The oldest turns go first, and the system prompt and the newest message
+ * always stay. `budget` is in estimated tokens (see `estimateTokens`) and
+ * already has the reply and a safety margin taken out of the window.
+ *
+ * @param {{ role: string, content: string }[]} messages the system prompt, then the conversation ending on the new user message
+ * @param {{ budget?: number }} [options]
+ * @returns {{ messages: { role: string, content: string }[], tokens: number, dropped: number, fits: boolean }}
+ *   `fits` is false when the system prompt and the newest message alone are
+ *   over budget — there is nothing left to drop.
+ */
+export function trimHistory(messages, { budget = WEBLLM_PROMPT_TOKEN_BUDGET } = {}) {
     const system = messages.filter((message) => message.role === 'system');
     const turns = messages.filter((message) => message.role !== 'system');
-    let budget = maxChars - system.reduce((sum, message) => sum + message.content.length, 0);
-    const kept = [];
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-        const size = turns[i].content.length;
-        if (kept.length > 0 && size > budget) break;
+
+    let tokens = WEBLLM_REQUEST_FRAMING_TOKENS + system.reduce((sum, message) => sum + messageTokens(message), 0);
+    const newest = turns[turns.length - 1];
+    if (newest) tokens += messageTokens(newest);
+    const fits = tokens <= budget;
+
+    const kept = newest ? [newest] : [];
+    for (let i = turns.length - 2; fits && i >= 0; i -= 1) {
+        const cost = messageTokens(turns[i]);
+        if (tokens + cost > budget) break;
         kept.unshift(turns[i]);
-        budget -= size;
+        tokens += cost;
     }
     // A conversation handed to the model starts with the user, never with a
     // reply to a question that was trimmed away.
-    while (kept.length > 1 && kept[0].role !== 'user') kept.shift();
-    return [...system, ...kept];
+    while (kept.length > 1 && kept[0].role !== 'user') {
+        tokens -= messageTokens(kept[0]);
+        kept.shift();
+    }
+    return { messages: [...system, ...kept], tokens, dropped: turns.length - kept.length, fits };
 }

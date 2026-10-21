@@ -18,16 +18,22 @@
  *   { type: 'delta', requestId, text }
  *   { type: 'result', requestId, ok: true, value } | { …, ok: false, error: { name, message } }
  *
+ * A chat result's `finishReason` is WebLLM's (`stop`, `length`, or `abort` for
+ * the user's Stop) or `loop`, when the loop guard ended the reply itself — with
+ * `keepChars`, how much of the text to keep.
+ *
  * Never imported by a service worker: inference does not run there.
  */
 
 import {
     WEBLLM_ASSET_CACHE,
+    WEBLLM_GENERATION,
     WEBLLM_LIBRARY_INTEGRITY,
     WEBLLM_LIBRARY_URL,
     WEBLLM_MODEL_ID,
     createAppConfig
 } from './webllmConfig.js';
+import { asksForRepetition, createLoopGuard } from './webllmLoopGuard.js';
 
 /**
  * Compare bytes against an SRI string (`sha384-…`).
@@ -105,6 +111,23 @@ function serializeError(error) {
 }
 
 /**
+ * The sampling settings for one request: the pinned defaults, with any number
+ * the caller supplied for a known setting laid over them. Unknown keys are
+ * ignored, so the request WebLLM sees can only carry values it validates.
+ *
+ * @param {Record<string, any>} [options]
+ */
+export function generationParams(options = {}) {
+    /** @type {Record<string, number>} */
+    const params = { ...WEBLLM_GENERATION };
+    for (const key of Object.keys(params)) {
+        const value = options?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)) params[key] = value;
+    }
+    return params;
+}
+
+/**
  * @param {{ post: (message: any) => void,
  *           loadLibrary?: () => Promise<any>,
  *           modelId?: string,
@@ -168,19 +191,34 @@ export function createEngineHost({
                 messages,
                 stream: true,
                 stream_options: { include_usage: true },
-                temperature: options.temperature ?? 0.7,
-                top_p: options.top_p ?? 0.95,
-                max_tokens: options.max_tokens ?? 1024
+                ...generationParams(options)
             });
+
+            // Somebody asking for the same line five times is not a loop.
+            const lastUser = [...messages].reverse().find((message) => message.role === 'user');
+            const guard = createLoopGuard({ allowRepeats: asksForRepetition(lastUser?.content) });
+
             let finishReason = null;
             let usage = null;
+            /** @type {import('./webllmLoopGuard.js').LoopVerdict|null} */
+            let loop = null;
             for await (const chunk of stream) {
                 const choice = chunk?.choices?.[0];
                 const text = choice?.delta?.content;
-                if (text) post({ type: 'delta', requestId, text });
+                // After a loop is found the stream is only drained: WebLLM ends
+                // it once the interrupt lands, and nothing more is shown.
+                if (text && !loop) {
+                    loop = guard.push(text);
+                    if (loop) void engine.interruptGenerate();
+                    else post({ type: 'delta', requestId, text });
+                }
                 if (choice?.finish_reason) finishReason = choice.finish_reason;
                 if (chunk?.usage) usage = chunk.usage;
             }
+
+            // The engine reports its own interrupt as `abort`, which is what a
+            // user pressing Stop gets too; `loop` is how the page tells them apart.
+            if (loop) return { finishReason: 'loop', keepChars: loop.keepChars, loopKind: loop.reason, usage };
             return { finishReason, usage };
         } finally {
             generating = false;
