@@ -144,44 +144,47 @@ async function openWebLLMTab(page, viewport = DESKTOP, { scripted = false } = {}
 }
 
 /** Bind the real controller and panel to a scripted engine. */
-async function startScriptedChat(page, chunks) {
-    await page.evaluate(async (replyChunks) => {
-        const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
-        const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
-        const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
-        const engine = {
-            kind: 'worker',
-            async load(onProgress) {
-                onProgress({ progress: 0.5, text: 'Fetching param cache[1/2]: 300MB fetched. 50% completed' });
-                await tick();
-                return { alreadyLoaded: false };
-            },
-            async chat(_messages, onDelta) {
-                for (const chunk of replyChunks) {
+async function startScriptedChat(page, chunks, result = { finishReason: 'stop' }) {
+    await page.evaluate(
+        async ({ chunks: replyChunks, result: replyResult }) => {
+            const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
+            const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
+            const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+            const engine = {
+                kind: 'worker',
+                async load(onProgress) {
+                    onProgress({ progress: 0.5, text: 'Fetching param cache[1/2]: 300MB fetched. 50% completed' });
                     await tick();
-                    onDelta(chunk);
-                }
-                return { finishReason: 'stop' };
-            },
-            interrupt() {},
-            dispose() {}
-        };
-        let render = () => {};
-        const controller = new WebLLMController({
-            detectWebGPU: async () => ({ supported: true, vendor: 'test', description: 'gpu' }),
-            swClient: {
-                status: async () => ({ model: { state: 'absent', bytesCached: 0, bytesTotal: 0 } }),
-                prepareLibrary: async () => ({}),
-                clearModel: async () => ({})
-            },
-            createEngine: async () => engine,
-            onChange: (state, change) => render(state, change)
-        });
-        render = bindWebLLMPanel(controller);
-        window.__controller = controller;
-        controller.setAllowed(true);
-        await controller.activate();
-    }, chunks);
+                    return { alreadyLoaded: false };
+                },
+                async chat(_messages, onDelta) {
+                    for (const chunk of replyChunks) {
+                        await tick();
+                        onDelta(chunk);
+                    }
+                    return replyResult;
+                },
+                interrupt() {},
+                dispose() {}
+            };
+            let render = () => {};
+            const controller = new WebLLMController({
+                detectWebGPU: async () => ({ supported: true, vendor: 'test', description: 'gpu' }),
+                swClient: {
+                    status: async () => ({ model: { state: 'absent', bytesCached: 0, bytesTotal: 0 } }),
+                    prepareLibrary: async () => ({}),
+                    clearModel: async () => ({})
+                },
+                createEngine: async () => engine,
+                onChange: (state, change) => render(state, change)
+            });
+            render = bindWebLLMPanel(controller);
+            window.__controller = controller;
+            controller.setAllowed(true);
+            await controller.activate();
+        },
+        { chunks, result }
+    );
 }
 
 // ── tests ───────────────────────────────────────────────────────────────────
@@ -328,3 +331,49 @@ for (const [name, viewport] of [
         }
     });
 }
+
+test('a reply stopped by the loop guard or the length limit says why, as text, and a normal one says nothing', async () => {
+    const cases = [
+        { chunks: ['Hello', ' there.'], result: { finishReason: 'stop' }, note: null, looped: false },
+        {
+            chunks: ['Hello there. ', 'Hello there. ', 'Hello there. '],
+            result: { finishReason: 'loop', keepChars: 12 },
+            note: /Stopped automatically: Llama started repeating itself/,
+            looped: true
+        },
+        {
+            chunks: ['A long answer that goes on and'],
+            result: { finishReason: 'length' },
+            note: /reached the length limit/,
+            looped: false
+        },
+        { chunks: ['Partial'], result: { finishReason: 'abort' }, note: /^Stopped\.$/, looped: false }
+    ];
+    for (const { chunks, result, note, looped } of cases) {
+        const { page, context, problems } = await openApp();
+        try {
+            await openWebLLMTab(page, DESKTOP, { scripted: true });
+            await startScriptedChat(page, chunks, result);
+            await page.click('#webllm-install-btn');
+            await page.waitForSelector('#webllm-chat:not(.hidden)');
+            await page.fill('#webllm-input', 'hey');
+            await page.keyboard.press('Enter');
+            await page.waitForFunction(
+                () => !window.__controller.state.generating && window.__controller.state.messages.length === 2
+            );
+
+            const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
+                body: item.querySelector('.channels-message-body').textContent,
+                note: item.querySelector('.webllm-message-note')?.textContent ?? null,
+                looped: item.classList.contains('is-looped')
+            }));
+            if (note) assert.match(reply.note, note);
+            else assert.equal(reply.note, null);
+            assert.equal(reply.looped, looped);
+            if (result.finishReason === 'loop') assert.equal(reply.body, 'Hello there.', 'the repeats are cut');
+            assert.deepEqual(problems, []);
+        } finally {
+            await context.close();
+        }
+    }
+});

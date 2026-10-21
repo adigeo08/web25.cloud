@@ -19,15 +19,30 @@
  * DOM-free: the panel renders `state`, the tests drive it with doubles.
  */
 
-import { WEBLLM_MODEL_DOWNLOAD_BYTES, WEBLLM_SYSTEM_PROMPT } from './webllmConfig.js';
-import { classifyError, parseInitProgress, trimHistory } from './webllmProgress.js';
+import { WEBLLM_MODEL_DOWNLOAD_BYTES, WEBLLM_PROMPT_TOKEN_BUDGET, WEBLLM_SYSTEM_PROMPT } from './webllmConfig.js';
+import {
+    LENGTH_NOTICE,
+    LOOP_NOTICE,
+    MESSAGE_TOO_LONG,
+    classifyError,
+    parseInitProgress,
+    selectContextMessages,
+    trimHistory
+} from './webllmProgress.js';
 
 /** One download per browser, however many WEB25 tabs are open. */
 export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
 
 /**
  * @typedef {'locked'|'idle'|'checking'|'unsupported'|'not-installed'|'installing'|'ready'|'error'} WebLLMStatus
- * @typedef {{ id: number, role: 'user'|'assistant', content: string, pending: boolean, error: string|null, stopped: boolean }} ChatMessage
+ * @typedef {'stop'|'length'|'abort'|'loop'|'error'} FinishReason
+ *   stop    the model ended its reply
+ *   length  it hit the reply length limit (or the context window)
+ *   abort   the user pressed Stop
+ *   loop    the loop guard ended a repeating reply
+ *   error   no reply: the request failed
+ * @typedef {{ id: number, role: 'user'|'assistant', content: string, pending: boolean, error: string|null,
+ *             stopped: boolean, finishReason: FinishReason|null, notice: string|null }} ChatMessage
  */
 
 function initialState() {
@@ -336,15 +351,96 @@ export class WebLLMController {
         return this.install();
     }
 
+    /**
+     * The prompt for the next reply: the system prompt, the finished exchanges,
+     * and the new message, trimmed to what the context window can hold.
+     *
+     * @param {ChatMessage[]} prior the conversation before the new message
+     * @param {string} content the new message
+     * @param {number} budget estimated tokens the prompt may use
+     */
+    planPrompt(prior, content, budget) {
+        return trimHistory(
+            [
+                { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
+                ...selectContextMessages(prior),
+                { role: 'user', content }
+            ],
+            { budget }
+        );
+    }
+
+    /**
+     * Ask the engine for a reply — and, if it says the prompt does not fit
+     * (the estimate is only an estimate), once more with less of the history.
+     *
+     * @param {any} engine
+     * @param {ChatMessage[]} prior
+     * @param {string} content
+     * @param {(delta: string) => void} onDelta
+     * @param {() => boolean} stale
+     */
+    async generate(engine, prior, content, onDelta, stale) {
+        let sent = null;
+        let lastError = null;
+        for (const budget of [WEBLLM_PROMPT_TOKEN_BUDGET, Math.floor(WEBLLM_PROMPT_TOKEN_BUDGET * 0.6)]) {
+            const plan = this.planPrompt(prior, content, budget);
+            if (!plan.fits) throw Object.assign(new Error(MESSAGE_TOO_LONG), { name: 'MessageTooLong' });
+            // Nothing more to drop: a second attempt would be the same request.
+            if (sent && plan.messages.length === sent.length) break;
+            sent = plan.messages;
+            try {
+                return await engine.chat(sent, onDelta);
+            } catch (error) {
+                if (stale() || classifyError(error).kind !== 'context') throw error;
+                lastError = error;
+            }
+        }
+        throw lastError;
+    }
+
+    /**
+     * Record how a reply ended.
+     * @param {ChatMessage} reply
+     * @param {{ finishReason?: string|null, keepChars?: number }|undefined} result
+     */
+    finishReply(reply, result) {
+        const reason = result?.finishReason || 'stop';
+        reply.finishReason = /** @type {FinishReason} */ (reason);
+        if (reason === 'abort') {
+            reply.stopped = true;
+        } else if (reason === 'loop') {
+            // The repeats were streamed before they were recognised; keep the first.
+            if (typeof result?.keepChars === 'number') {
+                reply.content = reply.content.slice(0, result.keepChars).trimEnd();
+            }
+            reply.notice = LOOP_NOTICE;
+            this.log('WebLLM reply stopped: it was repeating itself.');
+        } else if (reason === 'length') {
+            reply.notice = LENGTH_NOTICE;
+        }
+    }
+
     /** @param {string} text */
     async send(text) {
         const content = `${text || ''}`.trim();
         if (!content || this.state.status !== 'ready' || this.state.generating || !this.engine) return false;
         const epoch = this.epoch;
         const engine = this.engine;
+        const stale = () => epoch !== this.epoch;
+        const prior = this.state.messages;
 
         /** @type {ChatMessage} */
-        const user = { id: this.nextMessageId++, role: 'user', content, pending: false, error: null, stopped: false };
+        const user = {
+            id: this.nextMessageId++,
+            role: 'user',
+            content,
+            pending: false,
+            error: null,
+            stopped: false,
+            finishReason: null,
+            notice: null
+        };
         /** @type {ChatMessage} */
         const reply = {
             id: this.nextMessageId++,
@@ -352,32 +448,32 @@ export class WebLLMController {
             content: '',
             pending: true,
             error: null,
-            stopped: false
+            stopped: false,
+            finishReason: null,
+            notice: null
         };
 
-        // The model sees only finished turns, never an error or a half reply.
-        const history = trimHistory([
-            { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
-            ...this.state.messages
-                .filter((message) => !message.error && !message.pending && message.content)
-                .map(({ role, content: body }) => ({ role, content: body })),
-            { role: 'user', content }
-        ]);
-
-        this.update({ messages: [...this.state.messages, user, reply], generating: true }, { type: 'messages' });
+        this.update({ messages: [...prior, user, reply], generating: true }, { type: 'messages' });
 
         try {
-            const result = await engine.chat(history, (delta) => {
-                if (epoch !== this.epoch) return;
-                reply.content += delta;
-                this.onChange(this.state, { type: 'delta', messageId: reply.id });
-            });
-            if (epoch !== this.epoch) return false;
-            if (result?.finishReason === 'abort') reply.stopped = true;
+            const result = await this.generate(
+                engine,
+                prior,
+                content,
+                (delta) => {
+                    if (stale()) return;
+                    reply.content += delta;
+                    this.onChange(this.state, { type: 'delta', messageId: reply.id });
+                },
+                stale
+            );
+            if (stale()) return false;
+            this.finishReply(reply, result);
         } catch (error) {
-            if (epoch !== this.epoch) return false;
+            if (stale()) return false;
             const classified = classifyError(error);
-            reply.error = classified.message;
+            reply.finishReason = 'error';
+            reply.error = error?.name === 'MessageTooLong' ? error.message : classified.message;
             this.log(`WebLLM generation failed: ${classified.detail}`);
             // A crashed worker takes the model with it: back to a reload.
             if (classified.kind === 'resources' || error?.name === 'WorkerCrashed') {
@@ -385,7 +481,7 @@ export class WebLLMController {
                 this.update({ status: 'error', error: classified });
             }
         } finally {
-            if (epoch === this.epoch) {
+            if (!stale()) {
                 reply.pending = false;
                 this.update({ generating: false }, { type: 'messages' });
             }
