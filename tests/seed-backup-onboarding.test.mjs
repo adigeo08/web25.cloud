@@ -100,8 +100,11 @@ function unlockedState(overrides = {}) {
 
 let dom;
 let previousLocalStorage;
+let previousButton;
 test.beforeEach(() => {
     dom = installOnboardingDom();
+    previousButton = globalThis.HTMLButtonElement;
+    globalThis.HTMLButtonElement = globalThis.HTMLElement;
     previousLocalStorage = globalThis.localStorage;
     globalThis.localStorage = memoryStorage();
 });
@@ -109,6 +112,7 @@ test.afterEach(async () => {
     const screen = await import('../src/ui/auth/SeedPhraseScreen.js');
     screen.hideSeedPhrase();
     dom.restore();
+    globalThis.HTMLButtonElement = previousButton;
     globalThis.localStorage = previousLocalStorage;
 });
 
@@ -225,35 +229,273 @@ test('the downloaded file carries the phrase as plain text', async () => {
     assert.match(screen.recoveryFileText(PHRASE), new RegExp(`\\n${PHRASE}\\n`));
 });
 
-test('the controller holds the identity back until the backup is confirmed', async () => {
+/**
+ * The signing worker and passkey vault, in memory: a stored record, a worker
+ * that is unlocked or not, and the one phrase that belongs to the record.
+ */
+function fakeWallet({ failAfterPersist = false } = {}) {
+    const wallet = {
+        record: null,
+        unlocked: false,
+        phrase: null,
+        created: 0,
+        unlockAttempts: 0,
+        async getLocalWalletStatus() {
+            return {
+                exists: Boolean(wallet.record),
+                address: wallet.record?.address || null,
+                unlocked: wallet.unlocked,
+                needsMigration: false,
+                passkeyProtected: true
+            };
+        },
+        async getLocalWalletRecord() {
+            return wallet.record;
+        },
+        async getLocalWalletPublicKey() {
+            return wallet.unlocked ? '02ab' : null;
+        },
+        async getLocalWalletNostrIdentity() {
+            return wallet.unlocked ? { nostrPublicKey: 'ab'.repeat(32), npub: 'npub1test' } : null;
+        },
+        async clearLocalWalletSession() {
+            wallet.unlocked = false;
+        },
+        async registerLocalWallet() {
+            if (wallet.record) throw new Error('A local wallet already exists on this device.');
+            wallet.created += 1;
+            wallet.phrase = PHRASE;
+            wallet.record = { address: '0xabc' };
+            if (failAfterPersist) throw new Error('Worker hand-off failed.');
+            wallet.unlocked = true;
+            return { address: '0xabc', seedPhrase: PHRASE };
+        },
+        async unlockLocalWallet() {
+            wallet.unlockAttempts += 1;
+            wallet.unlocked = true;
+            return { address: wallet.record.address };
+        },
+        async seedPhraseMatchesLocalWallet(seedPhrase) {
+            return Boolean(wallet.record) && seedPhrase.trim() === wallet.phrase;
+        },
+        async registerLocalWalletFromSeed() {
+            throw new Error('A local wallet already exists. Delete it first before recovering from a seed phrase.');
+        },
+        async removeLocalWallet() {
+            wallet.record = null;
+            wallet.unlocked = false;
+        }
+    };
+    return wallet;
+}
+
+const quietToast = () => {
+    const messages = [];
+    const record = (kind) => (message) => messages.push({ kind, message });
+    return {
+        messages,
+        info: record('info'),
+        warning: record('warning'),
+        error: record('error'),
+        success: record('success')
+    };
+};
+
+/** A controller over the fake wallet, rendering into the real Lifecycle gate. */
+async function onboardingSession(wallet) {
     const { default: AuthController } = await import('../src/auth/AuthController.js');
-    const { readSeedBackupPending, markSeedBackupPending } = await import('../src/auth/SeedBackupState.js');
+    const toast = quietToast();
+    const controller = new AuthController(toast, { wallet });
+    controller.render = () => {};
+    const peerweb = await context(controller.state);
+    peerweb.authController = controller;
+    controller.onChange((state) => peerweb.setupAuthAwareUi.call(peerweb, state));
+    return { controller, peerweb, toast };
+}
+
+/** Nothing of the signed-in app is reachable. */
+async function assertSignedOut(controller, peerweb) {
+    await flush();
+    assert.equal(peerweb.isAuthenticatedIdentity.call(peerweb), false);
+    assert.equal(controller.getActiveIdentity().address, null);
+    assert.equal(dom.nodes.authTab.style.display, 'none');
+    assert.equal(dom.nodes.channelsTab.style.display, 'none');
+    assert.equal(dom.nodes.pagesTab.style.display, 'none');
+    assert.equal(dom.nodes.deployPanel.classList.contains('hidden'), true);
+    assert.equal(peerweb.calls.gofile, 0, 'GoFile is not provisioned');
+    assert.equal(peerweb.calls.nostr, 0, 'the Nostr inbox is not started');
+}
+
+test('the controller holds the identity back until the backup is confirmed', async () => {
+    const wallet = fakeWallet();
+    const { controller, peerweb } = await onboardingSession(wallet);
+    const { readSeedBackupPending } = await import('../src/auth/SeedBackupState.js');
     const screen = await import('../src/ui/auth/SeedPhraseScreen.js');
 
-    const controller = new AuthController({ info() {}, warning() {}, error() {}, success() {} });
-    controller.render = () => {};
-    const seen = [];
-    controller.onChange((state) => seen.push(state.seedBackupPending));
-
-    Object.assign(controller.state, unlockedState(), { status: 'local_unlocked', publicKey: '02ab' });
-    markSeedBackupPending();
-    screen.showSeedPhrase(PHRASE);
-
-    // No identity to act with while the step is open.
-    assert.equal(controller.getActiveIdentity().address, null);
+    await controller.registerLocal();
+    assert.equal(controller.state.seedBackupPending, true);
+    assert.equal(screen.isSeedPhraseShown(), true);
+    assert.equal(readSeedBackupPending(), true);
+    await assertSignedOut(controller, peerweb);
 
     // A second Create Wallet press is ignored rather than making a new wallet.
     await controller.registerLocal();
-    assert.equal(screen.isSeedPhraseShown(), true);
+    assert.equal(wallet.created, 1);
 
-    controller.confirmSeedBackup();
+    assert.equal(await controller.confirmSeedBackup(), true);
     assert.equal(controller.state.seedBackupPending, false);
     assert.equal(screen.isSeedPhraseShown(), false);
     assert.equal(readSeedBackupPending(), false);
     assert.equal(controller.getActiveIdentity().address, '0xabc');
-    assert.deepEqual(seen, [false]);
+    await flush();
+    assert.equal(peerweb.isAuthenticatedIdentity.call(peerweb), true);
+    assert.equal(peerweb.calls.gofile, 1);
 
     // Confirming twice is a no-op.
-    controller.confirmSeedBackup();
-    assert.deepEqual(seen, [false]);
+    assert.equal(await controller.confirmSeedBackup(), false);
+});
+
+test('create → refresh → unlock without confirming stays out of the app', async () => {
+    const wallet = fakeWallet();
+    const first = await onboardingSession(wallet);
+    await first.controller.registerLocal();
+
+    // The page reloads: the worker starts locked and the phrase is gone.
+    const screen = await import('../src/ui/auth/SeedPhraseScreen.js');
+    screen.hideSeedPhrase();
+    wallet.unlocked = false;
+    const { controller, peerweb, toast } = await onboardingSession(wallet);
+    await controller.refreshLocalWalletState();
+    controller.notify();
+
+    assert.equal(controller.state.seedBackupInterrupted, true);
+    assert.equal(dom.nodes.interrupted.classList.contains('hidden'), false);
+    assert.equal(dom.nodes.wall.classList.contains('hidden'), false);
+
+    assert.equal(await controller.unlockLocal(), false);
+    assert.equal(wallet.unlockAttempts, 0, 'no passkey ceremony, no session');
+    assert.equal(wallet.unlocked, false);
+    assert.ok(toast.messages.some(({ kind }) => kind === 'warning'));
+    await assertSignedOut(controller, peerweb);
+
+    // A worker that is somehow unlocked is locked again on the next read.
+    wallet.unlocked = true;
+    await controller.refreshLocalWalletState();
+    controller.notify();
+    assert.equal(wallet.unlocked, false);
+    await assertSignedOut(controller, peerweb);
+
+    // The wrong phrase proves nothing.
+    assert.equal(await controller.recoverLocal('wrong words'), false);
+    await assertSignedOut(controller, peerweb);
+
+    // The original phrase does: the flag clears and the wallet unlocks.
+    assert.equal(await controller.recoverLocal(PHRASE), true);
+    const { readSeedBackupPending } = await import('../src/auth/SeedBackupState.js');
+    assert.equal(readSeedBackupPending(), false);
+    assert.equal(controller.state.seedBackupInterrupted, false);
+    await flush();
+    assert.equal(peerweb.isAuthenticatedIdentity.call(peerweb), true);
+    assert.equal(peerweb.calls.gofile, 1);
+});
+
+test('wallet persisted → provisioning failure → reload keeps the backup warning', async () => {
+    const wallet = fakeWallet({ failAfterPersist: true });
+    const { controller, peerweb, toast } = await onboardingSession(wallet);
+    const { readSeedBackupPending } = await import('../src/auth/SeedBackupState.js');
+    const screen = await import('../src/ui/auth/SeedPhraseScreen.js');
+
+    await controller.registerLocal();
+    assert.ok(toast.messages.some(({ kind }) => kind === 'error'));
+    assert.equal(readSeedBackupPending(), true, 'a saved wallet keeps its unconfirmed flag');
+    assert.equal(screen.isSeedPhraseShown(), false);
+    assert.equal(controller.state.seedBackupInterrupted, true);
+    await assertSignedOut(controller, peerweb);
+
+    // No replacement phrase over the saved wallet.
+    await controller.registerLocal();
+    assert.equal(wallet.created, 1);
+
+    // After a reload the notice is still there, with its reset.
+    const reloaded = await onboardingSession(wallet);
+    await reloaded.controller.refreshLocalWalletState();
+    reloaded.controller.notify();
+    assert.equal(reloaded.controller.state.seedBackupInterrupted, true);
+    assert.equal(dom.nodes.interrupted.classList.contains('hidden'), false);
+    await assertSignedOut(reloaded.controller, reloaded.peerweb);
+
+    // Delete & Start Over clears it.
+    globalThis.window.confirm = () => true;
+    await reloaded.controller.resetUnconfirmedWallet();
+    assert.equal(wallet.record, null);
+    assert.equal(readSeedBackupPending(), false);
+});
+
+test('a failure before anything is saved forgets the flag', async () => {
+    const wallet = fakeWallet();
+    wallet.registerLocalWallet = async () => {
+        throw new Error('Passkey ceremony cancelled.');
+    };
+    const { controller } = await onboardingSession(wallet);
+    const { readSeedBackupPending } = await import('../src/auth/SeedBackupState.js');
+
+    await controller.registerLocal();
+    assert.equal(readSeedBackupPending(), false);
+    assert.equal(controller.state.seedBackupInterrupted, false);
+});
+
+test('create → backup screen → worker timeout → confirmation does not sign in', async () => {
+    const wallet = fakeWallet();
+    const { controller, peerweb, toast } = await onboardingSession(wallet);
+    const { readSeedBackupPending } = await import('../src/auth/SeedBackupState.js');
+    const screen = await import('../src/ui/auth/SeedPhraseScreen.js');
+
+    await controller.registerLocal();
+    assert.equal(screen.isSeedPhraseShown(), true);
+
+    // The TTL expires with the screen open, before the lock event lands.
+    wallet.unlocked = false;
+    assert.equal(await controller.confirmSeedBackup(), false);
+    assert.equal(screen.isSeedPhraseShown(), false);
+    assert.equal(dom.nodes.words.children.length, 0);
+    assert.equal(controller.state.seedBackupPending, false);
+    assert.equal(controller.state.seedBackupInterrupted, true);
+    assert.equal(readSeedBackupPending(), true);
+    assert.ok(toast.messages.some(({ kind }) => kind === 'warning'));
+    await assertSignedOut(controller, peerweb);
+    assert.equal(dom.nodes.interrupted.classList.contains('hidden'), false);
+
+    // Unlocking afterwards still does not get around the backup.
+    assert.equal(await controller.unlockLocal(), false);
+    await assertSignedOut(controller, peerweb);
+});
+
+test('the worker lock event itself ends the backup step', async () => {
+    const wallet = fakeWallet();
+    const { controller, peerweb } = await onboardingSession(wallet);
+    const screen = await import('../src/ui/auth/SeedPhraseScreen.js');
+
+    await controller.registerLocal();
+    wallet.unlocked = false;
+    await controller.handleWorkerLock();
+
+    assert.equal(screen.isSeedPhraseShown(), false);
+    assert.equal(controller.state.seedBackupInterrupted, true);
+    assert.equal(controller.state.resumeHint?.wasUnlocked, undefined, 'nobody was signed in to be signed out');
+    assert.equal(await controller.confirmSeedBackup(), false);
+    await assertSignedOut(controller, peerweb);
+});
+
+test('a wallet with a confirmed backup unlocks as before', async () => {
+    const wallet = fakeWallet();
+    wallet.record = { address: '0xabc' };
+    const { controller, peerweb } = await onboardingSession(wallet);
+    await controller.refreshLocalWalletState();
+
+    assert.equal(controller.state.seedBackupInterrupted, false);
+    assert.equal(await controller.unlockLocal(), true);
+    assert.equal(wallet.unlockAttempts, 1);
+    await flush();
+    assert.equal(peerweb.isAuthenticatedIdentity.call(peerweb), true);
+    assert.equal(peerweb.calls.gofile, 1);
 });

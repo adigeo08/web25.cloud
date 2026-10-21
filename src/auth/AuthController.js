@@ -11,7 +11,8 @@ import {
     registerLocalWallet,
     removeLocalWallet,
     unlockLocalWallet,
-    registerLocalWalletFromSeed
+    registerLocalWalletFromSeed,
+    seedPhraseMatchesLocalWallet
 } from './LocalWalletService.js';
 import { addAlternatePasskey, getLocalWalletRecord, passkeySupported } from './SecureKeyStore.js';
 import {
@@ -32,12 +33,32 @@ import { bindRecoverWallet } from '../ui/auth/RecoverWalletModal.js';
 import { bindSeedPhraseScreen, hideSeedPhrase, showSeedPhrase } from '../ui/auth/SeedPhraseScreen.js';
 import { clearSeedBackupPending, markSeedBackupPending, readSeedBackupPending } from './SeedBackupState.js';
 
+/** The wallet operations the controller drives; replaceable in tests. */
+const LOCAL_WALLET = {
+    clearLocalWalletSession,
+    getLocalWalletNostrIdentity,
+    getLocalWalletPublicKey,
+    getLocalWalletRecord,
+    getLocalWalletStatus,
+    registerLocalWallet,
+    registerLocalWalletFromSeed,
+    removeLocalWallet,
+    seedPhraseMatchesLocalWallet,
+    unlockLocalWallet
+};
+
 export default class AuthController {
+    /**
+     * @param {any} toast
+     * @param {{ onDisconnect?: Function, wallet?: Partial<typeof LOCAL_WALLET> }} [options] `wallet`
+     *   stands in for the signing worker and passkey vault in tests
+     */
     constructor(toast, options = {}) {
         this.toast = toast;
         this.state = createAuthState();
         this.listeners = new Set();
         this.onDisconnect = typeof options.onDisconnect === 'function' ? options.onDisconnect : null;
+        this.wallet = { ...LOCAL_WALLET, ...(options.wallet || {}) };
     }
 
     async init() {
@@ -108,23 +129,39 @@ export default class AuthController {
 
     /** Worker-side TTL expiry or crash: drop back to the locked UI state. */
     async handleWorkerLock() {
-        // The session ended without the user asking, so the unlock screen says
-        // so — the same sentence a reload earns. This one is about the page
-        // that is open, so it is set here rather than read back from a flag
-        // that has already been consumed.
-        this.state.resumeHint = { ...(this.state.resumeHint || { tab: '', savedAt: Date.now() }), wasUnlocked: true };
+        if (this.state.seedBackupPending) {
+            // Nobody was signed in yet, so there is no session to announce:
+            // the backup itself is what was interrupted.
+            this.abandonSeedBackup();
+        } else {
+            // The session ended without the user asking, so the unlock screen
+            // says so — the same sentence a reload earns. This one is about the
+            // page that is open, so it is set here rather than read back from a
+            // flag that has already been consumed.
+            this.state.resumeHint = { ...(this.state.resumeHint || { tab: '', savedAt: Date.now() }), wasUnlocked: true };
+        }
         await this.refreshLocalWalletState();
         this.render();
         this.notify();
     }
 
+    /**
+     * The backup step ended before it was confirmed (the worker locked under
+     * it). The phrase leaves the page; the persisted flag stays, so the wall
+     * shows the interrupted-onboarding notice and its recover/reset paths.
+     */
+    abandonSeedBackup() {
+        hideSeedPhrase();
+        this.state.seedBackupPending = false;
+        this.toast.warning(
+            'The wallet locked before your recovery phrase was confirmed. Recover it with the words you saved, or delete it and start over.',
+            'Backup not confirmed',
+            9000
+        );
+    }
+
     async refreshLocalWalletState() {
-        const localWallet = await getLocalWalletStatus();
-        this.state.localWalletExists = localWallet.exists;
-        this.state.localWalletUnlocked = localWallet.unlocked;
-        this.state.passkeyProtected = Boolean(localWallet.passkeyProtected);
-        this.state.publicKey = localWallet.unlocked ? await getLocalWalletPublicKey() : null;
-        await this.refreshNostrIdentity(localWallet.unlocked);
+        const localWallet = await this.wallet.getLocalWalletStatus();
 
         // A backup flag without a wallet is left over from a creation that
         // never finished, or a wallet deleted elsewhere: nothing to warn about.
@@ -132,6 +169,18 @@ export default class AuthController {
         this.state.seedBackupInterrupted = Boolean(
             localWallet.exists && !this.state.seedBackupPending && readSeedBackupPending()
         );
+        // An unconfirmed wallet never keeps a live session outside its backup
+        // step, however the worker came to be unlocked.
+        if (this.state.seedBackupInterrupted && localWallet.unlocked) {
+            await this.wallet.clearLocalWalletSession();
+            localWallet.unlocked = false;
+        }
+
+        this.state.localWalletExists = localWallet.exists;
+        this.state.localWalletUnlocked = localWallet.unlocked;
+        this.state.passkeyProtected = Boolean(localWallet.passkeyProtected);
+        this.state.publicKey = localWallet.unlocked ? await this.wallet.getLocalWalletPublicKey() : null;
+        await this.refreshNostrIdentity(localWallet.unlocked);
 
         if (localWallet.exists && localWallet.address) {
             this.state.identityType = 'local';
@@ -170,7 +219,7 @@ export default class AuthController {
             this.state.npub = null;
             return;
         }
-        const nostrIdentity = await getLocalWalletNostrIdentity();
+        const nostrIdentity = await this.wallet.getLocalWalletNostrIdentity();
         this.state.nostrPublicKey = nostrIdentity?.nostrPublicKey || null;
         this.state.npub = nostrIdentity?.npub || null;
     }
@@ -228,8 +277,8 @@ export default class AuthController {
         // creation still knows the phrase was never acknowledged.
         markSeedBackupPending();
         try {
-            const result = await registerLocalWallet();
-            this.state.publicKey = await getLocalWalletPublicKey();
+            const result = await this.wallet.registerLocalWallet();
+            this.state.publicKey = await this.wallet.getLocalWalletPublicKey();
             await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
             this.state.address = result.address;
@@ -243,23 +292,70 @@ export default class AuthController {
             this.render();
             this.notify();
         } catch (err) {
-            clearSeedBackupPending();
+            // Only a wallet that never reached storage may forget the flag. One
+            // saved before the failure has a phrase nobody saw, so it keeps the
+            // interrupted-onboarding notice and its recover/reset paths.
+            let persisted = true;
+            try {
+                persisted = Boolean(await this.wallet.getLocalWalletRecord());
+            } catch (_) {
+                // Unknown: keep the flag; a later read without a wallet clears it.
+            }
+            if (!persisted) clearSeedBackupPending();
             this.toast.error(err.message, 'Registration failed');
+            if (persisted) {
+                try {
+                    await this.refreshLocalWalletState();
+                } catch (_) {
+                    this.state.localWalletExists = true;
+                    this.state.seedBackupInterrupted = true;
+                }
+                this.render();
+                this.notify();
+            }
         } finally {
             this.registering = false;
             if (registerBtn instanceof HTMLButtonElement) registerBtn.disabled = false;
         }
     }
 
-    /** The user has saved the phrase: finish onboarding and sign them in. */
-    confirmSeedBackup() {
-        if (!this.state.seedBackupPending) return;
-        hideSeedPhrase();
-        clearSeedBackupPending();
-        this.state.seedBackupPending = false;
-        if (this.state.localWalletUnlocked) this.rememberUnlockedSession();
-        this.render();
-        this.notify();
+    /**
+     * The user has saved the phrase: finish onboarding and sign them in — but
+     * only into a session that still exists. A worker that locked under the
+     * backup screen makes this an interrupted onboarding instead.
+     * @returns {Promise<boolean>} whether onboarding completed
+     */
+    async confirmSeedBackup() {
+        if (!this.state.seedBackupPending || this.confirming) return false;
+        this.confirming = true;
+        try {
+            let unlocked = false;
+            try {
+                unlocked = Boolean((await this.wallet.getLocalWalletStatus()).unlocked);
+            } catch (_) {
+                unlocked = false;
+            }
+            if (!this.state.seedBackupPending) return false;
+
+            if (!unlocked) {
+                this.abandonSeedBackup();
+                await this.refreshLocalWalletState();
+                this.render();
+                this.notify();
+                return false;
+            }
+
+            hideSeedPhrase();
+            clearSeedBackupPending();
+            this.state.seedBackupPending = false;
+            this.state.seedBackupInterrupted = false;
+            this.rememberUnlockedSession();
+            this.render();
+            this.notify();
+            return true;
+        } finally {
+            this.confirming = false;
+        }
     }
 
     /**
@@ -268,17 +364,18 @@ export default class AuthController {
      */
     async resetUnconfirmedWallet() {
         await this.deleteLocalWallet(
-            'Delete this wallet and start over? Its recovery phrase was never confirmed and cannot be shown again. If you did save it, cancel and use Unlock or Recover instead.'
+            'Delete this wallet and start over? Its recovery phrase was never confirmed and cannot be shown again. If you did save it, cancel and use Recover Wallet instead.'
         );
     }
 
     async recoverLocal(seedPhrase) {
+        if (this.state.seedBackupInterrupted) return this.confirmInterruptedBackup(seedPhrase);
         try {
-            const result = await registerLocalWalletFromSeed(seedPhrase);
+            const result = await this.wallet.registerLocalWalletFromSeed(seedPhrase);
             // Recovering from the words is proof they were saved.
             clearSeedBackupPending();
             this.state.seedBackupInterrupted = false;
-            this.state.publicKey = await getLocalWalletPublicKey();
+            this.state.publicKey = await this.wallet.getLocalWalletPublicKey();
             await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
             this.state.address = result.address;
@@ -297,10 +394,47 @@ export default class AuthController {
         }
     }
 
-    async unlockLocal() {
+    /**
+     * Recover for a wallet whose backup was never confirmed: the phrase is
+     * checked against the stored wallet, which proves it was saved, and the
+     * wallet then unlocks as usual. Nothing is re-provisioned.
+     * @param {string} seedPhrase
+     */
+    async confirmInterruptedBackup(seedPhrase) {
         try {
-            const result = await unlockLocalWallet();
-            this.state.publicKey = await getLocalWalletPublicKey();
+            const matches = await this.wallet.seedPhraseMatchesLocalWallet(seedPhrase);
+            if (!matches) {
+                throw new Error(
+                    'This phrase does not belong to the wallet on this device. To use a different wallet, delete this one first.'
+                );
+            }
+        } catch (err) {
+            this.toast.error(err.message, 'Recovery failed');
+            return false;
+        }
+        clearSeedBackupPending();
+        this.state.seedBackupInterrupted = false;
+        this.toast.success('Recovery phrase verified. Unlock with your passkey to continue.', 'Backup confirmed');
+        return this.unlockLocal();
+    }
+
+    async unlockLocal() {
+        // Unlocking is not a way around the backup step: a wallet whose phrase
+        // was never confirmed stays locked until it is recovered or reset.
+        if (readSeedBackupPending() && !this.state.seedBackupPending) {
+            this.state.seedBackupInterrupted = true;
+            this.render();
+            this.notify();
+            this.toast.warning(
+                'This wallet\'s recovery phrase was never confirmed. Use Recover Wallet with the words you saved, or delete it and start over.',
+                'Backup not confirmed',
+                9000
+            );
+            return false;
+        }
+        try {
+            const result = await this.wallet.unlockLocalWallet();
+            this.state.publicKey = await this.wallet.getLocalWalletPublicKey();
             await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
             this.state.address = result.address;
@@ -309,14 +443,16 @@ export default class AuthController {
             this.state.localWalletUnlocked = true;
             this.render();
             this.notify();
+            return true;
         } catch (err) {
             this.toast.error(err.message, 'Unlock failed');
+            return false;
         }
     }
 
     async addAlternatePasskey() {
         try {
-            const record = await getLocalWalletRecord();
+            const record = await this.wallet.getLocalWalletRecord();
             if (!record?.credentialId) {
                 throw new Error('No passkey identity found for the current wallet.');
             }
@@ -344,7 +480,7 @@ export default class AuthController {
             const result = await registerLocalWalletFromSeed(seedPhrase);
             clearSeedBackupPending();
             this.state.seedBackupInterrupted = false;
-            this.state.publicKey = await getLocalWalletPublicKey();
+            this.state.publicKey = await this.wallet.getLocalWalletPublicKey();
             await this.refreshNostrIdentity(true);
             input.value = '';
             this.state.identityType = 'local';
@@ -391,7 +527,7 @@ export default class AuthController {
         try {
             const address = this.state.address;
             markSessionLocked();
-            await removeLocalWallet();
+            await this.wallet.removeLocalWallet();
             clearSeedBackupPending();
             // The wallet is gone, so its Nostr reachability preference is too.
             clearNostrIdentityPreference(address);
@@ -405,7 +541,7 @@ export default class AuthController {
 
     getActiveIdentity() {
         // A wallet still on its backup step has no identity to act with yet.
-        if (this.state.seedBackupPending) {
+        if (this.state.seedBackupPending || this.state.seedBackupInterrupted) {
             return {
                 identityType: null,
                 address: null,

@@ -2722,7 +2722,13 @@ export function isAuthenticatedIdentity() {
  * @param {any} state
  */
 function isSignedIn(state) {
-    return Boolean(state?.localWalletUnlocked && state?.address && state?.identityType && !state?.seedBackupPending);
+    return Boolean(
+        state?.localWalletUnlocked &&
+        state?.address &&
+        state?.identityType &&
+        !state?.seedBackupPending &&
+        !state?.seedBackupInterrupted
+    );
 }
 
 /**
@@ -2854,7 +2860,9 @@ export function setupAuthAwareUi(state) {
 
     const unlockBtn = document.getElementById('unlock-wallet-btn');
     const registerBtn = document.getElementById('register-wallet-btn');
-    if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
+    // An unconfirmed backup is recovered or reset, never simply unlocked.
+    if (unlockBtn)
+        unlockBtn.classList.toggle('hidden', !state.localWalletExists || Boolean(state.seedBackupInterrupted));
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
 
     // The DM panel shows the Nostr address only. All of it is public material

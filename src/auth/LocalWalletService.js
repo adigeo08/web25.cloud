@@ -126,6 +126,11 @@ async function provisionWallet(mnemonic) {
 }
 
 export async function registerLocalWallet() {
+    // Never mint a second phrase over a wallet that already exists: its own
+    // phrase is the only one that can recover it.
+    if (await getLocalWalletRecord()) {
+        throw new Error('A local wallet already exists on this device.');
+    }
     const mnemonic = await generateBip39Mnemonic();
     const { address } = await provisionWallet(mnemonic);
     return { address, seedPhrase: mnemonic };
@@ -145,6 +150,33 @@ export async function registerLocalWalletFromSeed(seedPhrase) {
     }
 
     return provisionWallet(normalized);
+}
+
+/**
+ * Whether `seedPhrase` is the phrase of the wallet already stored here.
+ *
+ * Proof that an unconfirmed backup was in fact saved: the phrase is derived
+ * and compared by address, and nothing is provisioned or replaced.
+ * @param {string} seedPhrase
+ * @returns {Promise<boolean>}
+ */
+export async function seedPhraseMatchesLocalWallet(seedPhrase) {
+    const record = await getLocalWalletRecord();
+    if (!record?.address) return false;
+
+    const normalized = seedPhrase.trim().toLowerCase().split(/\s+/).join(' ');
+    if (!(await validateBip39Mnemonic(normalized))) {
+        throw new Error('Invalid seed phrase. Please verify all 12 words and order.');
+    }
+
+    const holder = { value: /** @type {string | null} */ (await derivePrivateKeyFromMnemonic(normalized)) };
+    try {
+        const viemAccounts = await loadViemAccounts();
+        const address = viemAccounts.privateKeyToAccount(/** @type {any} */ (holder.value)).address;
+        return address.toLowerCase() === `${record.address}`.toLowerCase();
+    } finally {
+        holder.value = null;
+    }
 }
 
 export async function unlockLocalWallet() {
