@@ -762,6 +762,7 @@ src/
 │       ├── SeedingSessions.js
 │       └── TorrentLoader.js
 ├── ui/
+│   ├── about/
 │   ├── auth/
 │   ├── browse/
 │   ├── pages/
@@ -774,7 +775,41 @@ src/
     ├── TorrentPublishService.js
     ├── TorrentSignaturePayload.js
     └── SignedTorrentProtocol.js
+
+content/about/        # the six About "Deep dive" chapters, one Markdown file each
+scripts/              # locally bundled libraries: DOMPurify, WebTorrent, marked
 ```
+
+### About page chapters (Markdown)
+
+The six chapters under **About → Deep dive** are not in `index.html`. Each one is a Markdown file in
+`content/about/` (`identity`, `publishing`, `messenger`, `consent`, `nostr`, `security`), and
+`index.html` holds only six empty `<article class="about-card lp-reveal" id="about-…" data-about-src="…">`
+frames plus the chapter index (`<a href="#about-…">`). `src/ui/about/AboutChapters.js` fetches the files,
+renders them with the bundled [`marked`](https://github.com/markedjs/marked) (`scripts/marked.esm.js`, no CDN),
+sanitizes the result with the bundled DOMPurify, and puts it straight into the article so the
+`.about-card > h3 / > p / > .feature-grid` styles apply unchanged. A chapter that fails to load shows its
+name, a link to its Markdown source and a *Try again* button, and the other five are unaffected.
+
+Writing a chapter:
+
+- `# Title` becomes the card's `<h3>` and `##` its `<h4>`.
+- A feature grid is a `::: feature-grid` block holding a bullet list:
+
+  ```md
+  ::: feature-grid
+  - 🔑 One feature, with `inline code` and **bold**
+  - 🧊 Another
+  :::
+  ```
+
+- Links to `http(s)` URLs open in a new tab with `rel="noopener noreferrer"`.
+- Raw HTML is allowed but sanitized (HTML only; no scripts, forms, styles or event handlers).
+
+To add a chapter, add the Markdown file, an article frame and an index link in `index.html` (the ids must
+match: `about-<name>`). `tests/about-chapters-markdown.test.mjs` pins the six current chapters to
+`tests/fixtures/about-chapters.legacy.html`, the markup they replaced; when you intentionally change a
+chapter's wording, update the matching `<article>` in that fixture in the same commit.
 
 ---
 

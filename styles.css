@@ -4354,6 +4354,14 @@ li[data-state='active'] .dm-connect-text small {
     font-size: 0.81rem;
 }
 
+.about-card > .about-card-status {
+    color: var(--muted);
+}
+
+.about-card > .about-card-retry {
+    align-self: flex-start;
+}
+
 .about-card > :last-child {
     margin-bottom: 0;
 }
@@ -5165,6 +5173,10 @@ li[data-state='active'] .dm-connect-text small {
 
 /* Widget: sticky showcase rail */
 .lp-showcase {
+    /* Clearance below the sticky tab strip: where the rail pins, and where a
+       card lands when the chapter index scrolls to it. */
+    --showcase-top: 5rem;
+
     display: grid;
     grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
     align-items: start;
@@ -5174,7 +5186,7 @@ li[data-state='active'] .dm-connect-text small {
 
 .lp-showcase-rail {
     position: sticky;
-    top: 5rem;
+    top: var(--showcase-top);
     padding: 1.25rem;
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
@@ -5219,9 +5231,39 @@ li[data-state='active'] .dm-connect-text small {
     font-weight: 600;
 }
 
+/* The chapter name is a link to its card. The negative margin cancels the
+   padding, so the link fills the whole row as a tap target without moving the
+   row. */
+.lp-showcase-index a {
+    flex: 1 1 auto;
+    margin: -0.4rem 0;
+    padding: 0.4rem 0;
+    border-radius: var(--r-sm);
+    color: inherit;
+}
+
+.lp-showcase-index a:hover,
+.lp-showcase-index a:focus-visible {
+    color: var(--text);
+    text-decoration: none;
+}
+
 .lp-showcase-cards {
     display: grid;
     gap: 0.85rem;
+}
+
+/* Chapter cards are scroll targets: stop below the sticky tab strip. */
+.lp-showcase-cards > .about-card {
+    scroll-margin-top: var(--showcase-top);
+}
+
+/* Smooth chapter navigation, on the About tab only so that scrolling anywhere
+   else in the app keeps behaving as it did. */
+@media (prefers-reduced-motion: no-preference) {
+    html:has(#tab-about.active) {
+        scroll-behavior: smooth;
+    }
 }
 
 /* Scroll reveal, where the browser can drive it off the scroll position
@@ -5235,6 +5277,14 @@ li[data-state='active'] .dm-connect-text small {
                scroll any further (a short page, a very tall window) is then
                never left sitting at zero opacity. */
             animation-range: entry 0% entry 100%;
+        }
+
+        /* A card the visitor navigated to needs no reveal. Browsers aim a
+           scroll at an element's transformed box, and the reveal starts the
+           card 26px low, so the chapter index would land up to 26px short of
+           its scroll-margin — under the tab strip, for the first card. */
+        .lp-reveal:target {
+            animation: none;
         }
     }
 }
@@ -5268,6 +5318,14 @@ li[data-state='active'] .dm-connect-text small {
 
     .lp-showcase-rail {
         position: static;
+    }
+}
+
+/* Phone: the tab strip is collapsed behind the burger, so nothing is pinned
+   above a card that is scrolled to. */
+@media (max-width: 720px) {
+    .lp-showcase-cards > .about-card {
+        scroll-margin-top: 1rem;
     }
 }
 

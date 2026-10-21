@@ -62,6 +62,8 @@
         "peerweb.min.js",
         "peerweb-sw.js",
         "styles.css",
+        "content",
+        "scripts",
         "LICENSE",
         "README.md",
         "WARP.md",
