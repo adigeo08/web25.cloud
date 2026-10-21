@@ -146,7 +146,12 @@ async function conversationWith(peer) {
         'isDmBlocked',
         'dmRetentionFor',
         'setDmRetention',
-        'archiveDmMessage'
+        'archiveDmMessage',
+        'renderDmContactRows',
+        'isDmConversationOpenWith',
+        'isDmRoomOpenWith',
+        'dmRoomFor',
+        'dmGiftWrapSender'
     ]) {
         app[name] = lifecycle[name].bind(app);
     }

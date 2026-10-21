@@ -116,6 +116,11 @@ function generateHexKey(byteLength = 8) {
     return [...bytes].map((item) => item.toString(16).padStart(2, '0')).join('');
 }
 
+/** @param {string} key */
+function comparableKey(key) {
+    return `${key || ''}`.trim().toLowerCase().replace(/^0x/, '');
+}
+
 function verifySignalIdentity(signal, label = 'signal') {
     if (!signal?.publicKey || !signal?.evmAddress) {
         throw new Error(`Missing peer identity: ${label} must contain both publicKey and evmAddress.`);
@@ -158,6 +163,13 @@ export default class ChannelsService {
         this.listeners = new Set();
         this.identityAddress = 'anonymous';
         this.role = '';
+        /**
+         * True while the conversation is a saved contact's persistent room:
+         * the peer's keys come from the contact record, Nostr carries it from
+         * the first message, and WebRTC is an upgrade on top rather than the
+         * thing that makes it work.
+         */
+        this.persistentRoom = false;
         this.peerPublicKey = '';
         this.peerAddress = '';
         this._fileBuffers = {};
@@ -194,6 +206,15 @@ export default class ChannelsService {
     /** @returns {string} one of `DM_CONNECTION` */
     _deriveConnectionState() {
         if (this.dataChannel?.readyState === 'open') return DM_CONNECTION.CONNECTED_WEBRTC;
+
+        // A contact's room works over the relays from the moment it opens. A
+        // direct link being tried, failing or dropping changes the route, not
+        // whether the conversation works — so it never shows as connecting.
+        if (this.persistentRoom) {
+            return this.hasVerifiedPeerIdentity() && this.canUseNostrFallback
+                ? DM_CONNECTION.CONNECTED_NOSTR
+                : DM_CONNECTION.DISCONNECTED;
+        }
 
         switch (this.transport) {
             case DM_TRANSPORT.NOSTR:
@@ -341,6 +362,147 @@ export default class ChannelsService {
         }
     }
 
+    /**
+     * Is this signal from the peer the room is already bound to? A room's
+     * identity comes from the saved contact and is never replaced by one a
+     * signal brings along.
+     *
+     * @param {{ publicKey?: string|null, evmAddress?: string|null }} signal
+     */
+    _isCurrentPeer(signal) {
+        return (
+            comparableKey(signal?.publicKey || '') === comparableKey(this.peerPublicKey) &&
+            comparableKey(signal?.evmAddress || '') === comparableKey(this.peerAddress)
+        );
+    }
+
+    /**
+     * Open the persistent room with a saved contact.
+     *
+     * Nothing is negotiated: the contact record already holds their verified
+     * ECIES key and EVM address, which is everything a message needs — it is
+     * encrypted to that key and its signature is checked against it — so the
+     * conversation is usable over Nostr at once. A direct WebRTC link may be
+     * added later, while both sides have it open.
+     *
+     * @param {string} roomKey the persistent room both sides derive
+     * @param {{ eciesPublicKey: string, evmAddress: string }} peer from the saved contact
+     * @param {{ address?: string, evmAddress?: string }} identity
+     */
+    async openContactRoom(roomKey, peer, identity) {
+        const normalized = this.normalizeChannel(roomKey);
+        if (!normalized) throw new Error('Room key is required.');
+        const contactSignal = { publicKey: peer?.eciesPublicKey || null, evmAddress: peer?.evmAddress || null };
+        verifySignalIdentity(contactSignal, 'contact');
+        const localIdentity = await this.requireAuthenticatedLocalIdentity(identity, 'conversation');
+
+        // The same room, already open: there is nothing to set up again.
+        if (this.persistentRoom && this.currentChannel === normalized && this._isCurrentPeer(contactSignal)) {
+            return { channel: normalized, reopened: false };
+        }
+
+        await this.leaveChannel();
+        this.currentChannel = normalized;
+        this.persistentRoom = true;
+        this.role = '';
+        this.identityAddress = localIdentity.evmAddress;
+        this.peerPublicKey = `${peer.eciesPublicKey}`;
+        this.peerAddress = `${peer.evmAddress}`;
+        this.messageIds.clear();
+        this._setTransport(this.canUseNostrFallback ? DM_TRANSPORT.NOSTR : DM_TRANSPORT.DISCONNECTED, 'room-open');
+        this._syncConnectionState('room-open');
+        this.emit({ type: 'room-open', channel: normalized });
+        return { channel: normalized, reopened: true };
+    }
+
+    /**
+     * Offer a direct link inside the open room. The room, its peer and the
+     * thread stay as they are; messages keep going over Nostr until the
+     * DataChannel opens.
+     *
+     * @param {{ address?: string, evmAddress?: string }} identity
+     */
+    async startWebrtcOffer(identity) {
+        if (!this.persistentRoom || !this.hasVerifiedPeerIdentity()) {
+            throw new Error('Open the conversation before offering a direct link.');
+        }
+        const localIdentity = await this.requireAuthenticatedLocalIdentity(identity, 'host offer');
+        this._closePeerConnection();
+        this.role = 'host';
+        const peer = this.createPeerConnection();
+        const channel = peer.createDataChannel('web25-direct-messenger');
+        this.bindDataChannel(channel);
+        this.dataChannel = channel;
+        const payload = await this.createOfferSignalPayload(localIdentity);
+        this._beginConnecting();
+        return payload;
+    }
+
+    /**
+     * Answer a direct-link offer inside the open room. The offer has to come
+     * from the key the room is bound to; anything else is refused before an
+     * `RTCPeerConnection` exists, so no ICE is gathered for it.
+     *
+     * @param {{ description: RTCSessionDescriptionInit, evmAddress: string, publicKey: string }} offerPayload
+     * @param {{ address?: string, evmAddress?: string }} identity
+     */
+    async answerWebrtcOffer(offerPayload, identity) {
+        if (!this.persistentRoom || !this.hasVerifiedPeerIdentity()) {
+            throw new Error('Open the conversation before answering a direct link.');
+        }
+        verifySignalIdentity(offerPayload, 'offer');
+        if (!this._isCurrentPeer(offerPayload)) {
+            throw new Error('Offer identity does not match this conversation.');
+        }
+        const localIdentity = await this.requireAuthenticatedLocalIdentity(identity, 'answer');
+        this._closePeerConnection();
+        this.role = 'guest';
+        this.createPeerConnection();
+        const answer = await this.createAnswerSignalPayloadFromOfferPayload(offerPayload, localIdentity);
+        this._beginConnecting();
+        return answer;
+    }
+
+    /**
+     * Drop the direct link and stay in the room: the conversation carries on
+     * over Nostr. Used when the other side closes it, or this side stops
+     * looking at it.
+     *
+     * @param {string} [reason]
+     */
+    closeWebrtc(reason = 'webrtc-closed') {
+        const hadLink = Boolean(this.peerConnection || this.dataChannel);
+        this._clearTransportTimers();
+        this._closePeerConnection();
+        this.role = '';
+        this.currentPeerCount = 0;
+        if (!this.currentChannel) return hadLink;
+        this._fallBack(reason);
+        this._syncConnectionState(reason);
+        if (hadLink) this.emit({ type: 'peer-count', count: 0 });
+        return hadLink;
+    }
+
+    /** Close the peer connection and its DataChannel, quietly. */
+    _closePeerConnection() {
+        try {
+            if (this.dataChannel) {
+                this.dataChannel.onopen = null;
+                this.dataChannel.onclose = null;
+                this.dataChannel.onmessage = null;
+                if (this.dataChannel.readyState !== 'closed') this.dataChannel.close();
+            }
+            if (this.peerConnection) {
+                this.peerConnection.ondatachannel = null;
+                this.peerConnection.oniceconnectionstatechange = null;
+                this.peerConnection.onconnectionstatechange = null;
+                this.peerConnection.close();
+            }
+        } catch (_) {}
+        this.peerConnection = null;
+        this.dataChannel = null;
+    }
+
     async createHostOfferPayload(roomKey, identity) {
         const normalized = this.normalizeChannel(roomKey);
         if (!normalized) throw new Error('Room key is required.');
@@ -444,8 +606,12 @@ export default class ChannelsService {
         if (!this.peerConnection) throw new Error('Peer connection is not initialized.');
         const offer = offerSignalPayload.description;
         verifySignalIdentity(offerSignalPayload, 'offer');
-        this.peerPublicKey = offerSignalPayload.publicKey || '';
-        this.peerAddress = offerSignalPayload.evmAddress || '';
+        if (this.persistentRoom) {
+            if (!this._isCurrentPeer(offerSignalPayload)) throw new Error('Offer identity does not match this conversation.');
+        } else {
+            this.peerPublicKey = offerSignalPayload.publicKey || '';
+            this.peerAddress = offerSignalPayload.evmAddress || '';
+        }
         await this.peerConnection.setRemoteDescription(offer);
     }
 
@@ -458,7 +624,9 @@ export default class ChannelsService {
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
         await this.waitForIceGathering(this.peerConnection);
-        if (this.peerAddress) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        // A room's peer was verified when they were saved; saying so again on
+        // every direct link would only be noise.
+        if (this.peerAddress && !this.persistentRoom) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
         return {
             description: this.peerConnection.localDescription,
             evmAddress: localIdentity.evmAddress,
@@ -472,34 +640,23 @@ export default class ChannelsService {
             throw new Error('Answer payload is invalid.');
         }
         verifySignalIdentity(answerSignalPayload, 'answer');
-        this.peerPublicKey = answerSignalPayload.publicKey || '';
-        this.peerAddress = answerSignalPayload.evmAddress || '';
-        if (this.peerAddress) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        if (this.persistentRoom) {
+            if (!this._isCurrentPeer(answerSignalPayload)) throw new Error('Answer identity does not match this conversation.');
+        } else {
+            this.peerPublicKey = answerSignalPayload.publicKey || '';
+            this.peerAddress = answerSignalPayload.evmAddress || '';
+            if (this.peerAddress) this.pushLocalSystemMessage(`🪪 Peer verified: ${this.peerAddress}`);
+        }
         await this.peerConnection.setRemoteDescription(answerSignalPayload.description);
     }
 
     async leaveChannel() {
         this._clearTransportTimers();
-        try {
-            if (this.dataChannel) {
-                this.dataChannel.onopen = null;
-                this.dataChannel.onclose = null;
-                this.dataChannel.onmessage = null;
-                if (this.dataChannel.readyState !== 'closed') this.dataChannel.close();
-            }
-            if (this.peerConnection) {
-                this.peerConnection.ondatachannel = null;
-                this.peerConnection.oniceconnectionstatechange = null;
-                this.peerConnection.onconnectionstatechange = null;
-                this.peerConnection.close();
-            }
-        } catch (_) {}
-
-        this.peerConnection = null;
-        this.dataChannel = null;
+        this._closePeerConnection();
         this.currentChannel = '';
         this.currentPeerCount = 0;
         this.role = '';
+        this.persistentRoom = false;
         this.peerPublicKey = '';
         this.peerAddress = '';
         this.messageIds.clear();
@@ -607,12 +764,25 @@ export default class ChannelsService {
             this._syncConnectionState('datachannel-open');
             this.emit({ type: 'peer-count', count: 1 });
             this.emit({ type: 'connected', channel: this.currentChannel });
-            this.pushLocalSystemMessage(`Connected to room "${this.currentChannel}".`);
+            this.pushLocalSystemMessage(
+                this.persistentRoom
+                    ? '🔗 Direct link open — messages now go browser to browser.'
+                    : `Connected to room "${this.currentChannel}".`
+            );
         };
 
         channel.onclose = () => {
             this.currentPeerCount = 0;
+            const wasDirect = this.transport === DM_TRANSPORT.WEBRTC;
             this._fallBack('datachannel-closed');
+            if (this.persistentRoom) {
+                // The link was the only thing this peer connection was for;
+                // the room goes on over Nostr without it.
+                if (this.dataChannel === channel) this._closePeerConnection();
+                if (wasDirect && this.transport === DM_TRANSPORT.NOSTR) {
+                    this.pushLocalSystemMessage('Direct link closed — messages continue over Nostr.');
+                }
+            }
             this.emit({ type: 'peer-count', count: 0 });
             if (this.transport !== DM_TRANSPORT.NOSTR) this.emit({ type: 'disconnected' });
         };
@@ -641,26 +811,7 @@ export default class ChannelsService {
                 this.emit({ type: 'error', error: new Error('Cannot accept message: verified peer identity is required.') });
                 return false;
             }
-            let envelope;
-            try {
-                envelope = await this._signer.eciesDecrypt(`${raw || ''}`);
-            } catch (error) {
-                // Surfaces the worker's own reason: a locked/expired session
-                // or a ciphertext that failed to decrypt.
-                const reason = error instanceof Error ? error.message : String(error);
-                this.emit({ type: 'error', error: new Error(`Cannot decrypt message: ${reason}`) });
-                return false;
-            }
-            const { plaintext, signature } = JSON.parse(envelope);
-            if (typeof plaintext !== 'string' || typeof signature !== 'string') {
-                throw new Error('Malformed encrypted message envelope.');
-            }
-            const valid = await verifySignature(plaintext, signature, this.peerPublicKey);
-            if (!valid) {
-                this.emit({ type: 'error', error: new Error('Message signature verification failed: possible tampering.') });
-                return false;
-            }
-            const payload = JSON.parse(plaintext);
+            const payload = await this.openEnvelope(raw, this.peerPublicKey);
             // Stable per-message ids mean the same message arriving over both
             // transports, or from several relays, is rendered exactly once.
             this.handleInbound(payload, false, source);
@@ -669,6 +820,38 @@ export default class ChannelsService {
             this.emit({ type: 'error', error: err instanceof Error ? err : new Error(String(err)) });
             return false;
         }
+    }
+
+    /**
+     * Decrypt a Web25 wire payload inside the wallet worker and check its
+     * signature against one specific peer key.
+     *
+     * The same check the open conversation applies, available for a message
+     * from a saved contact whose conversation is not open: the key comes from
+     * their contact record, so a message is only ever accepted from the person
+     * it was saved as — never on what the message says about itself.
+     *
+     * @param {string} raw hex ECIES payload
+     * @param {string} peerPublicKey the uncompressed ECIES key to verify against
+     * @returns {Promise<any>} the verified payload
+     */
+    async openEnvelope(raw, peerPublicKey) {
+        let envelope;
+        try {
+            envelope = await this._signer.eciesDecrypt(`${raw || ''}`);
+        } catch (error) {
+            // Surfaces the worker's own reason: a locked/expired session or a
+            // ciphertext that failed to decrypt.
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`Cannot decrypt message: ${reason}`);
+        }
+        const { plaintext, signature } = JSON.parse(envelope);
+        if (typeof plaintext !== 'string' || typeof signature !== 'string') {
+            throw new Error('Malformed encrypted message envelope.');
+        }
+        const valid = await verifySignature(plaintext, signature, peerPublicKey);
+        if (!valid) throw new Error('Message signature verification failed: possible tampering.');
+        return JSON.parse(plaintext);
     }
 
     /**

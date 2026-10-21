@@ -40,14 +40,16 @@ The UI is organized into:
   - A quiet swarm transparently falls through to the mirror
   - One checkbox under the box — **Search local cached history** — turns it from an address bar into a search over the sites already cached in this browser — title, keywords, file names, publisher or hash prefix — and the results read as search results. Nothing is listed until something is searched for, and no query leaves the device
   - The strip above a rendered site carries **Back** and the two things a visitor can decide: one control that is both the signature verdict and the offer to host (**✔ Reseed** when the publisher checks out, **⚠ Unverified** when nobody has vouched for the bytes), and **Delete data**
-- **Direct Messenger (WebRTC data channels + Nostr)**
+- **Direct Messenger (Nostr + WebRTC data channels)**
   - Search a peer by Nostr `npub`, then start the chat — no magnet links, no key pasting
   - Encrypted invitations travel as NIP-59 gift wraps through public relays
   - Unknown peers are never auto-answered — their invitation waits for you to accept
-  - Trusted contacts, encrypted with your wallet identity, reconnect directly
+  - Saved contacts, encrypted with your wallet identity, are a persistent messenger: one
+    room per pair, messages over Nostr any time, held encrypted and marked unread while
+    their chat is closed — and a direct WebRTC link only while both of you have it open
   - One connection indicator: `Connected · WebRTC` or `Connected · Nostr`, green either way
   - Identity-bound encrypted/signed message exchange
-  - Nostr relay fallback when WebRTC cannot be established, for files as well as messages
+  - Nostr carries messages and files whenever there is no direct link
   - Links in messages are clickable and open in a new tab; only `http(s)` is ever linked
 
 ### 2) Local browser wallet — WebAuthn passkey protected (viem + PasskeyVault + IndexedDB)
@@ -379,9 +381,11 @@ no key material. It cannot make an already-shared `npub` unknowable.
 - the encrypted WebRTC offer/answer travel as NIP-59 gift wraps through a
   configurable pool of public relays, straight from the browser
 - SDP, ICE data, EVM address and ECIES key are never publicly readable
-- WebRTC stays the preferred transport; the relay path is used only when a
-  connection cannot be established, and WebRTC is preferred again as soon as the
-  DataChannel reopens
+- for saved contacts Nostr is the messenger and WebRTC an upgrade: it is tried
+  only while both sides have the same conversation open, preferred while its
+  DataChannel is open, and dropped when either side closes the chat (see 8d);
+  for a first contact the handshake still offers WebRTC first and the relay
+  takes over if it cannot connect
 - fallback messages keep the existing Web25 signed + ECIES envelope *and* add
   NIP-44 on top; relays are just another untrusted pipe
 - Nostr private-key operations happen inside the wallet worker and fail when the
@@ -398,12 +402,15 @@ The Chat tab is laid out like a desktop messenger: the chat list on the left,
 the open conversation on the right, each scrolling on its own inside a window
 that fits the screen, with the composer pinned to the bottom.
 
-- **Chat list:** your Nostr address on one line with a **📋 Copy** button,
-  a contact filter, pending **invitations**, then your contacts — letter
-  avatars (no profile picture is ever fetched), a presence dot and "online",
-  and Rename / Remove on each row
+- **Chat list:** your Nostr address on one line with a **📋 Copy** button and
+  the **New connection** button beside it, a contact filter, pending
+  **invitations**, then your contacts — letter avatars (no profile picture is
+  ever fetched), a presence dot and "online", an **unread count** for what
+  arrived while their chat was closed, and Rename / Remove on each row
+- **Nothing selected:** a quiet empty pane. The contacts and the conversation
+  are the app; onboarding is not on the main screen
 - **Conversation:** a header with the peer's avatar, name and the single
-  connection state underneath it, plus **Save contact** and **Disconnect**.
+  connection state underneath it, plus **Save contact** and **Close**.
   Messages are bubbles with the time in the corner; a run from one side shares
   a tail, each day gets a chip, and service notices ("Peer verified …") are
   centred pills. The sender's address and full date are in each bubble's
@@ -416,29 +423,33 @@ that fits the screen, with the composer pinned to the bottom.
 
 **Exchanging addresses** is the first thing anyone does, so it leads:
 
-- With no conversation open, the right pane is the exchange. **① Your
-  address** is shown whole, in groups that are easy to read out and compare by
-  their two ends, with **Copy address** and, where the platform has a share
-  sheet, **Share…** (a ready-to-forward message: the address and where to paste
-  it). **② Start a new chat** takes theirs
+- **New connection** (the button next to Copy) opens the exchange in a sheet
+  over the app — a dialog on desktop, a bottom sheet on a phone; Escape, the
+  close button or a tap on the backdrop closes it, and it touches no open
+  conversation. **① Your address** is shown whole, in groups that are easy to
+  read out and compare by their two ends, with **Copy address** and, where the
+  platform has a share sheet, **Share…** (a ready-to-forward message: the
+  address and where to paste it). **② Start a new chat** takes theirs, and
+  **③** says what happens next. A request that goes through closes the sheet and
+  opens the conversation
 - Pasting is the whole gesture: the npub is picked out of whatever arrived — a
   `nostr:` link, a forwarded sentence, an address broken across lines — and the
   search runs without pressing Search. A **Paste** button appears where the
   browser can read the clipboard, and a cut-off npub is flagged as you type
 - The grouped address is separate elements with no whitespace between them, so
   even a hand selection copies as one unbroken address
-- Your whole address is also one tap away from the list (the button next to
-  Copy), and tapping the peer in a conversation header shows **their** address
-  and the EVM address the handshake verified — both in a native dialog, a
-  bottom sheet on a phone. Each contact row can copy that contact's npub
+- Tapping the peer in a conversation header shows **their** address and their
+  verified EVM address in a native dialog, a bottom sheet on a phone. Each
+  contact row can copy that contact's npub
 
 **The first connection** is shown, not implied:
 
-- Tapping a contact or **Request chat** opens the conversation straight away,
-  with the steps in the thread: *Chat request* → *Both of you agree* →
-  *Encrypted connection*. While waiting it says whether they look online,
-  where the request lands for them (**Chat invitations**) and how long it stays
-  valid, with **Cancel request** (the same path as Disconnect)
+- Tapping a saved contact opens their conversation at once, working over
+  Nostr — no request, no waiting. **Request chat** to somebody new opens the
+  conversation straight away, with the steps in the thread: *Chat request* →
+  *Both of you agree* → *Encrypted connection*. While waiting it says whether
+  they look online, where the request lands for them (**Chat invitations**) and
+  how long it stays valid, with **Cancel request** (the same path as Close)
 - The composer stays closed until something can actually be sent, and its
   placeholder says why; a dropped link becomes a one-line banner over the thread
 - **Accept** on an invitation answers at once and cannot be pressed twice
@@ -450,14 +461,12 @@ differently.
 - **Opening a conversation takes the whole screen.** The **←** in its header
   brings the list back. That is navigation, not disconnection: the
   conversation stays open and connected behind it, a **Back to conversation**
-  bar at the top of the list returns, and Disconnect remains the only thing
-  that ends a chat
-- With no conversation open, the list and the "start a new chat" finder stack
-  in one page scroll
+  bar at the top of the list returns, and Close remains the only thing that
+  ends a chat
+- With no conversation open, the list is the whole screen
 
 Both switches are phone-only furniture, and both pane rules are conditional on a
-conversation actually being open — so the "find someone" screen still stacks
-under the contacts, and desktop never sees any of it.
+conversation actually being open, so desktop never sees any of it.
 
 ### 8b) Consent, trusted contacts and presence
 
@@ -528,9 +537,11 @@ otherwise park that offer as a stranger's — both waiting, neither answering.
 Saying yes to somebody, or asking them yourself, is consent to the reply you
 just invited.
 
-Trusted friends reconnect directly without asking again — their chat request is
-consented to automatically, so a friend never lands in the invitation queue —
-but every existing cryptographic check still runs, plus one more: the invitation's identity tuple
+Trusted friends never ask again: their conversation simply opens (see 8d), and
+a friend never lands in the invitation queue. A chat request from one — their
+side has lost this browser's keys — is answered only while their conversation
+is open here, and otherwise waits on their row. Every existing cryptographic
+check still runs, plus one more: an invitation's identity tuple
 (Nostr pubkey ↔ ECIES key ↔ EVM address) must validate *and* match the stored
 record. A matching contact record alone is never authorization, so somebody who
 takes over an npub does not inherit the trust attached to it. Authorization sits
@@ -574,6 +585,16 @@ messages come back above the live thread when the conversation reconnects.
 Chat text only — files and service notices are not kept — and only on this
 device: the other person decides for theirs.
 
+**Held until read.** A message from a saved contact whose conversation is closed
+is stored the same way — sealed, in the same database — and marked unread,
+whatever the conversation's retention, because nobody has seen it yet. It stays
+until the conversation is opened and it has been shown, and never past seven
+days from its timestamp, read or not. Once shown it is released onto the
+conversation's own terms: kept for its retention, or deleted at once if the
+chat keeps nothing — and the thread says which, so holding it is never a silent
+exception. The unread marks are plain flags beside the sealed rows, so the
+badges come back after a reload without decrypting anything.
+
 Presence is a separate state again:
 
 ```text
@@ -614,6 +635,65 @@ one array in `src/config/nostr.config.js`. Point it somewhere else,
 including at a relay of your own, and every client sharing that list still finds
 every other.
 
+### 8d) Persistent rooms and Nostr-first contacts
+
+A saved contact's conversation is not a session any more; it is a **room**,
+named after the two people in it: both npubs, sorted, hashed
+(`src/channels/ConversationRoom.js`). Each side derives it alone, the same pair
+always gets the same room — after a reload, a reconnect, a week offline — and
+every message carries it. The WebRTC `sessionId` is still a one-time handle
+that binds an answer to its offer; it is never the room.
+
+```text
+tap a saved contact   →  their room opens, keys from the contact record
+                          → Connected · Nostr, the composer works at once
+                          → "conversation open" sent to them, gift-wrapped
+their side open too?  →  one side (lower pubkey) offers a direct link
+                          → Connected · WebRTC while the DataChannel is open
+either side closes    →  "conversation closed" → link torn down
+or switches              → the room carries on over Nostr
+```
+
+| Situation | Transport |
+| --- | --- |
+| Contact offline | Nostr — held for them, delivered when they are back |
+| Contact online, chat closed | Nostr |
+| Only you have it open | Nostr |
+| Both have the same chat open | WebRTC is tried |
+| WebRTC connected | WebRTC |
+| WebRTC fails or drops | Nostr, without a gap |
+| Either side closes or switches | WebRTC torn down, Nostr carries on |
+
+A Nostr-only conversation is a working conversation, not a degraded one: it
+shows **Connected · Nostr** in green.
+
+Three signals are kept apart: **presence** (a public beacon — reachable at all),
+a **chat request** (how a stranger asks), and **conversation open/closed** (a
+private notice between saved contacts). Only the last one starts WebRTC, and
+only when it is mutual and recent: whoever opens second hears back from the
+first within a relay round trip. Being online, receiving a message, or a
+contact's chat request never starts a handshake, and an offer from a contact
+whose chat is closed here goes unanswered with no ICE gathered.
+
+**Inbound routing.** The inbox stays subscribed while the wallet is unlocked and
+Nostr is on, whichever conversation is open. Every NIP-17 rumor is handed on
+with the sender the NIP-59 seal proved, and only then is it decided who may be
+heard:
+
+- the open conversation's peer → the thread;
+- a saved contact whose chat is closed → the message is decrypted and its
+  signature checked against **the keys in their contact record**; the room it
+  names must be theirs; it is held unread and their row is badged;
+- anybody else → dropped unread. A stranger still has to send an invitation; a
+  stranger's "conversation open" is treated as exactly that — a chat request.
+
+A room id is a name, not a credential: anybody can compute anyone's room, so a
+claimed room never makes a sender trusted. A message signed by one contact for
+another contact's room is dropped. Each message is handled once — by its gift
+wrap and by its own id in the inbox ledger — so a relay replaying it, a
+re-wrapped copy, or the same message seen live and delivered again later is
+neither shown nor counted twice.
+
 ---
 
 ## Security profile (current)
@@ -653,6 +733,7 @@ src/
 │   └── SiteLibraryIndex.js
 ├── channels/
 │   ├── ChannelsService.js
+│   ├── ConversationRoom.js
 │   ├── DirectMessageBootstrapCore.js
 │   ├── DirectMessageTorrentBootstrap.js
 │   ├── NostrDirectMessageBootstrap.js

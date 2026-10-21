@@ -50,7 +50,12 @@ const {
     declineDmInvitation,
     isDmBlocked,
     armHandshakeStallTimer,
-    clearHandshakeStallTimer
+    clearHandshakeStallTimer,
+    dmRoomFor,
+    isDmConversationOpenWith,
+    isDmRoomOpenWith,
+    savedTrustedContact,
+    switchDmConversationTo
 } = await import('../src/core/bootstrap/Lifecycle.js');
 import { ContactsStore, TRUST } from '../src/channels/ContactsStore.js';
 import { PendingInvitations } from '../src/channels/PendingInvitations.js';
@@ -88,6 +93,8 @@ function offerFrom(peer, { expiresInMs = 60_000, sessionId = 'session-1' } = {})
         session: { sessionId, nonce: 'nonce-1', createdAt: Date.now(), expiresAt: Date.now() + expiresInMs }
     };
 }
+
+const OWNER_NOSTR_PUBLIC_KEY = nostrCore.getNostrPublicKey(OWNER_PRIV.slice(2));
 
 function makeWallet(privateKey = OWNER_PRIV) {
     const core = createWalletWorkerCore({ ecies, nostr: nostrCore });
@@ -253,6 +260,14 @@ async function makeApp({ unlocked = true } = {}) {
     app.isDmBlocked = isDmBlocked.bind(app);
     app.armHandshakeStallTimer = armHandshakeStallTimer.bind(app);
     app.clearHandshakeStallTimer = clearHandshakeStallTimer.bind(app);
+    // The room and contact helpers the paths above lean on, real as well.
+    app.dmRoomFor = dmRoomFor.bind(app);
+    app.isDmConversationOpenWith = isDmConversationOpenWith.bind(app);
+    app.isDmRoomOpenWith = isDmRoomOpenWith.bind(app);
+    app.savedTrustedContact = savedTrustedContact.bind(app);
+    app.switchDmConversationTo = switchDmConversationTo.bind(app);
+    // Rooms are named after both npubs, so the session knows whose this is.
+    app.nostrDmSession.localNostrPublicKey = OWNER_NOSTR_PUBLIC_KEY;
 
     return app;
 }
@@ -509,8 +524,9 @@ test('consent does not waive the identity check on the offer that follows', asyn
 // ─── 4. A trusted contact does not have to ask twice ─────────────────────
 
 test('a trusted contact', async (t) => {
-    await t.test('is consented to automatically when they ask', async () => {
+    await t.test('is not queued as a stranger, and starts nothing while their chat is closed here', async () => {
         const app = await makeApp();
+        app.dmContactRequests = new Map();
         try {
             await app.contactsStore.save({
                 nostrPublicKey: ALICE.nostrPublicKey,
@@ -524,8 +540,38 @@ test('a trusted contact', async (t) => {
             await app.handleChatRequest(ALICE.nostrPublicKey);
 
             assert.equal(app.dmInvitations.size, 0, 'a friend is not queued as a stranger');
+            // A request is not a reason to connect: no consent goes back, no
+            // pair forms, no handshake — it waits on her row for the chat to open.
+            assert.notEqual(app.presenceService.state(ALICE.nostrPublicKey), 'mutual');
+            assert.equal(app.nostrDmSession.giftWrapped.length, 0, 'nothing goes back on its own');
+            assert.equal(app.mutual.length, 0);
+            assert.equal(app.dmContactRequests.has(ALICE.nostrPublicKey), true, 'her row says she asked');
+            assertNothingRevealed(app, 'a trusted contact asking while closed');
+        } finally {
+            app.fake.restore();
+        }
+    });
+
+    await t.test('is answered when their conversation is open here too', async () => {
+        const app = await makeApp();
+        try {
+            await app.contactsStore.save({
+                nostrPublicKey: ALICE.nostrPublicKey,
+                npub: ALICE.npub,
+                eciesPublicKey: ALICE.eciesPublicKey,
+                evmAddress: ALICE.evmAddress,
+                name: 'Alice',
+                trust: TRUST.TRUSTED
+            });
+            // Her conversation is the one on screen, in the room you share.
+            app.dmSelectedPeer = ALICE.nostrPublicKey;
+            app.channelsService.currentChannel = app.dmRoomFor(ALICE.nostrPublicKey);
+
+            await app.handleChatRequest(ALICE.nostrPublicKey);
+
+            assert.equal(app.dmInvitations.size, 0);
             assert.equal(app.presenceService.state(ALICE.nostrPublicKey), 'mutual');
-            assert.equal(app.nostrDmSession.giftWrapped.length, 1, 'our request goes back on its own');
+            assert.equal(app.nostrDmSession.giftWrapped.length, 1, 'our request goes back');
         } finally {
             app.fake.restore();
         }

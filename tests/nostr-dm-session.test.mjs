@@ -246,16 +246,25 @@ test('the relay fallback carries an unmodified Web25 envelope to the peer', asyn
     bobSession.stop();
 });
 
-test('a chat envelope from anyone other than the bound peer is ignored', async () => {
-    const { alice, bob, aliceSession, bobSession, chat } = await scenario();
+test('a chat envelope from a peer nobody bound is handed on with the sender the seal proved', async () => {
+    const { alice, bob, aliceSession, bobSession } = await scenario();
+    // The gate is not here any more: a saved contact writes whether or not
+    // their conversation is open, so the session passes every envelope on with
+    // who signed it, and the router checks that sender against the open
+    // conversation or a saved contact (tests/dm-persistent-rooms.test.mjs).
+    const received = [];
+    bobSession.onChatEnvelope = (wire, context) => received.push({ wire, context });
 
     aliceSession.setPeer(bob.npub);
-    // Bob has not bound Alice as his peer, so her relayed chat is dropped.
-    const fallback = aliceSession.createFallback();
-    await fallback.send(await eciesEncrypt(JSON.stringify({ plaintext: '{}', signature: '' }), bob.publicKey));
+    const wire = await eciesEncrypt(JSON.stringify({ plaintext: '{}', signature: '' }), bob.publicKey);
+    await aliceSession.createFallback().send(wire);
     await settle();
 
-    assert.equal(chat.bob.length, 0);
+    assert.equal(bobSession.peerNostrPublicKey, '', 'Bob never bound Alice');
+    assert.equal(received.length, 1);
+    assert.equal(received[0].wire, wire);
+    assert.equal(received[0].context.senderNostrPublicKey, alice.nostrPublicKey);
+    assert.ok(received[0].context.createdAtSeconds > 0);
 
     aliceSession.stop();
     bobSession.stop();

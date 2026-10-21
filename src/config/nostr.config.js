@@ -71,6 +71,21 @@ export const NOSTR_CONFIG = Object.freeze({
      * and deliberately separate from the invitation: intent carries no SDP.
      */
     WEB25_CHAT_REQUEST_KIND: 25511,
+    /**
+     * Kind of the NIP-59 rumor saying "this conversation is open on my screen"
+     * — or closed again. Sent only to saved contacts, and separate from both
+     * presence (reachable at all) and a chat request (may we talk): a direct
+     * WebRTC link is tried only while both sides have the same conversation
+     * open, and everything else travels over Nostr.
+     */
+    WEB25_CONVERSATION_KIND: 25512,
+    /**
+     * How old a "conversation open" may be and still count. The inbox looks
+     * days back, so without this an opening from last week would read as
+     * somebody waiting right now. Whoever opens second hears back from the
+     * first within a relay round trip, so this only has to absorb clock skew.
+     */
+    CONVERSATION_INTENT_MAX_AGE_MS: 5 * 60 * 1000,
 
     /**
      * NIP-38 user status, used as a presence beacon. Addressable, so a peer can

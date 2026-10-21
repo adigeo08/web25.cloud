@@ -2,16 +2,22 @@
 /**
  * Presence and mutual intent for the Direct Messenger.
  *
- * Two things are deliberately kept apart:
+ * Three things are deliberately kept apart:
  *
- *   presence  — "this identity is reachable right now". Public, coarse, and
- *               says nothing about who wants to talk to whom.
- *   intent    — "I would like to talk to you". Private, gift-wrapped, and
- *               addressed to one peer.
+ *   presence      — "this identity is reachable right now". Public, coarse,
+ *                   and says nothing about who wants to talk to whom.
+ *   intent        — "I would like to talk to you". Private, gift-wrapped, and
+ *                   addressed to one peer: how a stranger asks.
+ *   conversation  — "our conversation is open on my screen", or closed again.
+ *                   Private as well, and only between saved contacts, whose
+ *                   messages already travel over Nostr whether or not anybody
+ *                   is looking. It decides one thing: a direct WebRTC link is
+ *                   worth trying only while *both* have the same conversation
+ *                   open.
  *
  * Seeing someone online is not permission to call them, so a WebRTC handshake
- * only begins once intent has been exchanged in *both* directions. Until then
- * no SDP, no ICE candidate and no invitation is created at all.
+ * only begins once intent — or, for contacts, an open conversation — is
+ * mutual. Until then no SDP, no ICE candidate and no invitation is created.
  *
  * Presence uses NIP-38 user statuses (kind 30315) under our own `d` identifier,
  * so it never overwrites a user's general status. The beacon carries no content:
@@ -32,12 +38,20 @@ export const INTENT = /** @type {const} */ ({
     MUTUAL: 'mutual'
 });
 
+/** Whether a conversation is on screen, as each side announces it. */
+export const CONVERSATION = /** @type {const} */ ({
+    OPEN: 'open',
+    CLOSED: 'closed'
+});
+
 export class NostrPresenceService {
     /**
      * @param {{ pool: any, signer: any, config?: typeof NOSTR_CONFIG,
      *           onPresenceChange?: (pubkey: string, online: boolean) => void,
      *           onIntentChange?: (pubkey: string, state: string) => void,
      *           onMutualIntent?: (pubkey: string) => void,
+     *           onConversationMutual?: (pubkey: string, room: string) => void,
+     *           onPeerConversationClosed?: (pubkey: string, room: string) => void,
      *           onError?: (error: Error) => void,
      *           now?: () => number }} options
      */
@@ -48,6 +62,8 @@ export class NostrPresenceService {
         onPresenceChange = null,
         onIntentChange = null,
         onMutualIntent = null,
+        onConversationMutual = null,
+        onPeerConversationClosed = null,
         onError = null,
         now = Date.now
     }) {
@@ -57,6 +73,8 @@ export class NostrPresenceService {
         this.onPresenceChange = onPresenceChange;
         this.onIntentChange = onIntentChange;
         this.onMutualIntent = onMutualIntent;
+        this.onConversationMutual = onConversationMutual;
+        this.onPeerConversationClosed = onPeerConversationClosed;
         this.onError = onError;
         this.now = now;
 
@@ -69,6 +87,19 @@ export class NostrPresenceService {
         this.receivedIntent = new Map();
         /** @type {Set<string>} peers whose mutual state we already announced */
         this.announced = new Set();
+
+        /**
+         * The one conversation open on this screen, if any.
+         * @type {{ peer: string, room: string, since: number }|null}
+         */
+        this.activeConversation = null;
+        /**
+         * What each contact last said about their side of our conversation.
+         * @type {Map<string, { state: string, room: string, at: number }>}
+         */
+        this.peerConversations = new Map();
+        /** @type {Set<string>} peers whose open-on-both-sides we already announced */
+        this.conversationAnnounced = new Set();
 
         this.presenceSubscription = null;
         this.beaconTimer = null;
@@ -275,6 +306,148 @@ export class NostrPresenceService {
         this.onIntentChange?.(peer, INTENT.NONE);
     }
 
+    /**
+     * Say "our conversation is open here" to a saved contact.
+     *
+     * The announcement starts nothing by itself. If they already said the same
+     * thing, recently, the conversation is open on both sides and the direct
+     * link may be tried; otherwise their side answers when it is open too.
+     *
+     * @param {string} peerPublicKey
+     * @param {string} room the persistent room both sides derive
+     * @param {(peer: string, kind: number, content: string) => Promise<any>} sendGiftWrapped
+     * @returns {Promise<boolean>} whether the conversation is now open on both sides
+     */
+    async openConversation(peerPublicKey, room, sendGiftWrapped) {
+        const peer = `${peerPublicKey}`.toLowerCase();
+        this.activeConversation = { peer, room: `${room}`, since: this.now() };
+        // A new opening is a new chance for a direct link.
+        this.conversationAnnounced.delete(peer);
+        // Settled before the send: what they already said does not wait on a relay.
+        this._settleConversation(peer);
+        await this._sendConversation(peer, CONVERSATION.OPEN, `${room}`, false, sendGiftWrapped);
+        return this.isConversationMutual(peer);
+    }
+
+    /**
+     * Withdraw: this side closed the conversation, or switched to another.
+     * Best effort — a page that just goes away says nothing, and the other
+     * side notices the direct link closing instead.
+     *
+     * @param {(peer: string, kind: number, content: string) => Promise<any>} sendGiftWrapped
+     */
+    async closeConversation(sendGiftWrapped) {
+        const active = this.activeConversation;
+        this.activeConversation = null;
+        if (!active) return false;
+        this.conversationAnnounced.delete(active.peer);
+        try {
+            await this._sendConversation(active.peer, CONVERSATION.CLOSED, active.room, false, sendGiftWrapped);
+        } catch (error) {
+            this._fail(error);
+        }
+        return true;
+    }
+
+    /**
+     * Record what a saved contact said about their side of our conversation.
+     *
+     * The caller has already established that they are a saved contact and
+     * that `room` is the one the two of you share. An opening that is not an
+     * answer gets one back while the same conversation is open here, so
+     * whoever opened first learns that the other is here too; an answer is
+     * never answered, so the two cannot echo each other forever.
+     *
+     * @param {string} peerPublicKey
+     * @param {{ state: string, room: string, ack?: boolean, at?: number }} intent `at` in ms, the sender's clock
+     * @param {(peer: string, kind: number, content: string) => Promise<any>} sendGiftWrapped
+     */
+    receiveConversation(peerPublicKey, { state, room, ack = false, at = this.now() }, sendGiftWrapped) {
+        const peer = `${peerPublicKey}`.toLowerCase();
+        const when = Math.min(Number(at) || this.now(), this.now());
+        const previous = this.peerConversations.get(peer);
+        // Relays do not promise order: something older than what we know says nothing new.
+        if (previous && when < previous.at) return this.isConversationMutual(peer);
+
+        const next = {
+            state: state === CONVERSATION.OPEN ? CONVERSATION.OPEN : CONVERSATION.CLOSED,
+            room: `${room || ''}`,
+            at: when
+        };
+        this.peerConversations.set(peer, next);
+
+        if (next.state === CONVERSATION.CLOSED) {
+            this.conversationAnnounced.delete(peer);
+            this.onPeerConversationClosed?.(peer, next.room);
+            return false;
+        }
+
+        const ours = this.activeConversation;
+        if (ours && ours.peer === peer && ours.room === next.room && !ack && this._isConversationFresh(when)) {
+            // They opened it again: whatever happened to the last direct link,
+            // this is a new chance for one.
+            this.conversationAnnounced.delete(peer);
+            void this._sendConversation(peer, CONVERSATION.OPEN, ours.room, true, sendGiftWrapped).catch((error) =>
+                this._fail(error)
+            );
+        }
+        this._settleConversation(peer);
+        return this.isConversationMutual(peer);
+    }
+
+    /**
+     * Does this contact have our conversation open, as far as anything recent says?
+     * @param {string} peerPublicKey
+     * @param {string} room
+     */
+    peerHasConversationOpen(peerPublicKey, room) {
+        const entry = this.peerConversations.get(`${peerPublicKey}`.toLowerCase());
+        return Boolean(
+            entry &&
+            entry.state === CONVERSATION.OPEN &&
+            entry.room === `${room}` &&
+            this._isConversationFresh(entry.at)
+        );
+    }
+
+    /**
+     * Open on both sides: ours is on screen here, and theirs, recently said.
+     * @param {string} peerPublicKey
+     */
+    isConversationMutual(peerPublicKey) {
+        const peer = `${peerPublicKey}`.toLowerCase();
+        const ours = this.activeConversation;
+        return Boolean(ours && ours.peer === peer && this.peerHasConversationOpen(peer, ours.room));
+    }
+
+    /** @param {number} at */
+    _isConversationFresh(at) {
+        return Boolean(at) && this.now() - at <= this.config.CONVERSATION_INTENT_MAX_AGE_MS;
+    }
+
+    /** @param {string} peer */
+    _settleConversation(peer) {
+        if (!this.isConversationMutual(peer) || this.conversationAnnounced.has(peer)) return;
+        // Once per opening, so the caller tries one direct link, not one per echo.
+        this.conversationAnnounced.add(peer);
+        this.onConversationMutual?.(peer, /** @type {any} */ (this.activeConversation).room);
+    }
+
+    /**
+     * @param {string} peer
+     * @param {string} state
+     * @param {string} room
+     * @param {boolean} ack
+     * @param {(peer: string, kind: number, content: string) => Promise<any>} sendGiftWrapped
+     */
+    async _sendConversation(peer, state, room, ack, sendGiftWrapped) {
+        await sendGiftWrapped(
+            peer,
+            this.config.WEB25_CONVERSATION_KIND,
+            JSON.stringify({ type: 'web25-conversation', state, room, ack, at: this.now() })
+        );
+    }
+
     /** Stop the beacon and the presence subscription. */
     stop() {
         if (this.beaconTimer) clearInterval(this.beaconTimer);
@@ -290,5 +463,8 @@ export class NostrPresenceService {
         this.receivedIntent.clear();
         this.announced.clear();
         this.watched.clear();
+        this.activeConversation = null;
+        this.peerConversations.clear();
+        this.conversationAnnounced.clear();
     }
 }

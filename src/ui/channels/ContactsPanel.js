@@ -2,10 +2,11 @@
 /**
  * Contact list for the Direct Messenger.
  *
- * Shows who you know, whether they look reachable, and lets you open one. It
- * deliberately cannot start a conversation on its own: selecting a contact
- * expresses intent, and the conversation only begins once that intent is
- * mutual. Presence and conversation are separate states here as everywhere.
+ * Shows who you know, whether they look reachable, what each of them sent
+ * while their conversation was closed, and lets you open one. Opening a saved
+ * contact's conversation is immediate — it works over Nostr — and is all a tap
+ * does: a direct link is tried only if they have it open as well. Presence,
+ * unread and conversation are separate states here as everywhere.
  */
 
 import { npubEncode, shortNpub } from '../../nostr/nip19.js';
@@ -199,9 +200,13 @@ export function renderContactsLocked() {
 
 /**
  * @param {any[]} contacts
- * @param {{ isOnline?: (pubkey: string) => boolean, selectedKey?: string }} [options]
+ * @param {{ isOnline?: (pubkey: string) => boolean, selectedKey?: string,
+ *           unreadCount?: (pubkey: string) => number, hasRequest?: (pubkey: string) => boolean }} [options]
  */
-export function renderContacts(contacts, { isOnline = () => false, selectedKey = '' } = {}) {
+export function renderContacts(
+    contacts,
+    { isOnline = () => false, selectedKey = '', unreadCount = () => 0, hasRequest = () => false } = {}
+) {
     const list = document.getElementById('dm-contacts-list');
     const count = document.getElementById('dm-contacts-count');
     if (count) count.textContent = `${(contacts || []).length}`;
@@ -212,13 +217,18 @@ export function renderContacts(contacts, { isOnline = () => false, selectedKey =
     if (!contacts || contacts.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'dm-contacts-empty';
-        empty.textContent = 'No contacts yet. Search an npub and save them after chatting.';
+        empty.textContent = 'No contacts yet. Tap New connection to share your address or start a chat.';
         list.appendChild(empty);
         return;
     }
 
     for (const contact of contacts) {
-        list.appendChild(renderContactRow(contact, isOnline(contact.nostrPublicKey), selectedKey));
+        list.appendChild(
+            renderContactRow(contact, isOnline(contact.nostrPublicKey), selectedKey, {
+                unread: Math.max(0, Number(unreadCount(contact.nostrPublicKey)) || 0),
+                requested: hasRequest(contact.nostrPublicKey) === true
+            })
+        );
     }
 }
 
@@ -229,12 +239,19 @@ export function renderContacts(contacts, { isOnline = () => false, selectedKey =
  * @param {any} contact
  * @param {boolean} online
  * @param {string} selectedKey
+ * @param {{ unread?: number, requested?: boolean }} [marks] held unread messages; a chat request waiting
  */
-function renderContactRow(contact, online, selectedKey) {
+function renderContactRow(contact, online, selectedKey, { unread = 0, requested = false } = {}) {
     // A div rather than a button: the row now contains its own Rename and
     // Remove buttons, and a button cannot legally nest buttons.
     const row = document.createElement('div');
-    row.className = `dm-contact${contact.nostrPublicKey === selectedKey ? ' is-selected' : ''}`;
+    row.className = [
+        'dm-contact',
+        contact.nostrPublicKey === selectedKey ? 'is-selected' : '',
+        unread > 0 ? 'has-unread' : ''
+    ]
+        .filter(Boolean)
+        .join(' ');
     row.setAttribute('role', 'button');
     row.setAttribute('tabindex', '0');
     row.setAttribute('data-contact-key', contact.nostrPublicKey);
@@ -267,12 +284,28 @@ function renderContactRow(contact, online, selectedKey) {
         presence.textContent = 'online';
         top.appendChild(presence);
     }
+    // What they sent while their conversation was closed, as a count on the
+    // row — the same number whether it arrived a minute ago or before a reload.
+    if (unread > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'dm-contact-unread';
+        badge.textContent = unread > 99 ? '99+' : `${unread}`;
+        const label = `${unread} unread message${unread === 1 ? '' : 's'}`;
+        badge.setAttribute('aria-label', label);
+        badge.title = label;
+        top.appendChild(badge);
+    }
 
     // Enough identity to disambiguate two contacts with the same friendly name.
     const identity = document.createElement('span');
     identity.className = 'dm-contact-identity';
     const evm = contact.evmAddress ? `${contact.evmAddress.slice(0, 8)}…` : 'no EVM address';
     identity.textContent = `${shortNpub(contact.npub || contact.nostrPublicKey)} · ${evm}`;
+    // A request of theirs waits for their conversation to be opened here.
+    if (requested) {
+        identity.classList.add('is-request');
+        identity.textContent = '👋 Wants to chat — open to connect';
+    }
 
     body.appendChild(top);
     body.appendChild(identity);

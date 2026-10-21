@@ -2425,6 +2425,35 @@ input[type='checkbox'] {
     font-weight: 600;
 }
 
+/* What arrived while their conversation was closed. */
+.dm-contact-unread {
+    display: inline-flex;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+    align-self: center;
+}
+
+.dm-contact.has-unread .dm-contact-name {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.dm-contact-identity.is-request {
+    color: var(--accent-hi);
+    font-family: inherit;
+}
+
 .dm-contact-identity {
     display: block;
     color: var(--muted);
@@ -2725,14 +2754,69 @@ input[type='checkbox'] {
         var(--dm-wall);
 }
 
-/* Nothing open: the pane a desktop messenger shows before you pick a chat,
-   with the way to start one in the middle of it. */
-#dm-choose-role {
+/* Nothing open: the quiet pane a desktop messenger shows before you pick a
+   chat. Starting one lives in the New connection sheet, not here. */
+.dm-empty {
     display: flex;
     min-height: 0;
     flex: 1 1 auto;
-    padding: clamp(1.25rem, 4vw, 2.5rem) clamp(1rem, 3vw, 2rem);
-    overflow-y: auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 2rem 1.5rem;
+    color: var(--muted);
+    text-align: center;
+}
+
+.dm-empty.hidden {
+    display: none !important;
+}
+
+.dm-empty-art {
+    display: inline-grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    margin-bottom: 0.4rem;
+    border-radius: 50%;
+    background: rgba(76, 125, 255, 0.1);
+    color: var(--accent-hi);
+}
+
+.dm-empty-title {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.dm-empty-sub {
+    max-width: 34ch;
+    margin: 0;
+    font-size: 0.84rem;
+}
+
+/* The New connection sheet: the whole new-chat flow over the app. Wider than
+   the other sheets on a desktop, so the two steps sit side by side. */
+.dm-sheet.dm-new-chat {
+    position: relative;
+    width: min(780px, calc(100vw - 2rem));
+}
+
+.dm-new-chat-close-form {
+    display: contents;
+}
+
+.dm-new-chat-close {
+    position: absolute;
+    top: 0.7rem;
+    right: 0.7rem;
+    z-index: 1;
+}
+
+#dm-choose-role {
+    padding: clamp(1.1rem, 3vw, 1.75rem) clamp(0.9rem, 3vw, 1.6rem) clamp(1.1rem, 3vw, 1.6rem);
 }
 
 .dm-welcome {
@@ -3274,6 +3358,26 @@ input[type='checkbox'] {
     font-size: 0.72rem;
     font-weight: 600;
     box-shadow: var(--shadow-sm);
+}
+
+/* Where the messages that waited for you begin. */
+.channels-unread-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.6rem 0 0.3rem;
+    color: var(--accent-hi);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.channels-unread-divider::before,
+.channels-unread-divider::after {
+    content: '';
+    flex: 1 1 auto;
+    height: 1px;
+    background: rgba(111, 151, 255, 0.35);
 }
 
 /* Bubbles: incoming on the left, your own on the right. The first of a run
@@ -3901,20 +4005,6 @@ li[data-state='active'] .dm-connect-text small {
     font-size: 0.82rem;
     overflow-wrap: anywhere;
     user-select: all;
-}
-
-.dm-sheet-steps {
-    display: grid;
-    gap: 0.4rem;
-    margin: 0;
-    padding-left: 1.25rem;
-    color: var(--text-dim);
-    font-size: 0.84rem;
-    line-height: 1.5;
-}
-
-.dm-sheet-steps.hidden {
-    display: none !important;
 }
 
 /* Where kept history begins, above the live thread. */
@@ -5770,13 +5860,18 @@ select,
     }
 
     /* One page scroll on a phone, not a scroll box inside another one. */
-    .dm-sidebar-scroll,
-    #dm-choose-role {
+    .dm-sidebar-scroll {
         overflow: visible;
     }
 
     .dm-main {
         flex: 1 1 auto;
+    }
+
+    /* With no conversation open a phone shows the list alone: the empty pane
+       says nothing a list cannot. */
+    .dm-layout:not(:has(#dm-chat-active:not(.hidden))) .dm-main {
+        display: none;
     }
 
     /* A conversation takes the whole screen, the way a phone messenger does.
@@ -6274,6 +6369,18 @@ select,
     }
 
     .dm-sheet-card {
+        padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+    }
+
+    .dm-sheet.dm-new-chat {
+        width: 100%;
+    }
+
+    .dm-new-chat .dm-sheet-grip {
+        margin-top: 0.55rem;
+    }
+
+    #dm-choose-role {
         padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
     }
 

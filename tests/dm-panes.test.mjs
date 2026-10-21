@@ -21,7 +21,7 @@ globalThis.window = globalThis.window || { location: { hostname: 'localhost' } }
 function installMessengerDom() {
     return installFakeDom({
         layout: { tag: 'div', classes: ['dm-layout'] },
-        finder: { tag: 'div', id: 'dm-choose-role' },
+        empty: { tag: 'div', id: 'dm-empty' },
         chat: { tag: 'div', id: 'dm-chat-active', classes: ['hidden'] },
         backToContacts: { tag: 'button', id: 'dm-back-to-contacts' },
         backToChat: { tag: 'button', id: 'dm-back-to-chat' }
@@ -60,19 +60,20 @@ test('going back to the list leaves the conversation open behind it', () => {
     assert.equal(dom.nodes.chat.classList.contains('hidden'), false, 'the conversation is still open');
 });
 
-test('the finder makes no claim on the screen', () => {
-    // With no conversation open, both panes simply stack on a phone, so this
-    // must not decide anything: the two CSS rules that hide a pane are
-    // conditional on a conversation being open, and this is the state where
-    // neither applies.
+test('the empty state makes no claim on the screen', () => {
+    // With no conversation open a phone shows the list (CSS hides the empty
+    // pane there), so this must not decide anything: the rules that hide a
+    // pane are conditional on a conversation being open.
+    panel.showDmStep('dm-chat-active');
     panel.showDmPane('contacts');
-    panel.showDmStep('dm-choose-role');
+    panel.showDmStep('dm-empty');
 
     assert.equal(dom.nodes.chat.classList.contains('hidden'), true);
+    assert.equal(dom.nodes.empty.classList.contains('hidden'), false);
     assert.equal(
         dom.nodes.layout.classList.contains('dm-show-contacts'),
         true,
-        'showing the finder neither claims the screen nor gives it away'
+        'showing the empty state neither claims the screen nor gives it away'
     );
 });
 
