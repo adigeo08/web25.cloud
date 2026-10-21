@@ -2,8 +2,8 @@
  * Account page, navigation and sign-in wall markup.
  *
  * These are contracts the auth code relies on but cannot assert for itself:
- * which tabs a visitor without an identity can see, where the one-time seed
- * band sits on the Account page, and which controls the sign-in wall offers.
+ * which tabs a visitor without an identity can see, which onboarding steps
+ * precede the Account page, and which controls the sign-in wall offers.
  * They break in a browser, silently, so they are checked against index.html.
  */
 
@@ -72,19 +72,40 @@ test('the wall waits behind a placeholder until it knows which way in applies', 
     assert.ok(wall.indexOf('deploy-wall-loading') < wall.indexOf('deploy-wall-actions'));
 });
 
-test('the one-time seed band spans the Account page above the identity columns', () => {
-    const header = ACCOUNT.indexOf('class="account-header');
-    const seed = ACCOUNT.indexOf('id="seed-phrase-screen"');
-    const keys = ACCOUNT.indexOf('id="identity-keys-panel"');
+test('the Account page no longer carries the recovery phrase', () => {
+    // The phrase belongs to the onboarding step between Create Wallet and
+    // Account; once a user lands here it is gone for good.
+    assert.doesNotMatch(ACCOUNT, /seed-phrase-screen|seed-phrase-box|close-seed-screen-btn|seed-backup/);
+});
 
-    assert.ok(header > -1 && seed > header, 'the seed band follows the account header');
-    assert.ok(seed > -1 && seed < keys, 'the seed band comes before the two identity cards');
-    // It is a band, not a third column: nothing inside the keys panel.
-    assert.doesNotMatch(ACCOUNT.slice(keys), /id="seed-phrase-screen"/);
-    // Hidden until a wallet is created, and revealed by class alone.
-    assert.match(ACCOUNT, /id="seed-phrase-screen"[^>]*class="account-seed hidden"/);
-    assert.match(ACCOUNT, /id="seed-phrase-box"/);
-    assert.match(ACCOUNT, /id="close-seed-screen-btn"/);
+test('the recovery phrase backup step lists its parts in order, ahead of the sign-in wall', () => {
+    const publish = MARKUP.slice(MARKUP.indexOf('<!-- ── PUBLISH TAB ── -->'));
+    const screen = publish.slice(publish.indexOf('id="seed-backup-screen"'), publish.indexOf('id="deploy-auth-wall"'));
+
+    assert.ok(publish.indexOf('id="seed-backup-screen"') > -1, 'the backup step lives on the Sign in tab');
+    assert.match(screen, /id="seed-backup-screen"[^>]*class="seed-backup card-base hidden"/);
+
+    const order = [
+        'Save your recovery phrase',
+        'id="seed-backup-words"',
+        'only way to recover this wallet and its identities',
+        'Download Recovery Phrase (.txt)',
+        'id="seed-backup-copy-btn"',
+        'Security warning',
+        "I understand and I've copied/downloaded my seed"
+    ].map((needle) => screen.indexOf(needle));
+    order.forEach((at, index) => assert.ok(at > -1, `part ${index} is present`));
+    assert.deepEqual(
+        [...order].sort((a, b) => a - b),
+        order,
+        'and in the specified order'
+    );
+});
+
+test('the sign-in wall offers a reset for a backup that was never confirmed', () => {
+    const wall = MARKUP.slice(MARKUP.indexOf('id="deploy-auth-wall"'), MARKUP.indexOf('id="deploy-panel"'));
+    assert.match(wall, /id="seed-backup-interrupted"[^>]*class="seed-backup-interrupted hidden"/);
+    assert.match(wall, /id="reset-unconfirmed-wallet-btn"/);
 });
 
 test('the two identity cards each carry their own destructive action', () => {
@@ -102,7 +123,7 @@ test('the two identity cards each carry their own destructive action', () => {
     assert.match(nostr, /id="add-nostr-identity-btn"/);
 
     // Session actions stay in the header, away from the keys.
-    const headerBlock = ACCOUNT.slice(0, ACCOUNT.indexOf('id="seed-phrase-screen"'));
+    const headerBlock = ACCOUNT.slice(0, ACCOUNT.indexOf('id="identity-keys-panel"'));
     assert.match(headerBlock, /id="lock-disconnect-auth-btn"/);
     assert.match(headerBlock, /id="add-passkey-btn"/);
     assert.doesNotMatch(headerBlock, /id="delete-local-wallet-btn"/);

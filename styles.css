@@ -1928,77 +1928,133 @@ input[type='checkbox'] {
     line-height: 1.45;
 }
 
-/* The seed band: full width, above the identity columns, styled as the
-   warning it is rather than as a success panel. */
-.account-seed {
-    margin: 0 0 0.85rem;
-    padding: 1.15rem;
-    border: 1px solid rgba(229, 165, 60, 0.42);
-    border-radius: var(--r-lg);
-    background: linear-gradient(180deg, rgba(229, 165, 60, 0.12), transparent 70%), var(--surface);
-    box-shadow: var(--shadow);
+/* Recovery phrase backup: the onboarding step between Create Wallet and
+   Account, styled as the warning it is rather than as a success panel. */
+.seed-backup {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 1.5rem;
+    border-color: rgba(229, 165, 60, 0.42);
+    background: linear-gradient(180deg, rgba(229, 165, 60, 0.1), transparent 60%), var(--surface);
 }
 
-.account-seed.hidden {
+.seed-backup.hidden {
     display: none !important;
 }
 
-.account-seed-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.account-seed-icon {
-    display: grid;
-    place-items: center;
-    width: 36px;
-    height: 36px;
-    flex: 0 0 36px;
-    border-radius: 10px;
-    background: var(--warn-soft);
-    font-size: 1.05rem;
-}
-
-.account-seed-title {
-    min-width: 0;
-    flex: 1 1 18rem;
-}
-
-.account-seed-title h4 {
+.seed-backup h3 {
     color: #eeb95e;
-    font-size: 1rem;
+    font-size: 1.35rem;
 }
 
-.account-seed-title p {
-    margin-top: 0.1rem;
-    color: var(--muted);
-    font-size: 0.84rem;
-}
-
-.account-seed-box {
-    margin: 0.9rem 0 0.75rem;
-    padding: 0.9rem 1rem;
-    border-color: rgba(229, 165, 60, 0.28);
-    color: #f2dcae;
-    font-size: 0.95rem;
-    letter-spacing: 0.02em;
-    line-height: 1.9;
-    text-align: center;
-    white-space: pre-wrap;
-    word-spacing: 0.35em;
+.seed-backup-words {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: seed-word;
     user-select: all;
 }
 
-.account-seed-note {
+.seed-backup-words li {
+    counter-increment: seed-word;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid rgba(229, 165, 60, 0.28);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.18);
+    color: #f2dcae;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    overflow-wrap: anywhere;
+}
+
+.seed-backup-words li::before {
+    content: counter(seed-word) '.';
+    display: inline-block;
+    min-width: 1.6em;
+    margin-right: 0.35rem;
+    color: var(--muted);
+    user-select: none;
+}
+
+.seed-backup-explain {
+    padding: 0.85rem 1rem;
+    border-radius: var(--r);
+    background: var(--warn-soft);
+    color: var(--text-dim);
+    line-height: 1.55;
+}
+
+.seed-backup-explain strong {
+    color: #eeb95e;
+}
+
+.seed-backup-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+}
+
+.seed-backup-download {
+    width: 100%;
+    justify-content: center;
+    padding: 0.9rem 1.25rem;
+    font-size: 1rem;
+}
+
+.seed-backup-note {
     color: var(--muted);
     font-size: 0.8rem;
     line-height: 1.5;
 }
 
-.account-seed-note strong {
+.seed-backup-note strong {
     color: var(--text-dim);
+}
+
+.seed-backup-confirm {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.seed-backup-interrupted {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid rgba(229, 165, 60, 0.42);
+    border-radius: var(--r);
+    background: var(--warn-soft);
+    color: var(--text-dim);
+    font-size: 0.86rem;
+    line-height: 1.5;
+}
+
+.seed-backup-interrupted.hidden {
+    display: none !important;
+}
+
+@media (max-width: 600px) {
+    .seed-backup {
+        padding: 1.1rem;
+    }
+
+    .seed-backup-words {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .seed-backup-confirm .btn {
+        width: 100%;
+        justify-content: center;
+        white-space: normal;
+    }
 }
 
 .identity-security-summary {

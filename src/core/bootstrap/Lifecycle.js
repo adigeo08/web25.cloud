@@ -2712,8 +2712,23 @@ export async function completeDeployment() {
  * that reveals a signed-in-only surface has to go through here.
  */
 export function isAuthenticatedIdentity() {
-    const state = this.authController?.state;
-    return Boolean(state?.localWalletUnlocked && state?.address && state?.identityType);
+    return isSignedIn(this.authController?.state);
+}
+
+/**
+ * Signed in means unlocked *and* onboarded. A wallet created a moment ago is
+ * unlocked in the worker while its recovery phrase is on the backup screen,
+ * and none of the signed-in app exists for it until the backup is confirmed.
+ * @param {any} state
+ */
+function isSignedIn(state) {
+    return Boolean(
+        state?.localWalletUnlocked &&
+        state?.address &&
+        state?.identityType &&
+        !state?.seedBackupPending &&
+        !state?.seedBackupInterrupted
+    );
 }
 
 /**
@@ -2783,10 +2798,15 @@ export function setupAuthAwareUi(state) {
     const channelsTabPanel = document.getElementById('tab-channels');
     const pagesTabBtn = document.querySelector('[data-tab="pages"]');
     const pagesTabPanel = document.getElementById('tab-pages');
-    const hasIdentity = Boolean(state.localWalletUnlocked && state.address && state.identityType);
-    const isAuthenticated = Boolean(state.localWalletUnlocked && state.address && state.identityType);
+    const hasIdentity = isSignedIn(state);
+    const isAuthenticated = hasIdentity;
     const hasJustAuthenticated = !this._hadAuthenticatedIdentity && isAuthenticated;
     this._hadAuthenticatedIdentity = isAuthenticated;
+    // The backup step stands in for the sign-in wall until it is confirmed;
+    // confirming it is a first sign-in, and lands on Account.
+    const seedBackupPending = Boolean(state.seedBackupPending);
+    const hasJustOnboarded = Boolean(this._hadSeedBackupPending) && !seedBackupPending && isAuthenticated;
+    this._hadSeedBackupPending = seedBackupPending;
 
     // The wallet has been read: whatever this function decides below is the
     // real state, so the placeholders give way to it.
@@ -2803,7 +2823,11 @@ export function setupAuthAwareUi(state) {
         }
     }
     if (deployWall) {
-        deployWall.classList.toggle('hidden', isAuthenticated);
+        deployWall.classList.toggle('hidden', isAuthenticated || seedBackupPending);
+    }
+    const interruptedNotice = document.getElementById('seed-backup-interrupted');
+    if (interruptedNotice) {
+        interruptedNotice.classList.toggle('hidden', !state.seedBackupInterrupted || isAuthenticated);
     }
     if (deployPanel) {
         deployPanel.classList.toggle('hidden', !isAuthenticated);
@@ -2836,7 +2860,9 @@ export function setupAuthAwareUi(state) {
 
     const unlockBtn = document.getElementById('unlock-wallet-btn');
     const registerBtn = document.getElementById('register-wallet-btn');
-    if (unlockBtn) unlockBtn.classList.toggle('hidden', !state.localWalletExists);
+    // An unconfirmed backup is recovered or reset, never simply unlocked.
+    if (unlockBtn)
+        unlockBtn.classList.toggle('hidden', !state.localWalletExists || Boolean(state.seedBackupInterrupted));
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
 
     // The DM panel shows the Nostr address only. All of it is public material
@@ -2930,7 +2956,7 @@ export function setupAuthAwareUi(state) {
             // Somebody coming back goes back to what they were doing. Only a
             // first sign-in — nothing remembered at all — lands on Account,
             // because that is the one time the identity itself is the news.
-            const resumed = this.applyResumeHint?.();
+            const resumed = hasJustOnboarded ? null : this.applyResumeHint?.();
             if (resumed === null) {
                 const identityTab = document.querySelector('[data-tab="auth"]');
                 if (typeof identityTab?.click === 'function') identityTab.click();
