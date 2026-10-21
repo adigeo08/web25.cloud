@@ -147,33 +147,6 @@
                     </header>
 
                     <!--
-                        Shown once, right after a wallet is created: a full-width band
-                        above the identity columns, so it is the first thing on the page
-                        and never a column-sized aside.
-                    -->
-                    <section id="seed-phrase-screen" class="account-seed hidden" aria-live="polite">
-                        <div class="account-seed-head">
-                            <span class="account-seed-icon" aria-hidden="true">⚠️</span>
-                            <div class="account-seed-title">
-                                <h4>Save your seed phrase now</h4>
-                                <p>
-                                    These twelve words are the only way to recover this wallet, and they
-                                    are shown once.
-                                </p>
-                            </div>
-                            <button id="close-seed-screen-btn" class="btn btn-secondary">I saved it</button>
-                        </div>
-
-                        <pre id="seed-phrase-box" class="code-block account-seed-box"></pre>
-
-                        <p class="account-seed-note">
-                            <strong>Security warning:</strong>
-                            This local signing wallet is for signing websites, not for deposits or
-                            storing funds. Anyone holding these words controls the identity.
-                        </p>
-                    </section>
-
-                    <!--
                         Two identities, two identical cards: keys on top, the action
                         that removes them at the bottom of their own card.
                     -->
@@ -303,6 +276,45 @@
 
                 <!-- ── PUBLISH TAB ── -->
                 <div id="tab-publish" class="tab-panel" role="tabpanel">
+                    <!--
+                        Onboarding step two, right after Create Wallet: the
+                        recovery phrase, once, full page. The wallet is unlocked
+                        but nobody is signed in until the confirm button runs —
+                        the wall and every signed-in tab stay closed. The words
+                        are written here by SeedPhraseScreen.js and removed on
+                        confirm; they are never stored.
+                    -->
+                    <section id="seed-backup-screen" class="seed-backup card-base hidden" aria-labelledby="seed-backup-title">
+                        <h3 id="seed-backup-title">Save your recovery phrase</h3>
+
+                        <ol id="seed-backup-words" class="seed-backup-words" aria-label="Recovery phrase"></ol>
+
+                        <p class="seed-backup-explain">
+                            <strong>These 12 words are the only way to recover this wallet and its identities</strong>
+                            if you lose access to this browser or device. They are shown once and cannot be
+                            displayed again.
+                        </p>
+
+                        <div class="seed-backup-actions">
+                            <button id="seed-backup-download-btn" type="button" class="btn btn-primary seed-backup-download">
+                                ⬇️ Download Recovery Phrase (.txt)
+                            </button>
+                            <button id="seed-backup-copy-btn" type="button" class="btn btn-secondary btn-sm">📋 Copy</button>
+                        </div>
+
+                        <p class="seed-backup-note">
+                            <strong>Security warning:</strong>
+                            This local signing wallet is for signing websites, not for deposits or storing funds.
+                            Anyone holding these words controls the identity.
+                        </p>
+
+                        <div class="seed-backup-confirm">
+                            <button id="seed-backup-confirm-btn" type="button" class="btn btn-primary">
+                                I understand and I've copied/downloaded my seed
+                            </button>
+                        </div>
+                    </section>
+
                     <section id="deploy-auth-wall" class="quick-upload card-base" aria-busy="true">
                         <div>
                             <h3>🔐 Welcome back</h3>
@@ -326,6 +338,23 @@
                             once: offering Unlock and Create together, and then
                             withdrawing one, is worse than a moment of waiting.
                         -->
+                        <!--
+                            A wallet created here whose recovery phrase was never
+                            confirmed before the page went away. The words cannot
+                            be shown again, so this says so and offers a reset.
+                        -->
+                        <div id="seed-backup-interrupted" class="seed-backup-interrupted hidden" role="alert">
+                            <p>
+                                <strong>Recovery phrase not confirmed.</strong>
+                                This wallet was created, but its backup was never confirmed and the phrase cannot
+                                be shown again. If you saved it, unlock or recover as usual; otherwise delete this
+                                wallet and create a new one.
+                            </p>
+                            <button id="reset-unconfirmed-wallet-btn" type="button" class="btn btn-clear btn-sm">
+                                🗑️ Delete &amp; Start Over
+                            </button>
+                        </div>
+
                         <div id="deploy-wall-loading" class="auth-skeleton" aria-hidden="true">
                             <span class="skeleton-bar"></span>
                             <span class="skeleton-bar"></span>

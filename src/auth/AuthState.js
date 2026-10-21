@@ -18,7 +18,13 @@ export function createAuthState() {
         chainId: 1,
         localWalletExists: false,
         localWalletUnlocked: false,
-        seedPhrasePreview: null,
+        // A wallet created in this page whose recovery phrase is on the backup
+        // screen and not yet acknowledged. The worker may be unlocked, but the
+        // user is not signed in until this is false: unlocked is not onboarded.
+        seedBackupPending: false,
+        // A wallet whose backup was never acknowledged before the page went
+        // away. The phrase is gone for good; the sign-in wall offers a reset.
+        seedBackupInterrupted: false,
         passkeyProtected: false,
         // Public secp256k1 key of the unlocked wallet, fetched from the signing
         // worker. Public material only — never the private key.

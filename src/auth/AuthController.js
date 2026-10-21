@@ -29,7 +29,8 @@ import { renderAuthPanel } from '../ui/auth/AuthPanel.js';
 import { bindRegisterWallet } from '../ui/auth/RegisterWalletModal.js';
 import { bindUnlockWallet } from '../ui/auth/UnlockWalletModal.js';
 import { bindRecoverWallet } from '../ui/auth/RecoverWalletModal.js';
-import { hideSeedPhrase, showSeedPhrase } from '../ui/auth/SeedPhraseScreen.js';
+import { bindSeedPhraseScreen, hideSeedPhrase, showSeedPhrase } from '../ui/auth/SeedPhraseScreen.js';
+import { clearSeedBackupPending, markSeedBackupPending, readSeedBackupPending } from './SeedBackupState.js';
 
 export default class AuthController {
     constructor(toast, options = {}) {
@@ -61,8 +62,16 @@ export default class AuthController {
         const deleteBtn = document.getElementById('delete-local-wallet-btn');
         if (deleteBtn) deleteBtn.addEventListener('click', () => this.deleteLocalWallet());
 
-        const closeSeedBtn = document.getElementById('close-seed-screen-btn');
-        if (closeSeedBtn) closeSeedBtn.addEventListener('click', () => hideSeedPhrase());
+        bindSeedPhraseScreen({
+            onConfirm: () => this.confirmSeedBackup(),
+            onCopyResult: (copied) => {
+                if (copied) this.toast.success('Recovery phrase copied to clipboard.', 'Copied');
+                else this.toast.error('Could not copy. Download the file or write the words down.', 'Copy failed');
+            }
+        });
+
+        const resetBtn = document.getElementById('reset-unconfirmed-wallet-btn');
+        if (resetBtn) resetBtn.addEventListener('click', () => this.resetUnconfirmedWallet());
 
         const addPasskeyBtn = document.getElementById('add-passkey-btn');
         if (addPasskeyBtn) addPasskeyBtn.addEventListener('click', () => this.addAlternatePasskey());
@@ -116,6 +125,13 @@ export default class AuthController {
         this.state.passkeyProtected = Boolean(localWallet.passkeyProtected);
         this.state.publicKey = localWallet.unlocked ? await getLocalWalletPublicKey() : null;
         await this.refreshNostrIdentity(localWallet.unlocked);
+
+        // A backup flag without a wallet is left over from a creation that
+        // never finished, or a wallet deleted elsewhere: nothing to warn about.
+        if (!localWallet.exists) clearSeedBackupPending();
+        this.state.seedBackupInterrupted = Boolean(
+            localWallet.exists && !this.state.seedBackupPending && readSeedBackupPending()
+        );
 
         if (localWallet.exists && localWallet.address) {
             this.state.identityType = 'local';
@@ -196,7 +212,21 @@ export default class AuthController {
         this.state.resumeHint = readResumeHint();
     }
 
+    /**
+     * Create a wallet, then hold the user on the recovery phrase backup step.
+     *
+     * The worker is unlocked when this returns, but the session is not signed
+     * in: `seedBackupPending` keeps every signed-in surface closed until
+     * `confirmSeedBackup` runs.
+     */
     async registerLocal() {
+        if (this.registering || this.state.localWalletExists || this.state.seedBackupPending) return;
+        this.registering = true;
+        const registerBtn = document.getElementById('register-wallet-btn');
+        if (registerBtn instanceof HTMLButtonElement) registerBtn.disabled = true;
+        // Set before the wallet exists, so a page that dies at any point after
+        // creation still knows the phrase was never acknowledged.
+        markSeedBackupPending();
         try {
             const result = await registerLocalWallet();
             this.state.publicKey = await getLocalWalletPublicKey();
@@ -206,30 +236,48 @@ export default class AuthController {
             this.state.status = AUTH_STATUS.LOCAL_UNLOCKED;
             this.state.localWalletExists = true;
             this.state.localWalletUnlocked = true;
-            this.rememberUnlockedSession();
             this.state.passkeyProtected = passkeySupported();
+            this.state.seedBackupPending = true;
+            this.state.seedBackupInterrupted = false;
             showSeedPhrase(result.seedPhrase);
-            this.toast.warning(
-                'This local wallet is for website signing only. Do NOT use it for deposits or storing funds.',
-                'Security warning',
-                9000
-            );
-            try {
-                await navigator.clipboard.writeText(result.seedPhrase);
-                this.toast.success('Seed phrase copied to clipboard automatically.', 'Seed copied');
-            } catch (_) {
-                this.toast.info('Could not auto-copy seed phrase. Please copy it manually now.', 'Clipboard unavailable');
-            }
             this.render();
             this.notify();
         } catch (err) {
+            clearSeedBackupPending();
             this.toast.error(err.message, 'Registration failed');
+        } finally {
+            this.registering = false;
+            if (registerBtn instanceof HTMLButtonElement) registerBtn.disabled = false;
         }
+    }
+
+    /** The user has saved the phrase: finish onboarding and sign them in. */
+    confirmSeedBackup() {
+        if (!this.state.seedBackupPending) return;
+        hideSeedPhrase();
+        clearSeedBackupPending();
+        this.state.seedBackupPending = false;
+        if (this.state.localWalletUnlocked) this.rememberUnlockedSession();
+        this.render();
+        this.notify();
+    }
+
+    /**
+     * The way out of an interrupted onboarding: the phrase cannot be shown
+     * again, so the unconfirmed wallet is deleted and a new one can be made.
+     */
+    async resetUnconfirmedWallet() {
+        await this.deleteLocalWallet(
+            'Delete this wallet and start over? Its recovery phrase was never confirmed and cannot be shown again. If you did save it, cancel and use Unlock or Recover instead.'
+        );
     }
 
     async recoverLocal(seedPhrase) {
         try {
             const result = await registerLocalWalletFromSeed(seedPhrase);
+            // Recovering from the words is proof they were saved.
+            clearSeedBackupPending();
+            this.state.seedBackupInterrupted = false;
             this.state.publicKey = await getLocalWalletPublicKey();
             await this.refreshNostrIdentity(true);
             this.state.identityType = 'local';
@@ -294,6 +342,8 @@ export default class AuthController {
         try {
             await removeLocalWallet();
             const result = await registerLocalWalletFromSeed(seedPhrase);
+            clearSeedBackupPending();
+            this.state.seedBackupInterrupted = false;
             this.state.publicKey = await getLocalWalletPublicKey();
             await this.refreshNostrIdentity(true);
             input.value = '';
@@ -333,15 +383,16 @@ export default class AuthController {
         }
     }
 
-    async deleteLocalWallet() {
-        const confirmed = window.confirm(
-            'Are you sure you want to delete your local wallet? This action is irreversible — the wallet cannot be recovered without the seed phrase.'
-        );
+    async deleteLocalWallet(
+        message = 'Are you sure you want to delete your local wallet? This action is irreversible — the wallet cannot be recovered without the seed phrase.'
+    ) {
+        const confirmed = window.confirm(message);
         if (!confirmed) return;
         try {
             const address = this.state.address;
             markSessionLocked();
             await removeLocalWallet();
+            clearSeedBackupPending();
             // The wallet is gone, so its Nostr reachability preference is too.
             clearNostrIdentityPreference(address);
             this.state = createAuthState();
@@ -353,6 +404,16 @@ export default class AuthController {
     }
 
     getActiveIdentity() {
+        // A wallet still on its backup step has no identity to act with yet.
+        if (this.state.seedBackupPending) {
+            return {
+                identityType: null,
+                address: null,
+                chainId: this.state.chainId,
+                status: AUTH_STATUS.ANONYMOUS,
+                publicKey: null
+            };
+        }
         return {
             identityType: this.state.identityType,
             address: this.state.address,
