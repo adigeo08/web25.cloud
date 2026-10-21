@@ -97,9 +97,22 @@ A relay is never treated as an authority for anything.
 
 ## 4. Direct Messenger flow
 
-The panel has exactly two states: find someone, and talk to them. The manual
-magnet exchange and the raw ECIES key display were removed from this panel in
-favour of the address search.
+The main pane has two states: nothing selected, and a conversation. Finding
+someone new lives in the **New connection** sheet over it. The manual magnet
+exchange and the raw ECIES key display were removed in favour of the address
+search.
+
+A **saved contact** does not go through the flow below at all. Their
+conversation is a persistent room — both npubs, sorted and hashed, the same on
+both sides for good — that opens at once from the contact list with their keys
+from the contact record, and works over Nostr from the first message. A
+private "conversation open" notice tells them it is on screen; only while both
+sides have it open does one of them offer a direct WebRTC link, and closing or
+switching on either side tears the link down while Nostr carries on. Messages
+that arrive for a closed conversation are verified against the sender's saved
+keys, held encrypted and badged unread until shown. See README §8d.
+
+The flow below is how two people who are not contacts meet:
 
 ```text
 A types B's npub into the search box (or picks B from trusted contacts)
@@ -353,7 +366,12 @@ Both working states are green: once the conversation works, the transport is a
 detail of that success, not a warning. `ChannelsService` derives this one state
 from the transport, so no other component renders connection status.
 
-WebRTC remains the preferred transport. The fallback is armed only when:
+In a saved contact's room the working state is **Connected · Nostr** from the
+moment it opens; a direct link being tried, failing or dropping changes the
+route, never that answer.
+
+For a first contact, WebRTC remains the preferred transport. The fallback is
+armed only when:
 
 - the WebRTC connection deadline (25s) elapses with no open DataChannel, or
 - the peer connection reports `failed`/`closed`, or

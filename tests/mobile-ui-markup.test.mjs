@@ -50,9 +50,16 @@ test('the phone stepper shows only the step before, the current one and the next
     assert.match(phone, /\.step-chip\.is-current \+ \.step-chip \{[\s\S]*?grid-column: 3;/);
 });
 
-test('the recipient search leads the messenger panel, ahead of the explanation', () => {
-    const panel = MARKUP.slice(MARKUP.indexOf('id="dm-choose-role"'), MARKUP.indexOf('SUB-PANEL 2'));
-    const title = panel.indexOf('<h3>💬 Direct Messenger</h3>');
+/** The New connection sheet, where the whole new-chat flow now lives. */
+function newChatSheet() {
+    const start = MARKUP.indexOf('<dialog id="dm-new-chat-sheet"');
+    return MARKUP.slice(start, MARKUP.indexOf('</dialog>', start));
+}
+
+test('the recipient search leads the New connection sheet, ahead of the explanation', () => {
+    const panel = newChatSheet();
+    assert.ok(panel.includes('id="dm-choose-role"'), 'the finder moved into the sheet whole');
+    const title = panel.indexOf('<h3 id="dm-new-chat-title">💬 New connection</h3>');
     const search = panel.indexOf('class="dm-search"');
     const lede = panel.indexOf('class="dm-lede"');
 
@@ -75,8 +82,8 @@ test('the address field gets its own line, with Paste and Search sharing the nex
     assert.match(MARKUP, /id="dm-copy-own-npub-btn"[\s\S]*?id="dm-nostr-search-btn"/);
 });
 
-test('the welcome screen is the exchange: your address, then theirs, then what happens next', () => {
-    const panel = MARKUP.slice(MARKUP.indexOf('id="dm-choose-role"'), MARKUP.indexOf('SUB-PANEL 2'));
+test('the New connection sheet is the exchange: your address, then theirs, then what happens next', () => {
+    const panel = newChatSheet();
     const mine = panel.indexOf('id="dm-my-address-card"');
     const theirs = panel.indexOf('class="dm-search"');
     const next = panel.indexOf('class="dm-lede"');
@@ -90,13 +97,24 @@ test('the welcome screen is the exchange: your address, then theirs, then what h
     assert.match(panel, /id="dm-paste-btn"[^>]*class="[^"]*hidden/);
 });
 
-test('your whole address and the peer’s are one tap away, in a native dialog', () => {
+test('your whole address is in the New connection sheet, the peer’s one tap away, both native dialogs', () => {
+    assert.match(MARKUP, /<dialog id="dm-new-chat-sheet" class="dm-sheet dm-new-chat" aria-labelledby="dm-new-chat-title">/);
     assert.match(MARKUP, /<dialog id="dm-address-sheet" class="dm-sheet"/);
     assert.match(MARKUP, /<form method="dialog" class="dm-sheet-card">/);
-    // Copy is where focus lands; Copy and Share must not submit the form.
+    // Copy is where focus lands, and must not submit the form.
     assert.match(MARKUP, /id="dm-sheet-copy" type="button"[^>]*autofocus/);
-    assert.match(MARKUP, /id="dm-sheet-share" type="button"/);
-    assert.match(MARKUP, /id="dm-show-address-btn"[^>]*aria-label="Show my whole address"/);
+    // The button beside Copy is New connection now — the same button, no other.
+    assert.match(
+        MARKUP,
+        /id="dm-show-address-btn"[^>]*title="New connection"[^>]*aria-label="New connection"[^>]*aria-controls="dm-new-chat-sheet"/
+    );
+    assert.equal(MARKUP.match(/New connection"/g)?.length, 2, 'one button: its title and its label');
+    // No second address flow: the address sheet is the peer's card only.
+    assert.doesNotMatch(MARKUP, /id="dm-sheet-share"/);
+    assert.doesNotMatch(MARKUP, /id="dm-sheet-steps"/);
+    assert.equal(MARKUP.match(/id="dm-welcome-npub"/g)?.length, 1, 'your address is shown whole in one place');
+    // The close control is a dialog form button, so it closes and nothing else.
+    assert.match(newChatSheet(), /<form method="dialog"[^>]*>[\s\S]*?id="dm-new-chat-close"[^>]*value="close"/);
     // The peer in the conversation header is the button that opens theirs.
     const head = MARKUP.slice(MARKUP.indexOf('class="dm-chat-head"'), MARKUP.indexOf('id="channels-messages"'));
     assert.match(
@@ -158,7 +176,9 @@ test('your address is one line with a copy button that survives its own flash', 
 
     // On a phone the list is part of the page scroll, not a box inside it.
     const phone = STYLES.slice(STYLES.indexOf('@media (max-width: 860px)'));
-    assert.match(phone, /\.dm-sidebar-scroll,\s*#dm-choose-role \{\s*overflow: visible;/);
+    assert.match(phone, /\.dm-sidebar-scroll \{\s*overflow: visible;/);
+    // With nothing open a phone shows the list alone, not an empty pane under it.
+    assert.match(phone, /\.dm-layout:not\(:has\(#dm-chat-active:not\(\.hidden\)\)\) \.dm-main \{\s*display: none;/);
 });
 
 test('a conversation takes the whole screen on a phone, and desktop keeps both panes', () => {

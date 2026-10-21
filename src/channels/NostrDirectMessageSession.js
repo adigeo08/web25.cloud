@@ -4,8 +4,12 @@
  *
  * Responsibilities:
  *   - hold the relay pool and the local identity's gift-wrapped inbox;
- *   - turn an inbound gift wrap into either a verified WebRTC invitation or a
- *     Web25 chat envelope handed to `ChannelsService`;
+ *   - turn an inbound gift wrap into a verified WebRTC invitation, a chat
+ *     request, a "conversation open/closed" notice, or a Web25 chat envelope
+ *     — from any sender, with the sender the seal proved. Deciding whether
+ *     that sender may be heard is the caller's job: every envelope is handed
+ *     on with who signed it, never dropped or accepted here on the strength
+ *     of which conversation happens to be open;
  *   - expose the `{ send(wire) }` fallback handle that `ChannelsService` uses
  *     when the DataChannel is not open.
  *
@@ -32,9 +36,13 @@ export class NostrDirectMessageSession {
      *   pool: any,
      *   signer: any,
      *   onInvitation?: (bootstrap: any, context: { senderNostrPublicKey: string }) => void|Promise<void>,
-     *   onChatEnvelope?: (wire: string, context: { senderNostrPublicKey: string }) => void|Promise<void>,
+     *   onChatEnvelope?: (wire: string,
+     *                     context: { senderNostrPublicKey: string, createdAtSeconds: number }) => void|Promise<void>,
      *   onChatRequest?: (senderNostrPublicKey: string,
      *                     context: { createdAtSeconds: number }) => void|Promise<void>,
+     *   onConversationIntent?: (senderNostrPublicKey: string,
+     *                     intent: { state: string, room: string, ack: boolean,
+     *                               createdAtSeconds: number }) => void|Promise<void>,
      *   onError?: (error: Error) => void,
      *   config?: typeof NOSTR_CONFIG,
      *   ledger?: InboxLedger,
@@ -47,6 +55,7 @@ export class NostrDirectMessageSession {
         onInvitation = null,
         onChatEnvelope = null,
         onChatRequest = null,
+        onConversationIntent = null,
         onError = null,
         config = NOSTR_CONFIG,
         ledger = new InboxLedger(),
@@ -58,6 +67,7 @@ export class NostrDirectMessageSession {
         this.onInvitation = onInvitation;
         this.onChatEnvelope = onChatEnvelope;
         this.onChatRequest = onChatRequest;
+        this.onConversationIntent = onConversationIntent;
         this.onError = onError;
         /** What this browser already acted on, across reconnects and reloads. */
         this.ledger = ledger;
@@ -263,7 +273,11 @@ export class NostrDirectMessageSession {
         // A request or an invitation is acted on once, ever: re-wrapped or
         // re-published, the same rumor is still the same question. The hash is
         // computed here — a sender's claimed id is not trusted to be unique.
-        if (rumor.kind === this.config.WEB25_CHAT_REQUEST_KIND || rumor.kind === this.config.WEB25_SIGNALING_KIND) {
+        if (
+            rumor.kind === this.config.WEB25_CHAT_REQUEST_KIND ||
+            rumor.kind === this.config.WEB25_SIGNALING_KIND ||
+            rumor.kind === this.config.WEB25_CONVERSATION_KIND
+        ) {
             const rumorHash = nostrCore.getEventHash({ ...rumor, pubkey: senderNostrPublicKey });
             if (!this.ledger.claim(`rumor:${rumorHash}`)) return;
         }
@@ -285,10 +299,37 @@ export class NostrDirectMessageSession {
             return;
         }
 
-        if (rumor.kind === this.config.NIP17_CHAT_KIND) {
-            if (!this.peerNostrPublicKey || senderNostrPublicKey !== this.peerNostrPublicKey) return;
+        if (rumor.kind === this.config.WEB25_CONVERSATION_KIND) {
+            let intent;
             try {
-                await this.onChatEnvelope?.(rumor.content, { senderNostrPublicKey });
+                intent = JSON.parse(rumor.content);
+            } catch (_) {
+                return;
+            }
+            if (intent?.type !== 'web25-conversation') return;
+            try {
+                await this.onConversationIntent?.(senderNostrPublicKey, {
+                    state: intent.state === 'open' ? 'open' : 'closed',
+                    room: `${intent.room || ''}`,
+                    ack: intent.ack === true,
+                    createdAtSeconds: Number(rumor.created_at) || 0
+                });
+            } catch (error) {
+                this._fail(error);
+            }
+            return;
+        }
+
+        if (rumor.kind === this.config.NIP17_CHAT_KIND) {
+            // Every sender, not only the open conversation's: a saved contact
+            // writes whether or not their chat is on screen here. The caller
+            // checks the sender against the open conversation or a saved
+            // contact, and drops everybody else.
+            try {
+                await this.onChatEnvelope?.(rumor.content, {
+                    senderNostrPublicKey,
+                    createdAtSeconds: Number(rumor.created_at) || 0
+                });
             } catch (error) {
                 this._fail(error);
             }

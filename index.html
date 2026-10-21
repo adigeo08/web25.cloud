@@ -621,15 +621,23 @@
                                             title="Copy my Nostr address"
                                             aria-label="Copy my Nostr address"
                                         >📋 Copy</button>
+                                        <!--
+                                            New connection: your whole address
+                                            to share, and the way to start a
+                                            chat, in one sheet. The same button
+                                            that used to show only the address.
+                                        -->
                                         <button
                                             id="dm-show-address-btn"
                                             type="button"
                                             class="dm-icon-btn dm-show-address-btn"
-                                            title="Show my whole address"
-                                            aria-label="Show my whole address"
+                                            title="New connection"
+                                            aria-label="New connection"
+                                            aria-haspopup="dialog"
+                                            aria-controls="dm-new-chat-sheet"
                                         >
                                             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                                                <path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M8 9h8M8 12h8M8 15h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                                                <path d="M20 11.5a7.5 7.5 0 0 1-11 6.6L4 19.5l1.4-4.6A7.5 7.5 0 1 1 20 11.5ZM12.5 8.5v6M9.5 11.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                             </svg>
                                         </button>
                                     </div>
@@ -710,97 +718,21 @@
                             </aside>
 
                             <div class="dm-main">
-                                <!-- SUB-PANEL 1: Find someone to message -->
-                                <div id="dm-choose-role">
-                                    <div class="dm-welcome">
-                                        <div class="dm-welcome-art" aria-hidden="true">
-                                            <svg viewBox="0 0 64 64" width="44" height="44" fill="none">
-                                                <path
-                                                    d="M10 14a6 6 0 0 1 6-6h26a6 6 0 0 1 6 6v16a6 6 0 0 1-6 6H26l-9 8v-8h-1a6 6 0 0 1-6-6V14Z"
-                                                    fill="currentColor"
-                                                    opacity="0.9"
-                                                />
-                                                <path
-                                                    d="M52 24h2a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6h-1v8l-9-8H32a6 6 0 0 1-6-6v-2"
-                                                    stroke="currentColor"
-                                                    stroke-width="3"
-                                                    stroke-linejoin="round"
-                                                    opacity="0.55"
-                                                />
-                                            </svg>
-                                        </div>
-                                        <h3>💬 Direct Messenger</h3>
-                                        <p class="dm-welcome-sub">
-                                            Swap addresses, then chat — end-to-end encrypted, browser to browser.
-                                        </p>
-
-                                        <div class="dm-exchange">
-                                            <!--
-                                                Step one is giving yours away,
-                                                so it is shown whole, in groups
-                                                that are easy to read out or
-                                                compare, with Copy and Share
-                                                one tap away.
-                                            -->
-                                            <section id="dm-my-address-card" class="dm-exchange-card dm-my-address hidden" aria-labelledby="dm-my-address-title">
-                                                <p id="dm-my-address-title" class="dm-exchange-step"><span>1</span> Your address <em>send it to them</em></p>
-                                                <p id="dm-welcome-npub" class="dm-address-chunks" title="Your Nostr address"></p>
-                                                <div class="dm-exchange-actions">
-                                                    <button id="dm-welcome-copy-btn" type="button" class="btn btn-primary">📋 Copy address</button>
-                                                    <button id="dm-welcome-share-btn" type="button" class="btn btn-secondary hidden">📤 Share…</button>
-                                                </div>
-                                                <p class="dm-exchange-note">
-                                                    Anyone with it can ask to chat — nothing reaches you until you accept.
-                                                </p>
-                                            </section>
-
-                                            <div class="dm-search">
-                                                <label class="dm-exchange-step" for="dm-recipient-npub-input"><span>2</span> Start a new chat <em>paste their address</em></label>
-                                                <div class="hash-input-group">
-                                                    <input
-                                                        id="dm-recipient-npub-input"
-                                                        type="text"
-                                                        class="hash-input"
-                                                        placeholder="npub1… or 64-character hex key"
-                                                        autocomplete="off"
-                                                        autocapitalize="off"
-                                                        spellcheck="false"
-                                                    />
-                                                    <button id="dm-paste-btn" type="button" class="btn btn-secondary hidden">📋 Paste</button>
-                                                    <button id="dm-nostr-search-btn" class="btn btn-primary">🔍 Search</button>
-                                                </div>
-                                                <p id="dm-search-hint" class="dm-search-hint">Paste an npub, or a raw 64-character hex key.</p>
-
-                                                <div id="dm-search-result" class="dm-search-result hidden">
-                                                    <span id="dm-search-result-avatar" class="dm-avatar" aria-hidden="true"></span>
-                                                    <div class="dm-search-result-main">
-                                                        <p id="dm-search-result-name" class="dm-search-result-name"></p>
-                                                        <p id="dm-search-result-npub" class="dm-search-result-npub"></p>
-                                                        <p id="dm-search-result-about" class="dm-search-result-about"></p>
-                                                        <p id="dm-search-result-presence" class="dm-search-result-presence"></p>
-                                                    </div>
-                                                    <button id="channels-nostr-invite-btn" class="btn btn-primary">Request chat</button>
-                                                </div>
-
-                                                <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
-                                            </div>
-                                        </div>
-
-                                        <div class="dm-lede">
-                                            <p>
-                                                <span class="dm-exchange-step"><span>3</span></span> Whoever receives a
-                                                request accepts it under <b>Chat invitations</b>, and the conversation opens
-                                                on both sides. Unknown peers always wait for you to accept; trusted contacts
-                                                reconnect on their own.
-                                            </p>
-                                            <ul class="dm-stack">
-                                                <li><span>Transport</span> WebRTC · relay fallback</li>
-                                                <li><span>Signalling</span> Nostr NIP-59 gift wrap</li>
-                                                <li><span>Messages</span> ECIES + NIP-44, signed</li>
-                                                <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
-                                            </ul>
-                                        </div>
+                                <!--
+                                    Nothing selected: a quiet pane. Starting a
+                                    chat lives in the New connection sheet; the
+                                    contacts and the conversation are the app.
+                                -->
+                                <div id="dm-empty" class="dm-empty">
+                                    <div class="dm-empty-art" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="30" height="30">
+                                            <path d="M20 11.5a7.5 7.5 0 0 1-11 6.6L4 19.5l1.4-4.6A7.5 7.5 0 1 1 20 11.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                                        </svg>
                                     </div>
+                                    <p class="dm-empty-title">Select a chat</p>
+                                    <p class="dm-empty-sub">
+                                        Messages from saved contacts arrive here even while their chat is closed.
+                                    </p>
                                 </div>
 
                                 <!-- SUB-PANEL 2: Chat Active -->
@@ -872,13 +804,13 @@
                                                 id="channels-leave-btn"
                                                 type="button"
                                                 class="dm-head-btn is-danger"
-                                                title="Disconnect"
-                                                aria-label="Disconnect"
+                                                title="Close chat"
+                                                aria-label="Close chat"
                                             >
                                                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                                                     <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                                 </svg>
-                                                <span class="dm-head-btn-label">Disconnect</span>
+                                                <span class="dm-head-btn-label">Close</span>
                                             </button>
                                         </div>
                                     </div>
@@ -981,8 +913,120 @@
                     </section>
 
                     <!--
-                        A whole address, readable: yours (with how to use it) or
-                        the peer's (with the EVM address the handshake verified).
+                        New connection: your address to give away, the field
+                        for theirs, and what happens next — the whole new-chat
+                        flow, over the app instead of in place of it. A native
+                        dialog, so Escape and focus behave as the platform
+                        does; a tap on the backdrop closes it too. Closing it
+                        touches no conversation and no subscription.
+                    -->
+                    <dialog id="dm-new-chat-sheet" class="dm-sheet dm-new-chat" aria-labelledby="dm-new-chat-title">
+                        <form method="dialog" class="dm-new-chat-close-form">
+                            <div class="dm-sheet-grip" aria-hidden="true"></div>
+                            <button id="dm-new-chat-close" class="dm-icon-btn dm-sheet-close dm-new-chat-close" value="close" aria-label="Close" title="Close">
+                                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                                    <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                                </svg>
+                            </button>
+                        </form>
+                        <div id="dm-choose-role">
+                            <div class="dm-welcome">
+                                <div class="dm-welcome-art" aria-hidden="true">
+                                    <svg viewBox="0 0 64 64" width="44" height="44" fill="none">
+                                        <path
+                                            d="M10 14a6 6 0 0 1 6-6h26a6 6 0 0 1 6 6v16a6 6 0 0 1-6 6H26l-9 8v-8h-1a6 6 0 0 1-6-6V14Z"
+                                            fill="currentColor"
+                                            opacity="0.9"
+                                        />
+                                        <path
+                                            d="M52 24h2a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6h-1v8l-9-8H32a6 6 0 0 1-6-6v-2"
+                                            stroke="currentColor"
+                                            stroke-width="3"
+                                            stroke-linejoin="round"
+                                            opacity="0.55"
+                                        />
+                                    </svg>
+                                </div>
+                                <h3 id="dm-new-chat-title">💬 New connection</h3>
+                                <p class="dm-welcome-sub">
+                                    Swap addresses, then chat — end-to-end encrypted, browser to browser.
+                                </p>
+
+                                <div class="dm-exchange">
+                                    <!--
+                                        Step one is giving yours away,
+                                        so it is shown whole, in groups
+                                        that are easy to read out or
+                                        compare, with Copy and Share
+                                        one tap away.
+                                    -->
+                                    <section id="dm-my-address-card" class="dm-exchange-card dm-my-address hidden" aria-labelledby="dm-my-address-title">
+                                        <p id="dm-my-address-title" class="dm-exchange-step"><span>1</span> Your address <em>send it to them</em></p>
+                                        <p id="dm-welcome-npub" class="dm-address-chunks" title="Your Nostr address"></p>
+                                        <div class="dm-exchange-actions">
+                                            <button id="dm-welcome-copy-btn" type="button" class="btn btn-primary">📋 Copy address</button>
+                                            <button id="dm-welcome-share-btn" type="button" class="btn btn-secondary hidden">📤 Share…</button>
+                                        </div>
+                                        <p class="dm-exchange-note">
+                                            Anyone with it can ask to chat — nothing reaches you until you accept.
+                                        </p>
+                                    </section>
+
+                                    <div class="dm-search">
+                                        <label class="dm-exchange-step" for="dm-recipient-npub-input"><span>2</span> Start a new chat <em>paste their address</em></label>
+                                        <div class="hash-input-group">
+                                            <input
+                                                id="dm-recipient-npub-input"
+                                                type="text"
+                                                class="hash-input"
+                                                placeholder="npub1… or 64-character hex key"
+                                                autocomplete="off"
+                                                autocapitalize="off"
+                                                spellcheck="false"
+                                            />
+                                            <button id="dm-paste-btn" type="button" class="btn btn-secondary hidden">📋 Paste</button>
+                                            <button id="dm-nostr-search-btn" class="btn btn-primary">🔍 Search</button>
+                                        </div>
+                                        <p id="dm-search-hint" class="dm-search-hint">Paste an npub, or a raw 64-character hex key.</p>
+
+                                        <div id="dm-search-result" class="dm-search-result hidden">
+                                            <span id="dm-search-result-avatar" class="dm-avatar" aria-hidden="true"></span>
+                                            <div class="dm-search-result-main">
+                                                <p id="dm-search-result-name" class="dm-search-result-name"></p>
+                                                <p id="dm-search-result-npub" class="dm-search-result-npub"></p>
+                                                <p id="dm-search-result-about" class="dm-search-result-about"></p>
+                                                <p id="dm-search-result-presence" class="dm-search-result-presence"></p>
+                                            </div>
+                                            <button id="channels-nostr-invite-btn" class="btn btn-primary">Request chat</button>
+                                        </div>
+
+                                        <p id="dm-choose-role-error" class="dm-error-message hidden"></p>
+                                    </div>
+                                </div>
+
+                                <div class="dm-lede">
+                                    <p>
+                                        <span class="dm-exchange-step"><span>3</span></span> Whoever receives a
+                                        request accepts it under <b>Chat invitations</b>, and the conversation opens
+                                        on both sides. Unknown peers always wait for you to accept. Saved contacts
+                                        just open: messages go over Nostr any time, and a direct link is added while
+                                        you both have the chat open.
+                                    </p>
+                                    <ul class="dm-stack">
+                                        <li><span>Transport</span> Nostr relays · WebRTC while both are open</li>
+                                        <li><span>Signalling</span> Nostr NIP-59 gift wrap</li>
+                                        <li><span>Messages</span> ECIES + NIP-44, signed</li>
+                                        <li><span>Identity</span> one secp256k1 key: npub · 04… · 0x…</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </dialog>
+
+                    <!--
+                        Who you are talking to: their whole address, the EVM
+                        address verified for them, how long this conversation
+                        keeps its messages here, and Block.
                         A native dialog, so focus, Escape and the backdrop behave
                         the way the platform does; on a phone it is a bottom
                         sheet.
@@ -1007,11 +1051,10 @@
                                 <p id="dm-sheet-address" class="dm-address-chunks"></p>
                                 <div class="dm-exchange-actions">
                                     <button id="dm-sheet-copy" type="button" class="btn btn-primary" autofocus>📋 Copy address</button>
-                                    <button id="dm-sheet-share" type="button" class="btn btn-secondary hidden">📤 Share…</button>
                                 </div>
                             </section>
                             <section id="dm-sheet-evm-field" class="dm-sheet-field hidden">
-                                <p class="dm-sheet-label">EVM address · verified in the handshake</p>
+                                <p class="dm-sheet-label">EVM address · verified</p>
                                 <p id="dm-sheet-evm" class="dm-sheet-mono"></p>
                                 <div class="dm-exchange-actions">
                                     <button id="dm-sheet-copy-evm" type="button" class="btn btn-secondary btn-sm">📋 Copy EVM address</button>
@@ -1036,11 +1079,6 @@
                                 </p>
                             </section>
                             <button id="dm-sheet-block" type="button" class="btn btn-danger dm-sheet-block hidden">🚫 Block</button>
-                            <ol id="dm-sheet-steps" class="dm-sheet-steps hidden">
-                                <li>Send it to the person you want to talk to — any app will do.</li>
-                                <li>They paste it under <b>Start a new chat</b> and press <b>Request chat</b>.</li>
-                                <li>Their request shows up here under <b>Chat invitations</b>. Accept it and the encrypted chat opens.</li>
-                            </ol>
                         </form>
                     </dialog>
 

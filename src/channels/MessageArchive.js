@@ -24,6 +24,17 @@
  * window by dating it ahead. Retention is capped at seven days whatever is
  * asked for.
  *
+ * Held until read
+ * ---------------
+ * A saved contact can write while their conversation is closed here. Such a
+ * message is *held*: sealed the same way, marked unread, and kept until the
+ * conversation is opened and it has been shown — whatever the conversation's
+ * retention, because a message nobody has seen yet is not history. It is
+ * still bounded by the same clock: a held message goes, read or not, seven
+ * days after it was sent, the most anything is ever kept. Once it has been
+ * shown it is released onto the conversation's own terms — kept for its
+ * retention, or deleted at once when retention is off. The thread says which.
+ *
  * Its own IndexedDB database, so it never shares a connection or an upgrade
  * path with the wallet vault or the contacts.
  */
@@ -181,7 +192,7 @@ export class MessageArchive {
         try {
             if (retention === 0) {
                 await promisify(store(db, STORE_SETTINGS, 'readwrite').delete(tag));
-                await this._deleteConversation(db, tag);
+                await this._deleteConversation(db, tag, { keepUnread: true });
                 return 0;
             }
 
@@ -194,6 +205,9 @@ export class MessageArchive {
                 (await promisify(store(db, STORE_MESSAGES, 'readonly').index(INDEX_CONVERSATION).getAll(tag))) || []
             );
             for (const row of rows) {
+                // Unread is held until read, on its own clock; retention
+                // applies once it has been shown.
+                if (row.unread === true) continue;
                 const expiresAt = Number(row.sentAt) + retention;
                 if (expiresAt <= now) {
                     await promisify(store(db, STORE_MESSAGES, 'readwrite').delete(row.id));
@@ -260,11 +274,148 @@ export class MessageArchive {
     }
 
     /**
-     * What this conversation kept, oldest first. Expired rows are purged first,
-     * so nothing past its window is ever shown.
+     * Hold a message that arrived while its conversation was closed, until it
+     * has been shown.
+     *
+     * Kept whatever the conversation's retention, sealed like everything else,
+     * and gone seven days after it was sent even if it is never read. The
+     * same message twice is one row, and a message this archive already holds
+     * — read or not — is not brought back as unread.
      *
      * @param {string} peer
-     * @returns {Promise<Array<{ id: string, from: string, text: string, timestamp: string, own: boolean }>>}
+     * @param {{ id?: string, from?: string, text?: string, timestamp?: string|number }} message
+     * @returns {Promise<string>} the row it is held in, or '' if it was not held
+     */
+    async hold(peer, message) {
+        const text = `${message?.text || ''}`;
+        if (!text) return '';
+
+        const owner = await this._owner();
+        const tag = conversationTag(owner, MessageArchive._peer(peer));
+        const now = this.now();
+        const claimed = new Date(message?.timestamp ?? now).getTime();
+        const sentAt = Number.isFinite(claimed) ? Math.min(claimed, now) : now;
+        const expiresAt = sentAt + MAX_RETENTION_MS;
+        if (expiresAt <= now) return '';
+
+        const plaintext = JSON.stringify({
+            id: `${message?.id || ''}`,
+            from: `${message?.from || ''}`,
+            text,
+            timestamp: new Date(sentAt).toISOString(),
+            own: false
+        });
+        if (new TextEncoder().encode(plaintext).length > MAX_SEALED_BYTES) return '';
+
+        const id = hashHex(`web25-message:${tag}:${message?.id || `${sentAt}:${text}`}`);
+        // Sealed before the database is opened: nothing waits on the worker
+        // while a transaction is live.
+        const ciphertext = await this.signer.nostrEncrypt(plaintext, owner);
+
+        const db = await openDb();
+        try {
+            if (await promisify(store(db, STORE_MESSAGES, 'readonly').get(id))) return '';
+            await promisify(
+                store(db, STORE_MESSAGES, 'readwrite').put({
+                    id,
+                    conversationTag: tag,
+                    sentAt,
+                    expiresAt,
+                    unread: true,
+                    ciphertext
+                })
+            );
+            return id;
+        } finally {
+            db.close();
+        }
+    }
+
+    /**
+     * Release held messages once they have been shown: kept for the
+     * conversation's retention if that still covers them, deleted otherwise.
+     *
+     * @param {string} peer
+     * @param {{ retentionMs?: number, rowIds?: string[] }} [options] only these rows, when given
+     * @returns {Promise<number>} how many were released
+     */
+    async markRead(peer, { retentionMs, rowIds } = {}) {
+        const owner = await this._owner();
+        const peerKey = MessageArchive._peer(peer);
+        const tag = conversationTag(owner, peerKey);
+        const retention =
+            retentionMs === undefined ? await this.getRetention(peerKey) : normalizeRetention(retentionMs);
+        const only = Array.isArray(rowIds) ? new Set(rowIds) : null;
+        const now = this.now();
+
+        const db = await openDb();
+        try {
+            const rows = /** @type {any[]} */ (
+                (await promisify(store(db, STORE_MESSAGES, 'readonly').index(INDEX_CONVERSATION).getAll(tag))) || []
+            );
+            let released = 0;
+            for (const row of rows) {
+                if (row.unread !== true || (only && !only.has(row.id))) continue;
+                const expiresAt = Number(row.sentAt) + retention;
+                if (retention > 0 && expiresAt > now) {
+                    const kept = { ...row, expiresAt };
+                    delete kept.unread;
+                    await promisify(store(db, STORE_MESSAGES, 'readwrite').put(kept));
+                } else {
+                    await promisify(store(db, STORE_MESSAGES, 'readwrite').delete(row.id));
+                }
+                released += 1;
+            }
+            return released;
+        } finally {
+            db.close();
+        }
+    }
+
+    /**
+     * How many held messages wait in each of these conversations. Reads only
+     * the plain marks beside the sealed rows, so nothing is decrypted.
+     *
+     * @param {string[]} peers
+     * @returns {Promise<Map<string, number>>} peer → unread count, only where there are some
+     */
+    async unreadCounts(peers) {
+        const owner = await this._owner();
+        const byTag = new Map();
+        for (const peer of peers || []) {
+            try {
+                const key = MessageArchive._peer(peer);
+                byTag.set(conversationTag(owner, key), key);
+            } catch (_) {
+                // Not a conversation key; nothing to count.
+            }
+        }
+        const counts = new Map();
+        if (byTag.size === 0) return counts;
+
+        const now = this.now();
+        const db = await openDb();
+        try {
+            const rows = /** @type {any[]} */ ((await promisify(store(db, STORE_MESSAGES, 'readonly').getAll())) || []);
+            for (const row of rows) {
+                if (row.unread !== true || !(Number(row.expiresAt) > now)) continue;
+                const peer = byTag.get(row.conversationTag);
+                if (peer) counts.set(peer, (counts.get(peer) || 0) + 1);
+            }
+            return counts;
+        } finally {
+            db.close();
+        }
+    }
+
+    /**
+     * What this conversation kept, and what is held for it unread, oldest
+     * first. Expired rows are purged first, so nothing past its window is ever
+     * shown.
+     *
+     * @param {string} peer
+     * @returns {Promise<Array<{ id: string, from: string, text: string, timestamp: string, own: boolean,
+     *                           unread: boolean, rowId: string }>>}
      */
     async history(peer) {
         const owner = await this._owner();
@@ -289,7 +440,9 @@ export class MessageArchive {
                     from: `${message.from || ''}`,
                     text: `${message.text || ''}`,
                     timestamp: `${message.timestamp || ''}`,
-                    own: message.own === true
+                    own: message.own === true,
+                    unread: row.unread === true,
+                    rowId: `${row.id}`
                 });
             } catch (_) {
                 // Not this wallet's, or damaged: skipped, never shown half-read.
@@ -340,12 +493,16 @@ export class MessageArchive {
     /**
      * @param {IDBDatabase} db
      * @param {string} tag
+     * @param {{ keepUnread?: boolean }} [options] spare messages still held unread
      */
-    async _deleteConversation(db, tag) {
+    async _deleteConversation(db, tag, { keepUnread = false } = {}) {
         const rows = /** @type {any[]} */ (
             (await promisify(store(db, STORE_MESSAGES, 'readonly').index(INDEX_CONVERSATION).getAll(tag))) || []
         );
-        for (const row of rows) await promisify(store(db, STORE_MESSAGES, 'readwrite').delete(row.id));
+        for (const row of rows) {
+            if (keepUnread && row.unread === true) continue;
+            await promisify(store(db, STORE_MESSAGES, 'readwrite').delete(row.id));
+        }
     }
 }
 

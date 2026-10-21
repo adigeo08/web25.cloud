@@ -92,10 +92,44 @@ class FakeNode {
     }
 
     appendChild(child) {
+        child.parentNode?._detach(child);
         child.parentNode = this;
         this.children.push(child);
         this._text = '';
         return child;
+    }
+
+    /** Move a node in front of another, the way history goes above a live thread. */
+    insertBefore(child, anchor) {
+        child.parentNode?._detach(child);
+        child.parentNode = this;
+        const at = anchor ? this.children.indexOf(anchor) : -1;
+        if (at < 0) this.children.push(child);
+        else this.children.splice(at, 0, child);
+        this._text = '';
+        return child;
+    }
+
+    _detach(child) {
+        const at = this.children.indexOf(child);
+        if (at >= 0) this.children.splice(at, 1);
+        child.parentNode = null;
+    }
+
+    remove() {
+        this.parentNode?._detach(this);
+    }
+
+    get firstChild() {
+        return this.children[0] || null;
+    }
+
+    get firstElementChild() {
+        return this.children.find((child) => child.tagName !== '#TEXT') || null;
+    }
+
+    get lastElementChild() {
+        return [...this.children].reverse().find((child) => child.tagName !== '#TEXT') || null;
     }
 
     setAttribute(name, value) {
@@ -203,6 +237,11 @@ export function installFakeDom(spec) {
     const document = {
         activeElement: null,
         createElement: (tag) => new FakeNode(tag),
+        createTextNode: (text) => {
+            const node = new FakeNode('#text');
+            node._text = `${text}`;
+            return node;
+        },
         getElementById: (id) => byId.get(id) || null,
         querySelector: (selector) => root.querySelector(selector),
         querySelectorAll: (selector) => root.querySelectorAll(selector),

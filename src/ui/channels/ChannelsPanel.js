@@ -2,17 +2,19 @@
 /**
  * Direct Messenger panel.
  *
- * The panel has two states: find someone to message, and the conversation
- * itself. Addressing is by Nostr address only — the manual magnet exchange and
- * the raw ECIES key display were removed in favour of the search flow. The
- * WebTorrent bootstrap modules are unchanged and still available to callers.
+ * The main pane has two states: nothing selected, and the conversation itself.
+ * Finding someone new — your address to give away, the field for theirs, what
+ * happens next — lives in the New connection sheet over it, so the contacts
+ * and the conversation are always the app. Addressing is by Nostr address
+ * only. The WebTorrent bootstrap modules are unchanged and still available to
+ * callers.
  */
 
 import { bindCopyButton, copyToClipboard } from '../ClipboardButton.js';
 import { NOSTR_CONFIG } from '../../config/nostr.config.js';
 import { paintAvatar } from './Avatar.js';
 
-const DM_STEPS = ['dm-choose-role', 'dm-chat-active'];
+const DM_STEPS = ['dm-empty', 'dm-chat-active'];
 
 /**
  * The one connection indicator.
@@ -95,9 +97,41 @@ export function showDmStep(step) {
     });
 
     // A conversation that has just opened is what the person asked to see, so
-    // on a phone it gets the screen. The finder needs no such claim: with no
-    // conversation open both panes simply stack.
+    // on a phone it gets the screen. With none open a phone shows the list.
     if (step === 'dm-chat-active') showDmPane('conversation');
+}
+
+/** @returns {HTMLDialogElement|null} */
+function newChatSheet() {
+    return /** @type {HTMLDialogElement|null} */ (document.getElementById('dm-new-chat-sheet'));
+}
+
+/**
+ * Open the New connection sheet: your address, the way to start a chat, and
+ * what happens next. It sits over the app, so whatever conversation is open
+ * stays open beneath it.
+ */
+export function openNewChatSheet() {
+    const dialog = newChatSheet();
+    if (!dialog) return false;
+    if (typeof dialog.showModal === 'function') {
+        if (!dialog.open) dialog.showModal();
+    } else {
+        dialog.setAttribute('open', '');
+    }
+    return true;
+}
+
+/** Close the New connection sheet, if it is open. */
+export function closeNewChatSheet() {
+    const dialog = newChatSheet();
+    if (!dialog) return false;
+    if (typeof dialog.close === 'function') {
+        if (dialog.open) dialog.close();
+    } else {
+        dialog.removeAttribute('open');
+    }
+    return true;
 }
 
 function setDmError(elementId, message) {
@@ -240,7 +274,7 @@ let currentPeer = {
 };
 
 /** What the address sheet is showing, so its buttons act on that. */
-const sheetContent = { address: '', evm: '', share: '' };
+const sheetContent = { address: '', evm: '' };
 
 /** Ids of the messages in the thread, so none is shown twice. */
 const renderedMessageIds = new Set();
@@ -260,7 +294,7 @@ function retentionLabel(ms) {
  */
 function ownShareMessage(npub) {
     const app = `${window.location.origin}${window.location.pathname}`;
-    return `Chat with me on WEB25 — my Nostr address:\n${npub}\n\nOpen Chat and paste it under "Start a new chat": ${app}`;
+    return `Chat with me on WEB25 — my Nostr address:\n${npub}\n\nOpen Chat, tap New connection and paste it under "Start a new chat": ${app}`;
 }
 
 /**
@@ -273,72 +307,41 @@ function setText(id, text) {
 }
 
 /**
- * Open the address sheet for yourself or for the peer.
+ * Open the peer's contact card: their whole address, the EVM address verified
+ * for them, how long this conversation keeps its messages here, and Block.
  *
- * For the peer it is their contact card: besides the address, how long this
- * conversation keeps its messages here, and Block.
+ * Your own address is not shown here any more: the New connection sheet has
+ * it whole, with Copy and Share, as its first step.
  *
- * @param {{ title: string, subtitle?: string, self?: boolean, address: string,
- *           addressLabel?: string, evm?: string, steps?: boolean, share?: string, peer?: boolean }} content
+ * @param {{ title: string, subtitle?: string, address: string, addressLabel?: string, evm?: string }} content
  */
-function openAddressSheet({
-    title,
-    subtitle = '',
-    self = false,
-    address,
-    addressLabel = 'Nostr address',
-    evm = '',
-    steps = false,
-    share = '',
-    peer = false
-}) {
+function openAddressSheet({ title, subtitle = '', address, addressLabel = 'Nostr address', evm = '' }) {
     const dialog = /** @type {HTMLDialogElement|null} */ (document.getElementById('dm-address-sheet'));
     if (!dialog || !address) return;
 
     sheetContent.address = address;
     sheetContent.evm = evm;
-    sheetContent.share = share;
 
     setText('dm-sheet-title', title);
     setText('dm-sheet-subtitle', subtitle);
     const avatar = document.getElementById('dm-sheet-avatar');
     if (avatar) {
-        if (self) {
-            avatar.className = 'dm-avatar dm-avatar-self';
-            avatar.removeAttribute('data-tone');
-            avatar.textContent = '🪐';
-        } else {
-            avatar.className = 'dm-avatar';
-            paintAvatar(avatar, title);
-        }
+        avatar.className = 'dm-avatar';
+        paintAvatar(avatar, title);
     }
     setText('dm-sheet-address-label', addressLabel);
     renderAddressChunks(document.getElementById('dm-sheet-address'), address);
     setText('dm-sheet-evm', evm);
     document.getElementById('dm-sheet-evm-field')?.classList.toggle('hidden', !evm);
-    document.getElementById('dm-sheet-steps')?.classList.toggle('hidden', !steps);
-    document.getElementById('dm-sheet-share')?.classList.toggle('hidden', !(share && canShare()));
-    document.getElementById('dm-sheet-retention-field')?.classList.toggle('hidden', !peer);
-    document.getElementById('dm-sheet-block')?.classList.toggle('hidden', !peer);
-    if (peer) renderDmRetention(currentPeer.retention);
+    document.getElementById('dm-sheet-retention-field')?.classList.remove('hidden');
+    document.getElementById('dm-sheet-block')?.classList.remove('hidden');
+    renderDmRetention(currentPeer.retention);
 
     if (typeof dialog.showModal === 'function') {
         if (!dialog.open) dialog.showModal();
     } else {
         dialog.setAttribute('open', '');
     }
-}
-
-function showOwnAddress() {
-    if (!ownNpub) return;
-    openAddressSheet({
-        title: 'Your Nostr address',
-        subtitle: 'Give it to the people you want to hear from.',
-        self: true,
-        address: ownNpub,
-        steps: true,
-        share: ownShareMessage(ownNpub)
-    });
 }
 
 /**
@@ -348,10 +351,19 @@ function showOwnAddress() {
  *   onLeave: () => void,
  *   onSend: (text: string) => void,
  *   onBlockPeer?: () => void,
- *   onRetentionChange?: (ms: number) => void
+ *   onRetentionChange?: (ms: number) => void,
+ *   onCloseNewChat?: () => void
  * }} handlers
  */
-export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend, onBlockPeer, onRetentionChange }) {
+export function bindChannelsPanel({
+    onSearch,
+    onStartChat,
+    onLeave,
+    onSend,
+    onBlockPeer,
+    onRetentionChange,
+    onCloseNewChat
+}) {
     const searchBtn = document.getElementById('dm-nostr-search-btn');
     const startChatBtn = document.getElementById('channels-nostr-invite-btn');
     const leaveBtn = document.getElementById('channels-leave-btn');
@@ -450,7 +462,12 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend, onBl
         }
         try {
             const ok = await onStartChat(pendingResult);
-            if (ok === true) showDmStep('dm-chat-active');
+            if (ok === true) {
+                // Requested, or their saved conversation opened: the sheet has
+                // done its job, and the conversation is what to look at now.
+                closeNewChatSheet();
+                showDmStep('dm-chat-active');
+            }
         } catch (err) {
             setDmError('dm-choose-role-error', err instanceof Error ? err.message : String(err));
         }
@@ -458,7 +475,7 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend, onBl
 
     leaveBtn?.addEventListener('click', () => {
         onLeave();
-        showDmStep('dm-choose-role');
+        showDmStep('dm-empty');
     });
 
     // The phone's two panes. Neither touches the conversation: this is which
@@ -468,21 +485,26 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend, onBl
 
     bindCopyButton(copyOwnNpubBtn, () => document.getElementById('dm-own-npub-value')?.textContent || '');
 
-    // Your address, whole: the sheet from the list, the card on the welcome
-    // screen. Both copy exactly the address, and share it with a line that
-    // tells the other person what to do with it.
-    document.getElementById('dm-show-address-btn')?.addEventListener('click', showOwnAddress);
+    // New connection: the button beside Copy opens the whole new-chat flow —
+    // your address, whole, to copy or share with a line that tells the other
+    // person what to do with it; their address to paste; what happens next.
+    document.getElementById('dm-show-address-btn')?.addEventListener('click', () => openNewChatSheet());
     bindCopyButton(document.getElementById('dm-welcome-copy-btn'), () => ownNpub);
     document
         .getElementById('dm-welcome-share-btn')
         ?.addEventListener('click', () => void shareText(ownNpub && ownShareMessage(ownNpub), ownNpub));
 
+    const newChat = newChatSheet();
+    // A tap on the backdrop closes it, as a sheet does; Escape and the close
+    // button are the dialog's own. However it closes, only the sheet goes.
+    newChat?.addEventListener('click', (event) => {
+        if (event.target === newChat) closeNewChatSheet();
+    });
+    newChat?.addEventListener('close', () => onCloseNewChat?.());
+
     const sheet = /** @type {HTMLDialogElement|null} */ (document.getElementById('dm-address-sheet'));
     bindCopyButton(document.getElementById('dm-sheet-copy'), () => sheetContent.address);
     bindCopyButton(document.getElementById('dm-sheet-copy-evm'), () => sheetContent.evm);
-    document
-        .getElementById('dm-sheet-share')
-        ?.addEventListener('click', () => void shareText(sheetContent.share, sheetContent.address));
     // A tap on the backdrop closes it, as a sheet does.
     sheet?.addEventListener('click', (event) => {
         if (event.target === sheet) sheet.close();
@@ -498,8 +520,7 @@ export function bindChannelsPanel({ onSearch, onStartChat, onLeave, onSend, onBl
             subtitle: label.text,
             address: currentPeer.npub,
             addressLabel: 'Their Nostr address',
-            evm: currentPeer.evm,
-            peer: true
+            evm: currentPeer.evm
         });
     });
 
@@ -693,8 +714,8 @@ function renderConnectProgress(state, name) {
             title: 'Connection lost',
             accept: 'Both of you said yes.',
             secure: 'The link dropped.',
-            tip: 'Messages may not arrive until it is back. If it stays like this, Disconnect and request the chat again.',
-            cancel: 'Disconnect'
+            tip: 'Messages may not arrive until it is back. If it stays like this, close the chat and request it again.',
+            cancel: 'Close chat'
         }
     }[state];
 
@@ -1078,18 +1099,21 @@ function buildMessage(container, message, isOwn) {
 }
 
 /**
- * Put a conversation's kept messages above the live thread.
+ * Put a conversation's kept messages — and those held for it unread — above
+ * the live thread.
  *
  * They are built in a scratch element with the same rules as live bubbles —
  * day chips, grouping, tails — and moved in front of whatever has already
- * arrived, with a note saying where they came from. A message already on
- * screen is not repeated, and where history and the live thread share a day
- * only one chip for it is kept.
+ * arrived, with a note saying where they came from and what happens to them
+ * now, and a divider where the unread ones begin. A message already on screen
+ * is not repeated, and where history and the live thread share a day only one
+ * chip for it is kept.
  *
- * @param {Array<{ id?: string, from: string, text: string, timestamp: string, own?: boolean }>} messages
- * @param {{ retentionMs?: number }} [options]
+ * @param {Array<{ id?: string, from: string, text: string, timestamp: string, own?: boolean,
+ *                 unread?: boolean }>} messages
+ * @param {{ retentionMs?: number, unreadCount?: number }} [options]
  */
-export function prependChannelsHistory(messages, { retentionMs = 0 } = {}) {
+export function prependChannelsHistory(messages, { retentionMs = 0, unreadCount = 0 } = {}) {
     const container = messagesContainer();
     if (!container) return;
     const fresh = (messages || []).filter((message) => !message?.id || !renderedMessageIds.has(`${message.id}`));
@@ -1098,15 +1122,36 @@ export function prependChannelsHistory(messages, { retentionMs = 0 } = {}) {
     const follow = isNearBottom(container);
     const scratch = document.createElement('div');
 
+    // Said out loud, so holding them is never a quiet exception to retention:
+    // what is kept, for how long, and what becomes of what was waiting.
+    const unread = Number(unreadCount) || fresh.filter((message) => message.unread === true).length;
     const note = document.createElement('div');
     note.className = 'channels-message is-system channels-kept-note';
     const noteBody = document.createElement('div');
     noteBody.className = 'channels-message-body';
-    noteBody.textContent = `🕓 Kept on this device for ${retentionLabel(retentionMs)}, encrypted with your wallet`;
+    if (retentionMs > 0) {
+        noteBody.textContent = `🕓 Kept on this device for ${retentionLabel(retentionMs)}, encrypted with your wallet`;
+    } else {
+        noteBody.textContent =
+            '📥 Arrived while this chat was closed — held encrypted on this device until now. This chat keeps nothing once read.';
+    }
     note.appendChild(noteBody);
     scratch.appendChild(note);
 
-    for (const message of fresh) buildMessage(scratch, message, message.own === true);
+    let dividerPlaced = false;
+    for (const message of fresh) {
+        if (message.unread === true && !dividerPlaced) {
+            dividerPlaced = true;
+            const divider = document.createElement('div');
+            divider.className = 'channels-unread-divider';
+            divider.setAttribute('role', 'separator');
+            const label = document.createElement('span');
+            label.textContent = `${unread} unread message${unread === 1 ? '' : 's'}`;
+            divider.appendChild(label);
+            scratch.appendChild(divider);
+        }
+        buildMessage(scratch, message, message.own === true);
+    }
 
     const first = /** @type {HTMLElement|null} */ (container.firstElementChild);
     if (first?.classList.contains('channels-day') && first.dataset.day === scratch.dataset.day) first.remove();

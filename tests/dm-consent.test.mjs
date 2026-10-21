@@ -39,7 +39,13 @@ const {
     acceptDmInvitation,
     declineDmInvitation,
     isDmBlocked,
-    removeContact
+    removeContact,
+    dmRoomFor,
+    isDmConversationOpenWith,
+    isDmRoomOpenWith,
+    savedTrustedContact,
+    switchDmConversationTo,
+    answerRoomOffer
 } = await import('../src/core/bootstrap/Lifecycle.js');
 import { ContactsStore, TRUST, verifyIdentityTuple } from '../src/channels/ContactsStore.js';
 import { PendingInvitations } from '../src/channels/PendingInvitations.js';
@@ -76,6 +82,8 @@ function offerFrom(peer, { expiresInMs = 60_000, sessionId = 'session-1' } = {})
         session: { sessionId, nonce: 'nonce-1', createdAt: Date.now(), expiresAt: Date.now() + expiresInMs }
     };
 }
+
+const OWNER_NOSTR_PUBLIC_KEY = nostrCore.getNostrPublicKey(OWNER_PRIV.slice(2));
 
 function makeWallet(privateKey = OWNER_PRIV) {
     const core = createWalletWorkerCore({ ecies, nostr: nostrCore });
@@ -128,6 +136,13 @@ class LeakCountingChannels {
         this.calls.iceGathering += 1;
         this.peerPublicKey = offerPayload.publicKey;
         this.peerAddress = offerPayload.evmAddress;
+        return { description: { type: 'answer', sdp: 'v=0\r\n' }, publicKey: '04ff', evmAddress: '0xlocal' };
+    }
+
+    /** The in-room answer for a saved contact: the same leak, counted the same way. */
+    async answerWebrtcOffer(_offerPayload, _identity) {
+        this.calls.createAnswer += 1;
+        this.calls.iceGathering += 1;
         return { description: { type: 'answer', sdp: 'v=0\r\n' }, publicKey: '04ff', evmAddress: '0xlocal' };
     }
 }
@@ -232,6 +247,15 @@ async function makeApp({ unlocked = true } = {}) {
     app.declineDmInvitation = declineDmInvitation.bind(app);
     app.isDmBlocked = isDmBlocked.bind(app);
     app.removeContact = removeContact.bind(app);
+    app.answerRoomOffer = answerRoomOffer.bind(app);
+    // The room and contact helpers the paths above lean on, real as well.
+    app.dmRoomFor = dmRoomFor.bind(app);
+    app.isDmConversationOpenWith = isDmConversationOpenWith.bind(app);
+    app.isDmRoomOpenWith = isDmRoomOpenWith.bind(app);
+    app.savedTrustedContact = savedTrustedContact.bind(app);
+    app.switchDmConversationTo = switchDmConversationTo.bind(app);
+    // Rooms are named after both npubs, so the session knows whose this is.
+    app.nostrDmSession.localNostrPublicKey = OWNER_NOSTR_PUBLIC_KEY;
 
     return app;
 }
@@ -444,7 +468,7 @@ test('a relay failure while announcing intent does not fail the acceptance', asy
 
 // ─── 4. Trusted friends reconnect ────────────────────────────────────────
 
-test('a trusted friend reconnects without asking again', async () => {
+test('a trusted friend\'s direct-link offer is not answered while their chat is closed here', async () => {
     const app = await makeApp();
     try {
         await app.contactsStore.save({ ...ALICE, name: 'Alice', trust: TRUST.TRUSTED });
@@ -453,9 +477,36 @@ test('a trusted friend reconnects without asking again', async () => {
             senderNostrPublicKey: ALICE.nostrPublicKey
         });
 
+        // Their conversation works over Nostr without it; a direct link is only
+        // for while both have it open, so nothing is gathered or sent.
+        assertNothingRevealed(app, 'an offer for a closed conversation');
+        assert.equal(app.dmInvitations.list().length, 0, 'a friend is not parked as a stranger either');
+        assert.equal(app.dmSelectedPeer, '', 'no conversation is opened for them');
+    } finally {
+        app.fake.restore();
+    }
+});
+
+test('a trusted friend reconnects without asking again while their chat is open here', async () => {
+    const app = await makeApp();
+    try {
+        await app.contactsStore.save({ ...ALICE, name: 'Alice', trust: TRUST.TRUSTED });
+        // Her room is open: keys from the record, Nostr already carrying it.
+        app.dmSelectedPeer = ALICE.nostrPublicKey;
+        app.channelsService.persistentRoom = true;
+        app.channelsService.currentChannel = app.dmRoomFor(ALICE.nostrPublicKey);
+        app.channelsService.peerPublicKey = ALICE.eciesPublicKey;
+        app.channelsService.peerAddress = ALICE.evmAddress;
+        app.dmRoomOpenedAt = Date.now();
+
+        await app.handleNostrInvitation(offerFrom(ALICE, { sessionId: 'later' }), {
+            senderNostrPublicKey: ALICE.nostrPublicKey
+        });
+
         assert.equal(app.dmInvitations.list().length, 0, 'no approval is requested');
-        assert.equal(app.channelsService.calls.createAnswer, 1);
+        assert.equal(app.channelsService.calls.createAnswer, 1, 'answered inside her room');
         assert.equal(app.nostrDmSession.sent.length, 1);
+        assert.equal(app.nostrDmSession.sent[0].role, 'answer');
         assert.equal(app.dmSelectedPeer, ALICE.nostrPublicKey);
     } finally {
         app.fake.restore();

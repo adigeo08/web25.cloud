@@ -17,6 +17,7 @@ import { hideDeployProgress, updateDeployProgress } from '../../ui/publish/Deplo
 import { initDeployWizard, updateDeployWizard } from '../../ui/publish/DeployWizard.js';
 import ChannelsService from '../../channels/ChannelsService.js';
 import { NostrDirectMessageSession } from '../../channels/NostrDirectMessageSession.js';
+import { conversationRoomId } from '../../channels/ConversationRoom.js';
 import { NostrRelayPool } from '../../nostr/NostrRelayPool.js';
 import { verifyNostrEvent, normalizeNostrPublicKey, npubEncode, shortNpub } from '../../nostr/nostr.js';
 import { lookupNostrProfile } from '../../nostr/NostrProfileLookup.js';
@@ -77,9 +78,6 @@ const DM_SESSION_MESSAGES_MAX = 500;
 /** How often expired kept messages are purged while the app is open. */
 const DM_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 
-/** Conversation states past waiting: a tap on that contact opens it, not a new request. */
-const DM_LIVE_STATES = new Set(['handshake', 'connecting-webrtc', 'connected-webrtc', 'connected-nostr']);
-
 function sameBytes(left, right) {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
@@ -94,10 +92,6 @@ function createDirectMessageSessionId() {
     return Array.from(bytes)
         .map((byte) => byte.toString(16).padStart(2, '0'))
         .join('');
-}
-
-function directMessageRoomFromSession(sessionId) {
-    return `room-${`${sessionId || ''}`.slice(0, 24)}`;
 }
 
 export async function init() {
@@ -176,20 +170,28 @@ export async function initAuth() {
     this.setupChannels();
 }
 
-export function setupChannels() {
+/**
+ * @param {{ signer?: any, pool?: any }} [deps] a signing handle and relay pool
+ *   to use instead of the wallet worker's and the public relays' — for tests,
+ *   which drive this exact wiring against in-memory doubles
+ */
+export function setupChannels({ signer: providedSigner = null, pool = null } = {}) {
     // The service is granted a signing handle, never the private key itself.
-    const signer = createLocalWalletSigner();
+    const signer = providedSigner || createLocalWalletSigner();
     this.dmSigner = signer;
     this.channelsService = new ChannelsService({ signer });
     this.dmOfferSessionId = null;
 
     // Browser → public relays, directly. No proxy, no Web25 relay.
-    this.nostrPool = new NostrRelayPool({ relays: DEFAULT_NOSTR_DM_RELAYS, verifyEvent: verifyNostrEvent });
+    this.nostrPool = pool || new NostrRelayPool({ relays: DEFAULT_NOSTR_DM_RELAYS, verifyEvent: verifyNostrEvent });
     this.nostrDmSession = new NostrDirectMessageSession({
         pool: this.nostrPool,
         signer,
         onInvitation: (bootstrap, context) => this.handleNostrInvitation(bootstrap, context),
-        onChatEnvelope: (wire) => this.channelsService.receiveNostrEnvelope(wire),
+        // Every sender's envelope comes here; `handleChatEnvelope` decides
+        // who may be heard — the open conversation, or a saved contact.
+        onChatEnvelope: (wire, context) => this.handleChatEnvelope(wire, context),
+        onConversationIntent: (peer, intent) => this.handleConversationIntent(peer, intent),
         onError: (error) => this.log(`Nostr Direct Messenger: ${error.message}`)
     });
     this.channelsService.setNostrFallback(this.nostrDmSession.createFallback());
@@ -202,6 +204,10 @@ export function setupChannels() {
         onPresenceChange: (pubkey) => this.handlePresenceChange(pubkey),
         onIntentChange: (peer, state) => this.handleIntentChange(peer, state),
         onMutualIntent: (peer) => void this.startMutualConversation(peer),
+        // A saved contact's conversation open on both screens is the one
+        // thing that tries a direct link; closing it on either side ends it.
+        onConversationMutual: (peer) => void this.startRoomWebrtc(peer),
+        onPeerConversationClosed: (peer) => this.handlePeerConversationClosed(peer),
         onError: (error) => this.log(`Nostr presence: ${error.message}`)
     });
     // A chat request is how a stranger reaches somebody for the first time, so
@@ -263,6 +269,20 @@ export function setupChannels() {
     this.dmBlockedLoaded = false;
     /** A "Save contact" asked for before the peer's keys were verified. */
     this.dmPendingContactSave = null;
+    /**
+     * Messages held unread per saved contact, mirrored from the archive so the
+     * list can badge the right row without decrypting anything.
+     * @type {Map<string, number>}
+     */
+    this.dmUnread = new Map();
+    /**
+     * Chat requests from saved contacts whose conversation was closed here.
+     * Never answered on their own: opening the conversation answers them.
+     * @type {Map<string, number>} peer → when they asked
+     */
+    this.dmContactRequests = new Map();
+    /** When the open contact conversation was opened; older offers are not for it. */
+    this.dmRoomOpenedAt = 0;
 
     // Messages kept on this device, per conversation, up to a week, sealed to
     // the wallet. Expired rows go by their timestamp; that needs no key, so
@@ -287,18 +307,12 @@ export function setupChannels() {
     this.dmInvitations.onChange = () => renderInvitations(this.dmInvitations.list());
 
     bindContactsPanel({
-        // Opening a contact expresses intent; it does not connect. What it does
-        // do is open the conversation, as a messenger does, so the request and
-        // its progress are on screen rather than only in a toast.
+        // Opening a saved contact opens their conversation, at once: their
+        // keys are in the contact record, so it works over Nostr without
+        // asking anybody anything, and what they sent meanwhile is waiting in
+        // it. A direct link is tried only if they have it open as well.
         onSelect: (contact) => {
-            const key = `${contact.nostrPublicKey || ''}`.toLowerCase();
-            // A conversation already under way with them is where a tap leads;
-            // asking them again would only knock it back to waiting.
-            if (key && key === this.dmSelectedPeer && DM_LIVE_STATES.has(this.channelsService?.connectionState)) {
-                showDmStep('dm-chat-active');
-                return;
-            }
-            void this.requestChatWith(contact.nostrPublicKey, contact.name).then((ok) => {
+            void this.openContactConversation(contact).then((ok) => {
                 if (ok === true) showDmStep('dm-chat-active');
             });
         },
@@ -368,6 +382,9 @@ export function setupChannels() {
             );
         },
         onLeave: () => this.leaveDmConversation(),
+        // The searched address is watched for presence only while it is on
+        // screen; closing the new-chat sheet takes it off.
+        onCloseNewChat: () => this.stopWatchingSearchedPeer?.(),
         onBlockPeer: () => {
             const peer = this.dmSelectedPeer;
             if (!peer) return;
@@ -426,6 +443,11 @@ export function setupChannels() {
             this.dmHistoryShown = '';
             this.dmSessionMessages = [];
         } else if (event.type === 'message') {
+            // Seen here, in the open conversation: the same message delivered
+            // again later, with the conversation closed, is not new and unread.
+            if (event.local !== true && event.message?.id && this.dmSelectedPeer) {
+                this.nostrDmSession?.ledger?.claim(`message:${this.dmSelectedPeer}:${event.message.id}`);
+            }
             appendChannelsMessage(event.message, event.local === true);
             this.dmSessionMessages?.push({ message: event.message, own: event.local === true });
             // Enough to keep a session when retention is turned on mid-way,
@@ -546,6 +568,27 @@ export async function handleNostrInvitation(bootstrap, context) {
                 return;
             }
 
+            // A saved contact's conversation already works over Nostr; their
+            // offer is for a direct link on top of it, and a direct link is
+            // only for while both of you have the conversation open. Closed
+            // here, the offer goes unanswered and nothing is gathered for it:
+            // their side simply carries on over Nostr.
+            if (trusted) {
+                if (!this.isDmConversationOpenWith(sender)) {
+                    this.log(`Not answering a direct-link offer from ${sender}: their conversation is not open here.`);
+                    return;
+                }
+                if (this.channelsService.persistentRoom) {
+                    const createdAt = Number(bootstrap?.session?.createdAt) || 0;
+                    if (createdAt < (this.dmRoomOpenedAt || 0) - NOSTR_CONFIG.CONVERSATION_INTENT_MAX_AGE_MS) {
+                        this.log(`Not answering a direct-link offer from ${sender}: it predates this conversation.`);
+                        return;
+                    }
+                    await this.answerRoomOffer(bootstrap, sender, identity);
+                    return;
+                }
+            }
+
             // An open conversation is not interrupted by an unsolicited third
             // party either.
             const boundPeer = this.nostrDmSession.peerNostrPublicKey;
@@ -563,14 +606,25 @@ export async function handleNostrInvitation(bootstrap, context) {
         }
 
         if (bootstrap.role === 'answer') {
+            const sender = `${context.senderNostrPublicKey || ''}`.toLowerCase();
+            // Only the peer the offer went to can answer it.
+            const offeredTo = this.nostrDmSession.peerNostrPublicKey;
+            if (offeredTo && sender !== offeredTo) {
+                this.log(`Ignoring an answer from ${sender}: the offer went to somebody else.`);
+                return;
+            }
             await this.channelsService.applyRemoteAnswerPayload({
                 description: bootstrap.webrtc.description,
                 evmAddress: bootstrap.from.evmAddress,
                 publicKey: bootstrap.from.eciesPublicKey
             });
-            this.nostrDmSession.setPeer(context.senderNostrPublicKey);
-            this.dmSelectedPeer = `${context.senderNostrPublicKey}`.toLowerCase();
-            this.toast.success('Peer answered. Establishing the direct connection…', 'Direct Messenger');
+            this.nostrDmSession.setPeer(sender);
+            this.dmSelectedPeer = sender;
+            // In a contact's room the conversation already works; the direct
+            // link announces itself in the thread when it opens.
+            if (!this.channelsService.persistentRoom) {
+                this.toast.success('Peer answered. Establishing the direct connection…', 'Direct Messenger');
+            }
         }
     } catch (error) {
         this.toast.error(error.message, 'Direct Messenger');
@@ -639,15 +693,27 @@ export async function handleChatRequest(peerNostrPublicKey, { createdAtSeconds =
     }
 
     if (trusted) {
-        // A friend does not have to ask twice: consent was given when they were
-        // saved as a contact, so their request is answered with ours and the
-        // handshake starts on its own.
-        try {
-            await this.consentToChatWith(sender);
-            this.toast.info('A trusted contact wants to chat — connecting…', 'Direct Messenger');
-        } catch (error) {
-            this.log(`Could not answer a trusted contact's chat request: ${error.message}`);
+        // A saved contact does not need to ask: their conversation opens from
+        // the contact list and works over Nostr straight away. A request from
+        // one means their side wants the handshake — it does not have this
+        // browser's keys — and that handshake is a direct link, which is only
+        // for while the conversation is open here too. So it is answered now
+        // if it is open, and otherwise waits on their row for the moment it is.
+        if (this.isDmConversationOpenWith?.(sender)) {
+            try {
+                await this.consentToChatWith(sender);
+            } catch (error) {
+                this.log(`Could not answer a trusted contact's chat request: ${error.message}`);
+            }
+            return;
         }
+        this.dmContactRequests?.set(sender, sentAt);
+        this.renderDmContactRows?.();
+        const name = (this.dmContacts || []).find((contact) => contact.nostrPublicKey === sender)?.name;
+        this.toast.info(
+            `${name || 'A saved contact'} wants to chat. Open the conversation to connect.`,
+            'Direct Messenger'
+        );
         return;
     }
 
@@ -823,7 +889,9 @@ export async function invitationMatchesContact(bootstrap, sender) {
  * @param {any} identity
  */
 export async function answerDmInvitation(bootstrap, sender, identity) {
-    const derivedRoom = directMessageRoomFromSession(bootstrap.session.sessionId);
+    // The persistent room both of you derive, not one named after this
+    // session: the session id only binds the answer to its offer.
+    const derivedRoom = this.dmRoomFor(sender);
     const offerPayload = {
         description: bootstrap.webrtc.description,
         evmAddress: bootstrap.from.evmAddress,
@@ -881,6 +949,9 @@ export async function acceptDmInvitation(peerNostrPublicKey) {
         this.toast.warning('That invitation expired. Ask them to try again.', 'Chat invitation');
         return false;
     }
+
+    // Accepting opens their conversation, so whichever one is open now closes.
+    await this.switchDmConversationTo?.(sender);
 
     // A request carries no SDP and no keys, so there is nothing to answer yet.
     // Accepting it means consenting: our own request goes back, the pair
@@ -1035,6 +1106,11 @@ export async function removeContact(nostrPublicKey, name = '') {
     if (!confirmed) return false;
     try {
         await this.contactsStore.remove(nostrPublicKey);
+        const peer = `${nostrPublicKey || ''}`.toLowerCase();
+        // Their room was opened on the strength of the record just removed.
+        if (this.isDmRoomOpenWith?.(peer)) await this.leaveDmConversation();
+        this.dmUnread?.delete(peer);
+        this.dmContactRequests?.delete(peer);
         await this.refreshContactList();
         this.toast.success('Contact removed. They are an unknown peer again.', 'Contacts');
         return true;
@@ -1136,11 +1212,29 @@ export async function refreshContactList() {
     renderBlockedContacts(this.dmBlockedList);
     renderDmSaveContact(this.dmSaveContactState());
 
-    this.watchPresenceTargets();
+    // What is waiting for each of them, from the archive: it survives a reload.
+    try {
+        this.dmUnread =
+            (await this.messageArchive?.unreadCounts?.(this.dmContacts.map((contact) => contact.nostrPublicKey))) ||
+            new Map();
+    } catch (error) {
+        this.log(`Unread messages unavailable: ${error.message}`);
+    }
 
-    renderContacts(filterContacts(this.dmContacts, this.dmContactFilter), {
+    this.watchPresenceTargets();
+    this.renderDmContactRows();
+}
+
+/** Repaint the contact rows from what is already known: presence, selection, unread. */
+export function renderDmContactRows() {
+    renderContacts(filterContacts(this.dmContacts || [], this.dmContactFilter), {
         isOnline: (pubkey) => Boolean(this.presenceService?.isOnline(pubkey)),
-        selectedKey: this.dmSelectedPeer
+        selectedKey: this.dmSelectedPeer,
+        // The conversation on screen has nothing unread, whatever a count read
+        // a moment before it was shown still says.
+        unreadCount: (pubkey) =>
+            pubkey === this.dmSelectedPeer && this.dmHistoryShown === pubkey ? 0 : this.dmUnread?.get(pubkey) || 0,
+        hasRequest: (pubkey) => this.dmContactRequests?.has(pubkey) === true
     });
 }
 
@@ -1213,6 +1307,389 @@ export function stopWatchingSearchedPeer() {
 }
 
 /**
+ * The persistent room this browser shares with a peer: both npubs, sorted and
+ * hashed, so the two sides derive the same one on their own and it never
+ * changes. Not the WebRTC session, which is new every time.
+ *
+ * @param {string} peer
+ */
+export function dmRoomFor(peer) {
+    return conversationRoomId(this.nostrDmSession?.localNostrPublicKey || '', peer);
+}
+
+/** The gift-wrap send the presence layer uses for requests and openings. */
+export function dmGiftWrapSender() {
+    return (target, kind, content) => this.nostrDmSession.sendGiftWrapped(target, kind, content);
+}
+
+/**
+ * Is the conversation with this peer the one on screen, in their room?
+ * @param {string} peer
+ */
+export function isDmConversationOpenWith(peer) {
+    const key = `${peer || ''}`.toLowerCase();
+    if (!key || this.dmSelectedPeer !== key || !this.channelsService?.currentChannel) return false;
+    try {
+        return this.channelsService.currentChannel === this.dmRoomFor(key);
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * … and open as a saved contact's room, with their keys from the record.
+ * @param {string} peer
+ */
+export function isDmRoomOpenWith(peer) {
+    return this.channelsService?.persistentRoom === true && this.isDmConversationOpenWith(peer);
+}
+
+/**
+ * Is this the peer whose keys the open conversation has verified?
+ * @param {string} peer
+ */
+export function isDmConversationPeer(peer) {
+    const key = `${peer || ''}`.toLowerCase();
+    return (
+        Boolean(key) &&
+        this.nostrDmSession?.peerNostrPublicKey === key &&
+        this.channelsService?.hasVerifiedPeerIdentity?.() === true
+    );
+}
+
+/**
+ * The saved, trusted record for a peer — re-verified by the store as it is
+ * read — or null. A locked wallet has no contacts, so nobody is one then.
+ * @param {string} nostrPublicKey
+ */
+export async function savedTrustedContact(nostrPublicKey) {
+    const peer = `${nostrPublicKey || ''}`.toLowerCase();
+    if (!peer) return null;
+    try {
+        const contact = await this.contactsStore?.get(peer);
+        return contact && contact.trust === TRUST.TRUSTED ? contact : null;
+    } catch (error) {
+        this.log(`Trusted contacts unavailable, treating ${peer} as unknown: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Close whichever conversation is open, if it is not with this peer. Nothing
+ * of the other one is lost: its messages are held until it is opened again.
+ * @param {string} peer
+ */
+export async function switchDmConversationTo(peer) {
+    const key = `${peer || ''}`.toLowerCase();
+    if (!this.dmSelectedPeer || this.dmSelectedPeer === key) return false;
+    await this.leaveDmConversation();
+    return true;
+}
+
+/**
+ * Open a saved contact's conversation.
+ *
+ * No request, no invitation, no handshake: their verified keys are in the
+ * contact record, so the room both sides derive is usable over Nostr at once,
+ * and whatever they sent while it was closed is waiting in it. Opening is
+ * announced to them — as a fact, not a question — so that if they have it
+ * open as well a direct WebRTC link is tried.
+ *
+ * @param {{ nostrPublicKey: string }} contactRef
+ */
+export async function openContactConversation(contactRef) {
+    const identity = this.authController.getActiveIdentity();
+    if (!identity?.address) {
+        this.toast.warning('Authenticate first to use Direct Messenger.', 'Authentication required');
+        return false;
+    }
+    const peer = `${contactRef?.nostrPublicKey || ''}`.toLowerCase();
+    if (!peer) return false;
+    if (await this.isDmBlocked?.(peer)) {
+        this.toast.warning('You blocked this address. Unblock it under Blocked to chat again.', 'Direct Messenger');
+        return false;
+    }
+
+    // Their keys come from the record — never from the row that was tapped, or
+    // from anything a message says about itself.
+    const contact = await this.savedTrustedContact(peer);
+    if (!contact) {
+        this.toast.warning(
+            'That contact is not saved any more. Start a new chat with their address.',
+            'Direct Messenger'
+        );
+        return false;
+    }
+
+    // Already on screen, in their room: nothing to set up or announce again.
+    if (this.isDmConversationOpenWith(peer)) return true;
+
+    await this.switchDmConversationTo(peer);
+    let room;
+    try {
+        await this.nostrDmSession.start({ localAddress: identity.address });
+        room = this.dmRoomFor(peer);
+        this.dmSelectedPeer = peer;
+        this.nostrDmSession.setPeer(peer);
+        this.dmRoomOpenedAt = Date.now();
+        await this.channelsService.openContactRoom(room, contact, identity);
+    } catch (error) {
+        this.dmSelectedPeer = '';
+        this.dmRoomOpenedAt = 0;
+        this.nostrDmSession?.clearPeer?.();
+        this.toast.error(error.message, 'Direct Messenger');
+        return false;
+    }
+
+    void this.presenceService
+        ?.openConversation(peer, room, this.dmGiftWrapSender())
+        .catch((error) => this.log(`Could not announce the open conversation: ${error.message}`));
+
+    // A request they sent while it was closed is answered now that it is open.
+    const requestedAt = this.dmContactRequests?.get(peer);
+    if (requestedAt !== undefined) {
+        this.dmContactRequests.delete(peer);
+        if (Date.now() - requestedAt <= NOSTR_CONFIG.CHAT_REQUEST_TTL_MS) {
+            void this.consentToChatWith(peer).catch((error) =>
+                this.log(`Could not answer ${peer}'s chat request: ${error.message}`)
+            );
+        }
+    }
+    this.renderDmContactRows();
+    return true;
+}
+
+/**
+ * A Web25 message arrived over Nostr, from somebody.
+ *
+ * Who may be heard is decided here, by the sender the NIP-59 seal proved:
+ *   - the open conversation's peer, whose keys it verified — from the contact
+ *     record or the handshake — goes to the thread;
+ *   - a saved contact whose conversation is closed is checked against the
+ *     keys in their record, and the message is held, unread, in their room;
+ *   - anybody else is dropped unread. A message is no way round the
+ *     invitation a stranger has to send, and the room it names is not a
+ *     credential: it only has to agree with the sender already verified.
+ *
+ * @param {string} wire the ECIES-encrypted, signed Web25 payload
+ * @param {{ senderNostrPublicKey?: string }} [context]
+ */
+export async function handleChatEnvelope(wire, { senderNostrPublicKey = '' } = {}) {
+    const sender = `${senderNostrPublicKey || ''}`.toLowerCase();
+    if (!sender) return false;
+    if (await this.isDmBlocked?.(sender)) {
+        this.log(`Dropping a message from ${sender}: blocked.`);
+        return false;
+    }
+    if (this.isDmConversationPeer(sender)) return this.channelsService.receiveNostrEnvelope(wire);
+
+    const contact = await this.savedTrustedContact(sender);
+    if (!contact) {
+        this.log(`Dropping a message from ${sender}: not a saved contact.`);
+        return false;
+    }
+
+    let payload;
+    try {
+        payload = await this.channelsService.openEnvelope(wire, contact.eciesPublicKey);
+    } catch (error) {
+        this.log(`Dropping a message from ${sender}: ${error.message}`);
+        return false;
+    }
+
+    let room = '';
+    try {
+        room = this.dmRoomFor(sender);
+    } catch (_) {
+        room = '';
+    }
+    if (!room || payload?.channel !== room) {
+        this.log(`Dropping a message from ${sender}: it is not for your conversation with them.`);
+        return false;
+    }
+
+    // Opened while the worker decrypted: it belongs in the thread after all.
+    if (this.isDmConversationPeer(sender)) {
+        this.channelsService.handleInbound(payload, false, 'nostr');
+        return true;
+    }
+    return this.holdDmMessage(sender, payload);
+}
+
+/**
+ * Keep a verified message from a saved contact until their conversation is
+ * opened, and mark their row. Text only: a file is sent in chunks to an open
+ * conversation, and a closed one has nowhere to put them.
+ *
+ * @param {string} sender
+ * @param {any} payload verified against the sender's saved keys
+ */
+export async function holdDmMessage(sender, payload) {
+    if (payload?.type !== 'chat' || !`${payload.text || ''}`.trim()) {
+        if (payload?.type === 'file-info') {
+            this.log(`A file from ${sender} arrived while their conversation was closed; it was not kept.`);
+        }
+        return false;
+    }
+
+    // Each message once: delivered again, or shown already, it is not new.
+    const seenKey = `message:${sender}:${payload.id || ''}`;
+    if (payload.id && this.nostrDmSession?.ledger?.has(seenKey)) return false;
+
+    let rowId = '';
+    try {
+        rowId = await this.messageArchive.hold(sender, payload);
+    } catch (error) {
+        this.log(`Could not hold a message from ${sender}: ${error.message}`);
+        return false;
+    }
+    if (!rowId) return false;
+    if (payload.id && this.nostrDmSession?.ledger && !this.nostrDmSession.ledger.claim(seenKey)) return false;
+
+    // Opened while it was being stored: shown now and released, rather than
+    // left unread in an open conversation.
+    if (this.isDmConversationPeer(sender)) {
+        this.channelsService.handleInbound(payload, false, 'nostr');
+        const retentionMs = await this.dmRetentionFor(sender);
+        await this.messageArchive
+            .markRead(sender, { retentionMs, rowIds: [rowId] })
+            .catch((error) => this.log(`Could not mark a message read: ${error.message}`));
+        return true;
+    }
+
+    this.dmUnread.set(sender, (this.dmUnread.get(sender) || 0) + 1);
+    this.renderDmContactRows();
+    return true;
+}
+
+/**
+ * A peer said their side of our conversation is open, or closed.
+ *
+ * From a saved contact it feeds the one decision it is for: whether both of
+ * you have it open, so a direct link is worth trying. From anybody else it is
+ * what it would be in any other words — a request to talk — and is handled
+ * exactly as one: an invitation to accept or decline, nothing negotiated.
+ *
+ * @param {string} peerNostrPublicKey
+ * @param {{ state?: string, room?: string, ack?: boolean, createdAtSeconds?: number }} [intent]
+ */
+export async function handleConversationIntent(
+    peerNostrPublicKey,
+    { state = 'closed', room = '', ack = false, createdAtSeconds = 0 } = {}
+) {
+    const sender = `${peerNostrPublicKey || ''}`.toLowerCase();
+    if (!sender) return false;
+    if (await this.isDmBlocked?.(sender)) return false;
+
+    const contact = await this.savedTrustedContact(sender);
+    if (!contact) {
+        if (state === 'open' && !ack) await this.handleChatRequest(sender, { createdAtSeconds });
+        return false;
+    }
+
+    let expected = '';
+    try {
+        expected = this.dmRoomFor(sender);
+    } catch (_) {
+        expected = '';
+    }
+    if (!expected || room !== expected) {
+        this.log(`Ignoring a conversation notice from ${sender}: it names another room.`);
+        return false;
+    }
+    const at = createdAtSeconds > 0 ? createdAtSeconds * 1000 : Date.now();
+    return Boolean(
+        this.presenceService?.receiveConversation(sender, { state, room, ack, at }, this.dmGiftWrapSender())
+    );
+}
+
+/**
+ * They closed our conversation, or switched to another: the direct link has
+ * nothing left to carry. The conversation stays open here, over Nostr.
+ *
+ * @param {string} peerNostrPublicKey
+ */
+export function handlePeerConversationClosed(peerNostrPublicKey) {
+    const peer = `${peerNostrPublicKey || ''}`.toLowerCase();
+    if (!this.isDmRoomOpenWith(peer)) return false;
+    if (!this.channelsService.peerConnection && !this.channelsService.dataChannel) return false;
+    this.channelsService.closeWebrtc('peer-closed');
+    this.dmOfferSessionId = null;
+    this.log(`${peer} closed the conversation; the direct link is down and Nostr carries on.`);
+    return true;
+}
+
+/**
+ * Both of you have a saved conversation open: try the direct link.
+ *
+ * Exactly one side offers — the same one both pick — and the other answers
+ * when the offer arrives. Until the DataChannel opens, and after it closes,
+ * messages go over Nostr as before.
+ *
+ * @param {string} peerNostrPublicKey
+ */
+export async function startRoomWebrtc(peerNostrPublicKey) {
+    const identity = this.authController?.getActiveIdentity?.();
+    const peer = `${peerNostrPublicKey || ''}`.toLowerCase();
+    if (!identity?.address || !this.isDmRoomOpenWith(peer)) return false;
+    if (!this.presenceService?.shouldInitiate(peer)) return false;
+
+    try {
+        const signal = await this.channelsService.startWebrtcOffer(identity);
+        // Still the same conversation after ICE gathering?
+        if (!this.isDmRoomOpenWith(peer)) return false;
+        const { bootstrap } = await this.nostrDmSession.sendInvitation({
+            identity,
+            eciesPublicKey: signal.publicKey,
+            role: 'offer',
+            webrtcDescription: signal.description,
+            recipient: peer,
+            // Their full ECIES key is in the record, so the offer is sealed to
+            // it as well as gift-wrapped.
+            recipientEciesPublicKey: this.channelsService.peerPublicKey,
+            sessionId: createDirectMessageSessionId()
+        });
+        this.dmOfferSessionId = bootstrap.session.sessionId;
+        return true;
+    } catch (error) {
+        this.log(`Direct link not offered to ${peer}: ${error.message}`);
+        if (this.isDmRoomOpenWith(peer)) this.channelsService.closeWebrtc('offer-failed');
+        return false;
+    }
+}
+
+/**
+ * Answer a saved contact's direct-link offer inside their open room. Their
+ * keys are pinned to the record: an offer carrying any others is refused
+ * before a peer connection exists.
+ *
+ * @param {any} bootstrap
+ * @param {string} sender
+ * @param {any} identity
+ */
+export async function answerRoomOffer(bootstrap, sender, identity) {
+    const answerSignal = await this.channelsService.answerWebrtcOffer(
+        {
+            description: bootstrap.webrtc.description,
+            evmAddress: bootstrap.from.evmAddress,
+            publicKey: bootstrap.from.eciesPublicKey
+        },
+        identity
+    );
+    if (!this.isDmRoomOpenWith(sender)) return null;
+    await this.nostrDmSession.sendInvitation({
+        identity,
+        eciesPublicKey: answerSignal.publicKey,
+        role: 'answer',
+        webrtcDescription: answerSignal.description,
+        recipient: sender,
+        recipientEciesPublicKey: bootstrap.from.eciesPublicKey,
+        replyToSessionId: bootstrap.session.sessionId
+    });
+    return answerSignal;
+}
+
+/**
  * Express intent to talk to a peer.
  *
  * This is all that selecting a contact or a search result does. No WebRTC
@@ -1233,6 +1710,13 @@ export async function requestChatWith(nostrPublicKey, suggestedName = '') {
         this.toast.warning('You blocked this address. Unblock it under Blocked to chat again.', 'Direct Messenger');
         return false;
     }
+
+    // Somebody already saved is not asked again: their conversation opens.
+    const peer = `${nostrPublicKey || ''}`.toLowerCase();
+    const contact = await this.savedTrustedContact?.(peer);
+    if (contact) return this.openContactConversation(contact);
+
+    await this.switchDmConversationTo?.(peer);
 
     try {
         this.dmPendingContactName = suggestedName;
@@ -1286,6 +1770,13 @@ export async function startMutualConversation(peer) {
     const identity = this.authController.getActiveIdentity();
     if (!identity?.address) return;
 
+    // Their saved conversation is open and working over Nostr already, so
+    // agreeing again decides one thing only: who offers the direct link.
+    if (this.isDmRoomOpenWith?.(`${peer}`.toLowerCase())) {
+        await this.startRoomWebrtc(peer);
+        return;
+    }
+
     this.dmSelectedPeer = `${peer}`.toLowerCase();
     this.nostrDmSession.setPeer(this.dmSelectedPeer);
     this.channelsService.setPreConnectionState('handshake');
@@ -1302,7 +1793,7 @@ export async function startMutualConversation(peer) {
     try {
         clearChannelsMessages();
         const offerSessionId = createDirectMessageSessionId();
-        const sharedRoom = directMessageRoomFromSession(offerSessionId);
+        const sharedRoom = this.dmRoomFor(this.dmSelectedPeer);
         const signal = await this.channelsService.createHostOfferPayload(sharedRoom, identity);
 
         const { bootstrap } = await this.nostrDmSession.sendInvitation({
@@ -1440,6 +1931,12 @@ export async function completePendingContactSave() {
  */
 export async function leaveDmConversation() {
     this.clearHandshakeStallTimer?.();
+    // Closing a contact's conversation withdraws it: they are told it is no
+    // longer open here, and the direct link, if there was one, goes with it.
+    // Their messages keep arriving over Nostr, held until it is opened again.
+    if (this.presenceService?.activeConversation) {
+        void this.presenceService.closeConversation(this.dmGiftWrapSender());
+    }
     await this.channelsService.leaveChannel();
     // Stay subscribed: leaving a conversation should not stop the user
     // being reachable at their npub.
@@ -1451,10 +1948,12 @@ export async function leaveDmConversation() {
     }
     this.dmSelectedPeer = '';
     this.dmOfferSessionId = null;
+    this.dmRoomOpenedAt = 0;
     this.stopWatchingSearchedPeer?.();
     clearDmSearch();
     renderDmConnectionState('idle');
-    showDmStep('dm-choose-role');
+    showDmStep('dm-empty');
+    this.renderDmContactRows?.();
 }
 
 /**
@@ -1499,6 +1998,8 @@ export async function blockDmPeer(nostrPublicKey, { name = '', npub = '' } = {})
     }
 
     this.dmBlocked.add(peer);
+    this.dmUnread?.delete(peer);
+    this.dmContactRequests?.delete(peer);
     this.dmInvitations?.remove(peer);
     this.dmConsentedPeers?.delete(peer);
     this.presenceService?.clearIntent(peer);
@@ -1628,8 +2129,9 @@ export async function restoreDmHistory() {
     const retentionMs = await this.dmRetentionFor(peer);
     if (this.dmSelectedPeer !== peer) return;
     renderDmRetention(retentionMs);
-    if (!retentionMs) return;
 
+    // Kept history, and — whatever the retention — what arrived while the
+    // conversation was closed and is held until it is read.
     let history = [];
     try {
         history = await this.messageArchive.history(peer);
@@ -1639,7 +2141,23 @@ export async function restoreDmHistory() {
     }
     // The conversation may have moved on while the worker decrypted.
     if (this.dmSelectedPeer !== peer || this.dmHistoryShown !== peer) return;
-    prependChannelsHistory(history, { retentionMs });
+    const unread = history.filter((message) => message.unread === true);
+    if (history.length > 0) prependChannelsHistory(history, { retentionMs, unreadCount: unread.length });
+
+    if (unread.length > 0) {
+        // Part of this session from now on, so turning retention on keeps them.
+        for (const message of unread) this.dmSessionMessages?.push({ message, own: false });
+        if (this.dmSessionMessages?.length > DM_SESSION_MESSAGES_MAX) {
+            this.dmSessionMessages.splice(0, this.dmSessionMessages.length - DM_SESSION_MESSAGES_MAX);
+        }
+        // Shown, so released from the hold onto this conversation's own terms:
+        // kept for its retention, or deleted now if it keeps nothing.
+        await this.messageArchive
+            .markRead(peer, { retentionMs, rowIds: unread.map((message) => message.rowId) })
+            .catch((error) => this.log(`Could not mark messages read: ${error.message}`));
+    }
+    this.dmUnread?.delete(peer);
+    this.renderDmContactRows?.();
 }
 
 export function showDirectMessageProgress(message) {
@@ -2388,6 +2906,9 @@ export function setupAuthAwareUi(state) {
         this.dmSessionMessages = [];
         this.dmHistoryShown = '';
         this.dmPendingContactSave = null;
+        this.dmUnread = new Map();
+        this.dmContactRequests?.clear();
+        this.dmRoomOpenedAt = 0;
         renderInvitations([]);
         renderContactsLocked();
         renderBlockedContacts([]);
