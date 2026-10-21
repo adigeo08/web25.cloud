@@ -1,0 +1,332 @@
+// @ts-check
+/**
+ * The WebLLM tab: the install screen, then the chat.
+ *
+ * Renders `WebLLMController` state and forwards clicks to it — no logic of its
+ * own beyond what is on screen. The chat borrows the Direct Messenger's window,
+ * bubbles and composer classes; none of its code runs here.
+ *
+ * Model output is untrusted text: it is always written with `textContent` and
+ * never interpreted as markup.
+ */
+
+import { describeProgress } from '../../webllm/webllmProgress.js';
+
+const STEP_ORDER = ['download', 'cache', 'shaders'];
+
+/** How close to the bottom still counts as "following the reply". */
+const FOLLOW_THRESHOLD_PX = 80;
+
+/** @param {string} id */
+const byId = (id) => document.getElementById(id);
+
+/**
+ * @param {Element|null} el
+ * @param {boolean} hidden
+ */
+function setHidden(el, hidden) {
+    el?.classList.toggle('hidden', hidden);
+}
+
+function isNearBottom(el) {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_THRESHOLD_PX;
+}
+
+function scrollToBottom(el) {
+    if (el) el.scrollTop = el.scrollHeight;
+}
+
+/**
+ * @param {import('../../webllm/WebLLMController.js').ChatMessage} message
+ */
+function createBubble(message) {
+    const item = document.createElement('div');
+    item.dataset.messageId = `${message.id}`;
+    const body = document.createElement('div');
+    body.className = 'channels-message-body';
+    item.appendChild(body);
+    updateBubble(item, message);
+    return item;
+}
+
+/**
+ * @param {any} item
+ * @param {import('../../webllm/WebLLMController.js').ChatMessage} message
+ */
+function updateBubble(item, message) {
+    const typing = message.pending && !message.content;
+    item.className = [
+        'channels-message',
+        'webllm-message',
+        message.role === 'user' ? 'is-own' : 'is-assistant',
+        message.pending ? 'is-streaming' : '',
+        message.error ? 'is-error' : ''
+    ]
+        .filter(Boolean)
+        .join(' ');
+    item.setAttribute('aria-busy', message.pending ? 'true' : 'false');
+
+    const body = item.firstElementChild;
+    if (typing) {
+        body.textContent = '';
+        const dots = document.createElement('span');
+        dots.className = 'webllm-typing';
+        dots.setAttribute('aria-label', 'Llama is thinking');
+        for (let i = 0; i < 3; i += 1) dots.appendChild(document.createElement('span'));
+        body.appendChild(dots);
+    } else {
+        body.textContent = message.content;
+    }
+
+    const note = message.error || (message.stopped ? 'Stopped.' : '');
+    let noteEl = item.querySelector('.webllm-message-note');
+    if (note) {
+        if (!noteEl) {
+            noteEl = document.createElement('div');
+            noteEl.className = 'webllm-message-note';
+            item.appendChild(noteEl);
+        }
+        noteEl.textContent = note;
+    } else {
+        noteEl?.remove();
+    }
+}
+
+function renderEmptyThread(list) {
+    const empty = document.createElement('div');
+    empty.className = 'webllm-empty';
+    const title = document.createElement('p');
+    title.className = 'webllm-empty-title';
+    title.textContent = 'Llama is ready';
+    const sub = document.createElement('p');
+    sub.className = 'webllm-empty-sub';
+    sub.textContent = 'Ask anything. Replies are generated on this device and never leave your browser.';
+    empty.appendChild(title);
+    empty.appendChild(sub);
+    list.appendChild(empty);
+}
+
+/**
+ * Bind the tab's controls to a controller and return the renderer.
+ *
+ * @param {import('../../webllm/WebLLMController.js').WebLLMController} controller
+ * @param {{ confirm?: (message: string) => boolean }} [options]
+ */
+export function bindWebLLMPanel(controller, { confirm = (message) => window.confirm(message) } = {}) {
+    const installBtn = byId('webllm-install-btn');
+    const composer = byId('webllm-composer');
+    const input = /** @type {HTMLTextAreaElement|null} */ (byId('webllm-input'));
+    const messages = byId('webllm-messages');
+    const scrollBtn = byId('webllm-scroll-bottom');
+
+    installBtn?.addEventListener('click', () => {
+        if (controller.state.status === 'error') void controller.retry();
+        else void controller.install();
+    });
+
+    composer?.addEventListener('submit', (event) => {
+        event.preventDefault?.();
+        sendFromInput();
+    });
+
+    input?.addEventListener('keydown', (event) => {
+        // Enter sends, Shift+Enter is a new line; an IME composition is left alone.
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+            event.preventDefault?.();
+            sendFromInput();
+        }
+    });
+    input?.addEventListener('input', () => autosize(input));
+
+    byId('webllm-stop-btn')?.addEventListener('click', () => controller.stop());
+    byId('webllm-new-chat-btn')?.addEventListener('click', () => {
+        controller.newChat();
+        input?.focus();
+    });
+    byId('webllm-remove-btn')?.addEventListener('click', () => {
+        const ok = confirm(
+            'Remove Llama 3.2 1B from this browser? The downloaded model files (about 750 MB) are deleted and the next chat needs a new download.'
+        );
+        if (ok) void controller.removeModel();
+    });
+
+    messages?.addEventListener('scroll', () => setHidden(scrollBtn, isNearBottom(messages)));
+    scrollBtn?.addEventListener('click', () => {
+        scrollToBottom(messages);
+        setHidden(scrollBtn, true);
+    });
+
+    function sendFromInput() {
+        if (!input) return;
+        const text = input.value;
+        if (!text.trim() || controller.state.generating) return;
+        input.value = '';
+        autosize(input);
+        void controller.send(text);
+    }
+
+    let lastStatus = '';
+
+    /**
+     * @param {any} state
+     * @param {{ type: string, messageId?: number }} [change]
+     */
+    function render(state, change = { type: 'state' }) {
+        if (change.type === 'delta') {
+            renderDelta(state, change.messageId);
+            return;
+        }
+        if (change.type === 'progress') {
+            renderProgress(state);
+            return;
+        }
+        renderScreen(state);
+        renderMessages(state);
+        renderComposer(state);
+        if (state.status === 'ready' && lastStatus !== 'ready') input?.focus();
+        lastStatus = state.status;
+    }
+
+    function renderScreen(state) {
+        const chat = state.status === 'ready';
+        setHidden(byId('webllm-install'), chat);
+        setHidden(byId('webllm-chat'), !chat);
+
+        const busy = state.status === 'installing' || state.status === 'checking' || state.status === 'idle';
+        setHidden(byId('webllm-progress'), state.status !== 'installing');
+        if (state.status === 'installing') renderProgress(state);
+
+        const error = byId('webllm-error');
+        const showError = (state.status === 'error' || state.status === 'unsupported') && state.error;
+        if (error) error.textContent = showError ? state.error.message : '';
+        setHidden(error, !showError);
+
+        if (installBtn) {
+            installBtn.textContent = state.status === 'error' ? 'Retry' : 'Install Llama 3.2 1B';
+            /** @type {any} */ (installBtn).disabled =
+                busy || state.status === 'unsupported' || state.status === 'locked';
+            installBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+            setHidden(installBtn, state.status === 'installing');
+        }
+
+        const device = byId('webllm-device');
+        if (device) device.textContent = deviceLine(state);
+
+        const chip = byId('webllm-chat-status');
+        if (chip) {
+            chip.textContent = state.generating
+                ? 'Generating…'
+                : state.engineKind === 'page'
+                  ? 'Running on this device · main thread'
+                  : 'Running on this device';
+            chip.className = `status-chip ${state.generating ? 'status-pending' : 'status-success'}`;
+        }
+    }
+
+    function deviceLine(state) {
+        switch (state.status) {
+            case 'checking':
+                return 'Checking your device for WebGPU support…';
+            case 'unsupported':
+                return 'This device cannot run Llama in the browser.';
+            case 'installing':
+                if (state.waitingForOtherTab) {
+                    return 'Another WEB25 tab is downloading Llama. This tab continues when it finishes.';
+                }
+                return state.fromCache
+                    ? 'Loading Llama from this browser’s cache…'
+                    : 'Installing — keep this tab open.';
+            case 'not-installed':
+            case 'error': {
+                if (state.cache?.state === 'partial' && state.cache.percent > 0) {
+                    return `${state.cache.percent}% already downloaded — installing resumes from there.`;
+                }
+                if (state.gpu?.supported) {
+                    const gpu = [state.gpu.vendor, state.gpu.description].filter(Boolean).join(' · ');
+                    return gpu ? `WebGPU ready · ${gpu}` : 'WebGPU ready on this device.';
+                }
+                return '';
+            }
+            default:
+                return '';
+        }
+    }
+
+    function renderProgress(state) {
+        const progress = state.progress;
+        if (!progress) return;
+        const label = byId('webllm-progress-label');
+        const percent = byId('webllm-progress-percent');
+        const bar = byId('webllm-progress-bar');
+        const track = byId('webllm-progress-track');
+
+        let text = describeProgress(progress);
+        if (state.waitingForOtherTab) text = 'Waiting for another tab…';
+        else if (progress.phase === 'init' && progress.percent === 0) {
+            text = state.fromCache ? 'Starting the engine…' : 'Preparing the download…';
+        }
+        if (label) label.textContent = text;
+        if (percent) percent.textContent = `${progress.percent}%`;
+        if (bar) bar.style.width = `${progress.percent}%`;
+        track?.setAttribute('aria-valuenow', `${progress.percent}`);
+
+        const current = STEP_ORDER.indexOf(progress.phase);
+        document.querySelectorAll('.webllm-steps li').forEach((step) => {
+            const index = STEP_ORDER.indexOf(step.getAttribute('data-step') || '');
+            let stepState = 'todo';
+            if (progress.phase === 'done' || (current >= 0 && index < current)) stepState = 'done';
+            else if (index === current) stepState = 'active';
+            // Weights already in the cache were never downloaded.
+            if (index === 0 && state.fromCache && current > 0) stepState = 'skipped';
+            step.setAttribute('data-state', stepState);
+        });
+    }
+
+    function renderMessages(state) {
+        if (!messages) return;
+        const follow = isNearBottom(messages);
+        messages.textContent = '';
+        if (state.messages.length === 0) {
+            renderEmptyThread(messages);
+        } else {
+            state.messages.forEach((message) => messages.appendChild(createBubble(message)));
+        }
+        if (follow) scrollToBottom(messages);
+        setHidden(scrollBtn, isNearBottom(messages));
+    }
+
+    function renderDelta(state, messageId) {
+        if (!messages) return;
+        const message = state.messages.find((entry) => entry.id === messageId);
+        const item = messages.querySelector(`[data-message-id="${messageId}"]`);
+        if (!message || !item) return renderMessages(state);
+        const follow = isNearBottom(messages);
+        updateBubble(item, message);
+        if (follow) scrollToBottom(messages);
+        else setHidden(scrollBtn, false);
+    }
+
+    function renderComposer(state) {
+        const ready = state.status === 'ready';
+        if (input) {
+            input.disabled = !ready;
+            input.placeholder = state.generating ? 'Llama is replying…' : 'Message Llama…';
+        }
+        const send = /** @type {any} */ (byId('webllm-send-btn'));
+        if (send) send.disabled = !ready || state.generating;
+        setHidden(send, state.generating);
+        setHidden(byId('webllm-stop-btn'), !state.generating);
+        const newChat = /** @type {any} */ (byId('webllm-new-chat-btn'));
+        if (newChat) newChat.disabled = state.messages.length === 0 && !state.generating;
+    }
+
+    return render;
+}
+
+/** Grow the textarea with its content, up to the CSS max-height. */
+function autosize(input) {
+    if (!input?.style) return;
+    input.style.height = 'auto';
+    input.style.height = `${input.scrollHeight}px`;
+}

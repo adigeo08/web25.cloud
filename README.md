@@ -694,6 +694,38 @@ wrap and by its own id in the inbox ledger — so a relay replaying it, a
 re-wrapped copy, or the same message seen live and delivered again later is
 neither shown nor counted twice.
 
+### 9) WebLLM — a local AI chat (Llama 3.2 1B)
+
+A signed-in-only **WebLLM** tab runs `Llama-3.2-1B-Instruct-q4f16_1-MLC` entirely
+in the browser with [MLC WebLLM](https://github.com/mlc-ai/web-llm) on WebGPU. No
+inference server, no API key, and no link to Nostr, WebRTC, the wallet or the
+Chat service.
+
+- **Lazy by construction.** Start-up loads only `src/webllm/WebLLMTab.js`, a
+  gate with no imports. Opening the tab (while signed in) imports the app,
+  checks WebGPU and reads the cache state; the weights download only after
+  **Install Llama 3.2 1B**. A later session finds the model cached and loads it
+  straight into the chat.
+- **Pinned library.** `@mlc-ai/web-llm@0.2.85` (`lib/index.js`) from jsDelivr,
+  checked against a pinned SHA-384 before it runs, and imported from a blob URL.
+- **Dedicated inference worker.** `src/webllm/webllm-worker.js` owns the engine
+  (download, WebGPU, streaming chat completions). Where a browser has no WebGPU
+  in workers, the same engine host runs on the page behind the same messages.
+- **Dedicated service worker.** `webllm-sw.js` is registered on `/webllm/`, the
+  first time the tab is opened, beside `peerweb-sw.js` (which keeps `/`). It has
+  no `fetch` listener and controls no WEB25 page; requests go to its
+  registration over `MessageChannel` ports. It keeps a verified copy of the
+  library in `web25-webllm-assets-v1`, reports the model's state by reading
+  WebLLM's own `webllm/model|config|wasm` caches (the weights are never
+  copied), and deletes the model on request. It never runs inference.
+- **One download per browser.** Install joins an install already running, and
+  a Web Lock (`web25-webllm-install`) makes a second tab wait and then load
+  from the cache. The storage quota is checked first and persistent storage
+  requested.
+- **Wallet lock.** Locking hides the tab, terminates the worker (freeing the
+  GPU) and drops the in-memory conversation. The model files stay cached for
+  the next unlock; only **Remove model** in the chat header deletes them.
+
 ---
 
 ## Security profile (current)
@@ -767,7 +799,19 @@ src/
 │   ├── browse/
 │   ├── pages/
 │   ├── publish/
-│   └── channels/
+│   ├── channels/
+│   └── webllm/WebLLMPanel.js
+├── webllm/
+│   ├── WebLLMTab.js                 # start-up gate (no imports)
+│   ├── WebLLMApp.js                 # loaded when the tab is opened
+│   ├── WebLLMController.js
+│   ├── WebLLMEngineClient.js
+│   ├── WebLLMServiceWorkerClient.js
+│   ├── webllm-worker.js             # dedicated inference worker
+│   ├── webllmEngineHost.js
+│   ├── webllmConfig.js
+│   ├── webllmProgress.js
+│   └── webgpuSupport.js
 └── torrent/
     ├── RenderGate.js
     ├── SiteBundleCodec.js
@@ -778,6 +822,8 @@ src/
 
 content/about/        # the six About "Deep dive" chapters, one Markdown file each
 scripts/              # locally bundled libraries: DOMPurify, WebTorrent, marked
+peerweb-sw.js         # app service worker, scope /
+webllm-sw.js          # WebLLM service worker, scope /webllm/ (registered lazily)
 ```
 
 ### About page chapters (Markdown)
@@ -874,6 +920,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - GoFile: optional ephemeral HTTP mirror for static deployments; preselected by default in the deploy UI and user-disableable
 - WEB25 GoFile transport Worker: `https://gofile-cf-downloader.carlgray.workers.dev`
   — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
+- WebLLM (only after the WebLLM tab is opened): the library from `cdn.jsdelivr.net`, model weights from
+  `huggingface.co/mlc-ai`, the compiled model library from `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`
 
 ---
 

@@ -6558,3 +6558,396 @@ select,
         grid-template-columns: 1fr;
     }
 }
+
+/* ── 14 WebLLM · local AI ────────────────────────────────────────────────
+   The install screen is a centred card in the console's language; the chat is
+   the Direct Messenger's window, bubbles and composer, re-used by class and
+   scoped to #tab-webllm wherever it differs. */
+
+#tab-webllm .webllm-install {
+    display: flex;
+    max-width: 640px;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.8rem;
+    margin: clamp(0.5rem, 4vh, 2.5rem) auto;
+    padding: clamp(1.5rem, 5vw, 2.75rem);
+    text-align: center;
+}
+
+.webllm-install-art {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    border: 1px solid var(--accent-line);
+    border-radius: 22px;
+    background: radial-gradient(circle at 30% 20%, rgba(139, 92, 246, 0.28), var(--accent-soft) 70%);
+    box-shadow: 0 18px 40px -22px rgba(76, 125, 255, 0.9);
+    font-size: 2.3rem;
+    line-height: 1;
+}
+
+#tab-webllm .webllm-install h2 {
+    font-size: clamp(1.4rem, 3.4vw, 1.9rem);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+}
+
+.webllm-install-lede {
+    max-width: 52ch;
+    color: var(--text-dim);
+    font-size: 0.98rem;
+}
+
+.webllm-facts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.45rem;
+    list-style: none;
+}
+
+.webllm-facts li {
+    padding: 0.28rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 0.78rem;
+}
+
+.webllm-facts b {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.webllm-device {
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.webllm-device:empty {
+    display: none;
+}
+
+.webllm-progress {
+    width: 100%;
+    max-width: 440px;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface-2);
+    text-align: left;
+}
+
+.webllm-progress-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.55rem;
+    color: var(--text-dim);
+    font-size: 0.84rem;
+}
+
+.webllm-progress-percent {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-weight: 600;
+}
+
+.webllm-progress-track {
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-3);
+}
+
+.webllm-progress-bar {
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent), var(--violet));
+    transition: width 0.3s ease;
+}
+
+.webllm-steps {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.7rem;
+    color: var(--muted);
+    font-size: 0.74rem;
+    list-style: none;
+}
+
+.webllm-steps li {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.webllm-steps li::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 50%;
+}
+
+.webllm-steps li[data-state='active'] {
+    color: var(--text);
+}
+
+.webllm-steps li[data-state='active']::before {
+    border-color: var(--accent-hi);
+    background: var(--accent);
+    animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+.webllm-steps li[data-state='done'] {
+    color: #56d295;
+}
+
+.webllm-steps li[data-state='done']::before {
+    border-color: var(--ok);
+    background: var(--ok);
+}
+
+.webllm-steps li[data-state='skipped'] {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+.webllm-error {
+    max-width: 440px;
+    padding: 0.6rem 0.85rem;
+    border: 1px solid rgba(240, 97, 109, 0.32);
+    border-radius: var(--r);
+    background: var(--err-soft);
+    color: #ff8a92;
+    font-size: 0.85rem;
+    text-align: left;
+}
+
+.webllm-install-btn {
+    min-width: 220px;
+    justify-content: center;
+}
+
+.webllm-footer {
+    margin-top: 0.4rem;
+    color: var(--muted);
+    font-size: 0.74rem;
+}
+
+.webllm-footer a {
+    color: var(--text-dim);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* The chat window. */
+#tab-webllm .quick-upload.dm-app {
+    padding: 0;
+    overflow: hidden;
+    border-radius: var(--r-xl);
+    background: var(--dm-panel);
+}
+
+.webllm-main {
+    height: clamp(480px, calc(100vh - 190px), 900px);
+    height: clamp(480px, calc(100dvh - 190px), 900px);
+}
+
+.webllm-avatar {
+    background: linear-gradient(135deg, var(--dm-out), var(--violet));
+    font-size: 1.3rem;
+}
+
+/* The messenger heads every thread with what protects it; here, where it runs. */
+#tab-webllm .channels-messages::before {
+    content: '🦙 Llama runs entirely on this device. Nothing you type leaves your browser.';
+    background: var(--accent-soft);
+    color: #b9cbff;
+}
+
+.webllm-empty {
+    margin: auto;
+    padding: 1.5rem 1rem;
+    color: var(--muted);
+    text-align: center;
+}
+
+.webllm-empty-title {
+    color: var(--text);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.webllm-empty-sub {
+    max-width: 34ch;
+    margin: 0.25rem auto 0;
+    font-size: 0.84rem;
+}
+
+#tab-webllm .channels-message {
+    max-width: min(78%, 40rem);
+}
+
+.webllm-message.is-error {
+    border: 1px solid rgba(240, 97, 109, 0.32);
+}
+
+.webllm-message-note {
+    margin-top: 0.3rem;
+    color: var(--muted);
+    font-size: 0.74rem;
+}
+
+.webllm-message.is-error .webllm-message-note {
+    color: #ff8a92;
+}
+
+/* A reply still being written: dots before the first token, a caret after. */
+.webllm-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 1.3em;
+}
+
+.webllm-typing span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    animation: webllm-typing 1.2s ease-in-out infinite;
+}
+
+.webllm-typing span:nth-child(2) {
+    animation-delay: 0.15s;
+}
+
+.webllm-typing span:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+.webllm-message.is-streaming .channels-message-body:not(:has(.webllm-typing))::after {
+    content: '▍';
+    margin-left: 1px;
+    color: var(--accent-hi);
+    animation: webllm-caret 1s steps(2, start) infinite;
+}
+
+@keyframes webllm-typing {
+    0%,
+    80%,
+    100% {
+        opacity: 0.3;
+        transform: translateY(0);
+    }
+    40% {
+        opacity: 1;
+        transform: translateY(-3px);
+    }
+}
+
+@keyframes webllm-caret {
+    to {
+        visibility: hidden;
+    }
+}
+
+.webllm-composer {
+    align-items: flex-end;
+    padding-bottom: 0.45rem;
+}
+
+.webllm-input {
+    min-width: 0;
+    min-height: 44px;
+    max-height: 160px;
+    flex: 1 1 auto;
+    padding: 0.62rem 1.1rem;
+    border: 1px solid transparent;
+    border-radius: 22px;
+    background: var(--surface-3);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    overflow-y: auto;
+    resize: none;
+}
+
+.webllm-input:focus {
+    border-color: var(--accent-line);
+    outline: none;
+}
+
+.webllm-input:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+.webllm-composer:has(.webllm-input:placeholder-shown) #webllm-send-btn {
+    opacity: 0.5;
+    box-shadow: none;
+}
+
+.webllm-stop-btn {
+    padding: 0;
+    background: var(--surface-3);
+    color: var(--text);
+    box-shadow: none;
+}
+
+.webllm-stop-btn:hover {
+    background: var(--err-soft);
+    color: #ff8a92;
+}
+
+.webllm-disclaimer {
+    padding: 0 1rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+    background: var(--dm-head);
+    color: var(--muted);
+    font-size: 0.7rem;
+    text-align: center;
+}
+
+@media (max-width: 860px) {
+    .webllm-main {
+        height: calc(100vh - 130px);
+        height: calc(100dvh - 130px);
+        min-height: 420px;
+    }
+
+    #tab-webllm .channels-message {
+        max-width: 88%;
+    }
+
+    /* 16px keeps iOS from zooming the page when the field takes focus. */
+    .webllm-input {
+        font-size: 16px;
+    }
+}
+
+@media (max-width: 720px) {
+    #tab-webllm .webllm-install {
+        margin-top: 0.25rem;
+    }
+
+    .webllm-install-btn {
+        width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .webllm-typing span,
+    .webllm-steps li[data-state='active']::before,
+    .webllm-message.is-streaming .channels-message-body:not(:has(.webllm-typing))::after {
+        animation: none;
+    }
+}

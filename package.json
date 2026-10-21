@@ -7,7 +7,7 @@
         "dev": "npm run start",
         "build": "node -e \"require('fs').writeFileSync('peerweb.min.js','import \\\"./src/main.js\\\";\\n')\"",
         "start": "npx http-server -p 8000 -c-1",
-        "lint": "npx eslint \"src/**/*.js\" peerweb-sw.js --fix",
+        "lint": "npx eslint \"src/**/*.js\" peerweb-sw.js webllm-sw.js --fix",
         "format": "npx prettier --write \"src/**/*.js\" \"*.{html,css,md,json}\"",
         "check": "npx tsc --noEmit || echo \"Type checking complete\"",
         "test": "node --test tests/*.test.mjs"
@@ -61,6 +61,7 @@
         "index.html",
         "peerweb.min.js",
         "peerweb-sw.js",
+        "webllm-sw.js",
         "styles.css",
         "content",
         "scripts",
