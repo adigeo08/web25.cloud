@@ -14,6 +14,7 @@ import { createRequire } from 'node:module';
 
 import {
     WEBLLM_ASSET_CACHE,
+    WEBLLM_LEGACY_MODELS,
     WEBLLM_LIBRARY_URL,
     WEBLLM_MODEL_LIB_URL,
     WEBLLM_MODEL_URL,
@@ -300,4 +301,90 @@ test('peerweb-sw.js keeps the root scope and never unregisters the WebLLM worker
     const peerweb = readFileSync(new URL('../peerweb-sw.js', import.meta.url), 'utf8');
     assert.match(peerweb, /name\.startsWith\('peerweb-cache-'\)/);
     assert.doesNotMatch(peerweb, /webllm/i);
+});
+
+// ── the q4f16 build WEB25 shipped first ─────────────────────────────────────
+
+const [LEGACY] = WEBLLM_LEGACY_MODELS;
+const LEGACY_MODEL = { modelUrl: LEGACY.modelUrl, modelLibUrl: LEGACY.modelLibUrl };
+const legacyAt = (file) => new URL(file, LEGACY.modelUrl).href;
+
+function seedLegacyModel() {
+    const merge = (name, entries) =>
+        storage.seed(name, { ...Object.fromEntries(storage.stores.get(name)?.entries || []), ...entries });
+    merge(WEBLLM_NATIVE_CACHES.config, { [legacyAt('mlc-chat-config.json')]: CHAT_CONFIG });
+    merge(WEBLLM_NATIVE_CACHES.wasm, { [LEGACY.modelLibUrl]: 'old wasm' });
+    merge(WEBLLM_NATIVE_CACHES.model, {
+        [legacyAt('tensor-cache.json')]: JSON.stringify({ records: [{ dataPath: 'params_shard_0.bin', nbytes: 700 }] }),
+        [legacyAt('tokenizer.json')]: '{}',
+        [legacyAt('params_shard_0.bin')]: 'old'
+    });
+}
+
+test('the current model and the old q4f16 build are different files', () => {
+    assert.match(WEBLLM_MODEL_URL, /Llama-3\.2-1B-Instruct-q4f32_1-MLC\/resolve\/main\/$/);
+    assert.match(LEGACY.modelUrl, /Llama-3\.2-1B-Instruct-q4f16_1-MLC\/resolve\/main\/$/);
+    assert.match(LEGACY.modelLibUrl, /q4f16_1_cs1k-webgpu\.wasm$/);
+    assert.notEqual(LEGACY.modelLibUrl, WEBLLM_MODEL_LIB_URL);
+    // An old install is not mistaken for the new model.
+    seedLegacyModel();
+    return sw.modelStatus(MODEL).then((status) => assert.equal(status.state, 'absent'));
+});
+
+test('a status check reports an old build still stored, and changes nothing', async () => {
+    seedLegacyModel();
+    const before = JSON.stringify([...storage.stores.get(WEBLLM_NATIVE_CACHES.model).entries.keys()]);
+    const status = await sw.handleRequest({
+        type: 'STATUS',
+        model: MODEL,
+        library: { url: WEBLLM_LIBRARY_URL },
+        legacy: [LEGACY_MODEL]
+    });
+    assert.equal(status.model.state, 'absent');
+    assert.equal(status.legacy.length, 1);
+    assert.equal(status.legacy[0].modelUrl, LEGACY.modelUrl);
+    assert.equal(status.legacy[0].state, 'installed');
+    assert.equal(status.legacy[0].bytesCached, 700);
+    assert.equal(JSON.stringify([...storage.stores.get(WEBLLM_NATIVE_CACHES.model).entries.keys()]), before);
+
+    // A browser without it reports nothing to clean up.
+    storage = fakeCacheStorage();
+    global.caches = storage;
+    const empty = await sw.handleRequest({ type: 'STATUS', model: MODEL, legacy: [LEGACY_MODEL] });
+    assert.equal(empty.legacy[0].state, 'absent');
+});
+
+test('removing the old build leaves the new model and the library cache alone', async () => {
+    seedFullModel();
+    seedLegacyModel();
+    storage.seed(WEBLLM_ASSET_CACHE, { [WEBLLM_LIBRARY_URL]: 'lib' });
+
+    await sw.handleRequest({ type: 'CLEAR_MODEL', model: LEGACY_MODEL, includeLibrary: false });
+
+    assert.equal((await sw.modelStatus(LEGACY_MODEL)).state, 'absent');
+    assert.equal((await sw.modelStatus(MODEL)).state, 'installed', 'the q4f32 model is untouched');
+    assert.ok(await storage.has(WEBLLM_ASSET_CACHE), 'the shared library cache stays');
+});
+
+test('the page asks for the old build in status checks, and removes it only through its own call', async () => {
+    const posted = [];
+    const worker = {
+        postMessage(message, transfer) {
+            posted.push(message);
+            transfer[0].postMessage({ ok: true, result: {} });
+        }
+    };
+    const client = createWebLLMServiceWorkerClient({ container: { register: async () => ({ active: worker }) } });
+
+    await client.status();
+    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL]);
+    assert.equal(
+        posted.some((message) => message.type === 'CLEAR_MODEL'),
+        false
+    );
+
+    await client.clearLegacyModels();
+    const clear = posted.find((message) => message.type === 'CLEAR_MODEL');
+    assert.deepEqual(clear.model, LEGACY_MODEL);
+    assert.equal(clear.includeLibrary, false);
 });

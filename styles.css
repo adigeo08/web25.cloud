@@ -6748,6 +6748,39 @@ select,
     text-underline-offset: 2px;
 }
 
+/* An earlier model build still stored: a quiet note with its own way out. */
+.webllm-legacy {
+    display: flex;
+    max-width: 440px;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid rgba(229, 165, 60, 0.32);
+    border-radius: var(--r);
+    background: var(--warn-soft);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+}
+
+.webllm-legacy-chat {
+    padding: 0.35rem 1rem 0;
+    background: var(--dm-head);
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-align: center;
+}
+
+.webllm-link-btn {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-hi);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
 /* The chat window. */
 #tab-webllm .quick-upload.dm-app {
     padding: 0;

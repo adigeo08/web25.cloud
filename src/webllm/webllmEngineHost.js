@@ -9,7 +9,7 @@
  *
  * Inbound (all carry a `requestId` the reply echoes):
  *   { type: 'load' }                     download if needed, then initialise
- *   { type: 'chat', messages, options }  one streamed chat completion
+ *   { type: 'chat', messages }           one streamed chat completion
  *   { type: 'interrupt' }                stop the current generation
  *   { type: 'unload' }                   release the GPU; the cache stays
  *
@@ -27,7 +27,7 @@
 
 import {
     WEBLLM_ASSET_CACHE,
-    WEBLLM_GENERATION,
+    WEBLLM_CHAT_OPTIONS,
     WEBLLM_LIBRARY_INTEGRITY,
     WEBLLM_LIBRARY_URL,
     WEBLLM_MODEL_ID,
@@ -111,33 +111,18 @@ function serializeError(error) {
 }
 
 /**
- * The sampling settings for one request: the pinned defaults, with any number
- * the caller supplied for a known setting laid over them. Unknown keys are
- * ignored, so the request WebLLM sees can only carry values it validates.
- *
- * @param {Record<string, any>} [options]
- */
-export function generationParams(options = {}) {
-    /** @type {Record<string, number>} */
-    const params = { ...WEBLLM_GENERATION };
-    for (const key of Object.keys(params)) {
-        const value = options?.[key];
-        if (typeof value === 'number' && Number.isFinite(value)) params[key] = value;
-    }
-    return params;
-}
-
-/**
  * @param {{ post: (message: any) => void,
  *           loadLibrary?: () => Promise<any>,
  *           modelId?: string,
- *           appConfig?: any }} options
+ *           appConfig?: any,
+ *           chatOptions?: Record<string, number> }} options
  */
 export function createEngineHost({
     post,
     loadLibrary = () => loadWebLLMLibrary(),
     modelId = WEBLLM_MODEL_ID,
-    appConfig = createAppConfig()
+    appConfig = createAppConfig(),
+    chatOptions = WEBLLM_CHAT_OPTIONS
 }) {
     /** A fully loaded engine, or null. */
     let engine = null;
@@ -169,7 +154,9 @@ export function createEngineHost({
                 });
                 loadingEngine = candidate;
                 try {
-                    await candidate.reload(modelId);
+                    // As chat.webllm.ai does it: the sampling settings become the
+                    // model's chat config here, once, instead of riding on each request.
+                    await candidate.reload(modelId, { ...chatOptions });
                 } finally {
                     loadingEngine = null;
                 }
@@ -182,16 +169,19 @@ export function createEngineHost({
         return { alreadyLoaded: false };
     }
 
-    async function chat(requestId, messages, options = {}) {
+    async function chat(requestId, messages) {
         if (!engine) throw new Error('The model is not loaded.');
         if (generating) throw new Error('A reply is already being generated.');
         generating = true;
         try {
+            // Exactly what the official client sends: the messages and a stream.
+            // Sampling comes from the chat config set at reload; there is no
+            // reply limit, so a reply ends at the end-of-turn token (or a full
+            // context window).
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
-                stream_options: { include_usage: true },
-                ...generationParams(options)
+                stream_options: { include_usage: true }
             });
 
             // Somebody asking for the same line five times is not a loop.
@@ -241,7 +231,7 @@ export function createEngineHost({
                     reply(requestId, await load());
                     break;
                 case 'chat':
-                    reply(requestId, await chat(requestId, message.messages, message.options));
+                    reply(requestId, await chat(requestId, message.messages));
                     break;
                 case 'interrupt':
                     engine?.interruptGenerate();

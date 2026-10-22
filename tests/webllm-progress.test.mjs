@@ -18,10 +18,10 @@ import {
     trimHistory
 } from '../src/webllm/webllmProgress.js';
 import {
-    WEBLLM_CONTEXT_SAFETY_TOKENS,
     WEBLLM_CONTEXT_WINDOW,
-    WEBLLM_GENERATION,
-    WEBLLM_PROMPT_TOKEN_BUDGET
+    WEBLLM_HISTORY_MESSAGES,
+    WEBLLM_PROMPT_TOKEN_BUDGET,
+    WEBLLM_REPLY_RESERVE_TOKENS
 } from '../src/webllm/webllmConfig.js';
 
 test('a download report gives the real percentage and megabytes', () => {
@@ -154,12 +154,10 @@ test('a newest message too big for the window is reported, not silently sent', (
     assert.equal(trimmed.messages.at(-1).content.length, 20000);
 });
 
-test('the prompt budget leaves the reply and a margin inside the 4096-token window', () => {
-    assert.equal(
-        WEBLLM_PROMPT_TOKEN_BUDGET + WEBLLM_GENERATION.max_tokens + WEBLLM_CONTEXT_SAFETY_TOKENS,
-        WEBLLM_CONTEXT_WINDOW
-    );
+test('the prompt budget leaves room for an uncapped reply inside the 4096-token window', () => {
     assert.equal(WEBLLM_CONTEXT_WINDOW, 4096);
+    assert.equal(WEBLLM_PROMPT_TOKEN_BUDGET + WEBLLM_REPLY_RESERVE_TOKENS, WEBLLM_CONTEXT_WINDOW);
+    assert.ok(WEBLLM_REPLY_RESERVE_TOKENS >= 1024);
     // A conversation that overflows is cut to the budget, estimated framing included.
     const long = [{ role: 'system', content: 'S' }];
     for (let i = 0; i < 60; i += 1) long.push(turn(i % 2 ? 'assistant' : 'user', 600));
@@ -192,4 +190,25 @@ test('only finished exchanges are passed back as context', () => {
         { role: 'assistant', content: 'answer 5' }
     ]);
     assert.deepEqual(selectContextMessages([]), []);
+});
+
+test('like the official WebLLM Chat, only the last four messages of history are sent', () => {
+    assert.equal(WEBLLM_HISTORY_MESSAGES, 4);
+    const messages = [];
+    for (let i = 1; i <= 5; i += 1) {
+        messages.push(
+            { role: 'user', content: `q${i}`, pending: false, error: null, stopped: false },
+            { role: 'assistant', content: `a${i}`, pending: false, error: null, stopped: false, finishReason: 'stop' }
+        );
+    }
+    assert.deepEqual(
+        selectContextMessages(messages).map((message) => message.content),
+        ['q4', 'a4', 'q5', 'a5']
+    );
+    // Whole exchanges only, whatever the limit.
+    assert.deepEqual(
+        selectContextMessages(messages, { limit: 3 }).map((message) => message.content),
+        ['q5', 'a5']
+    );
+    assert.deepEqual(selectContextMessages(messages, { limit: 0 }), []);
 });
