@@ -15,12 +15,12 @@ import assert from 'node:assert/strict';
 
 import { WebLLMController } from '../src/webllm/WebLLMController.js';
 import { WebLLMEngineClient, createPageTransport } from '../src/webllm/WebLLMEngineClient.js';
-import { createEngineHost, generationParams } from '../src/webllm/webllmEngineHost.js';
+import { createEngineHost } from '../src/webllm/webllmEngineHost.js';
 import {
+    WEBLLM_CHAT_OPTIONS,
     WEBLLM_CONTEXT_WINDOW,
-    WEBLLM_GENERATION,
-    WEBLLM_PROMPT_TOKEN_BUDGET,
-    WEBLLM_SYSTEM_PROMPT
+    WEBLLM_MODEL_ID,
+    WEBLLM_PROMPT_TOKEN_BUDGET
 } from '../src/webllm/webllmConfig.js';
 import { LENGTH_NOTICE, LOOP_NOTICE, MESSAGE_TOO_LONG, estimateTokens } from '../src/webllm/webllmProgress.js';
 
@@ -39,9 +39,10 @@ const filler = (seed, chars) => {
  * Like the real engine, an interrupt ends the stream with `finish_reason: "abort"`.
  */
 function scriptedWebLLM(respond) {
-    const state = { requests: [], emitted: 0, interrupts: 0 };
+    const state = { requests: [], emitted: 0, interrupts: 0, reloads: [], engineConfig: null };
     class MLCEngine {
-        constructor() {
+        constructor(engineConfig) {
+            state.engineConfig = engineConfig;
             this.interrupted = false;
             this.chat = {
                 completions: {
@@ -72,7 +73,9 @@ function scriptedWebLLM(respond) {
                 }
             };
         }
-        async reload() {}
+        async reload(modelId, chatOpts) {
+            state.reloads.push({ modelId, chatOpts });
+        }
         async unload() {}
         interruptGenerate() {
             state.interrupts += 1;
@@ -108,69 +111,42 @@ const lastReply = (controller) => controller.state.messages.at(-1);
 
 // ── what is asked of WebLLM ─────────────────────────────────────────────────
 
-test('the pinned sampling settings are the ones WebLLM accepts', () => {
+test('the generation settings are the official WebLLM Chat ones for this model', () => {
+    // chat.webllm.ai's `recommended_config` for Llama-3.2-1B-Instruct, and the
+    // prebuilt record's 4096-token window.
     assert.deepEqual(
-        { ...WEBLLM_GENERATION },
-        {
-            temperature: 0.6,
-            top_p: 0.9,
-            repetition_penalty: 1.1,
-            frequency_penalty: 0,
-            presence_penalty: 0,
-            max_tokens: 384
-        }
+        { ...WEBLLM_CHAT_OPTIONS },
+        { temperature: 0.6, top_p: 0.9, presence_penalty: 0, frequency_penalty: 0, context_window_size: 4096 }
     );
-    // The ranges `postInitAndCheckGenerationConfigValues` enforces in
-    // @mlc-ai/web-llm@0.2.85; outside them a request throws before generating.
-    const g = WEBLLM_GENERATION;
-    assert.ok(g.temperature >= 0);
-    assert.ok(g.top_p > 0 && g.top_p <= 1);
-    assert.ok(g.repetition_penalty > 0);
-    assert.ok(g.frequency_penalty >= -2 && g.frequency_penalty <= 2);
-    assert.ok(g.presence_penalty >= -2 && g.presence_penalty <= 2);
-    assert.ok(Number.isInteger(g.max_tokens) && g.max_tokens > 0);
-    // The reply has to fit in what the prompt leaves of the window.
-    assert.ok(g.max_tokens < WEBLLM_CONTEXT_WINDOW / 2);
+    assert.equal(WEBLLM_CONTEXT_WINDOW, 4096);
+    // The model's own defaults stay: no repetition penalty, no reply cap.
+    assert.equal('repetition_penalty' in WEBLLM_CHAT_OPTIONS, false);
+    assert.equal('max_tokens' in WEBLLM_CHAT_OPTIONS, false);
 });
 
-test('settings are built from the pinned defaults, and only known numbers get through', () => {
-    assert.deepEqual(generationParams(), { ...WEBLLM_GENERATION });
-    assert.deepEqual(generationParams({ temperature: 0.2, max_tokens: 64 }), {
-        ...WEBLLM_GENERATION,
-        temperature: 0.2,
-        max_tokens: 64
-    });
-    // Not numbers, not finite, or not settings: ignored.
-    assert.deepEqual(
-        generationParams({ temperature: '9', top_p: NaN, max_tokens: Infinity, logit_bias: { 1: 100 }, stop: ['x'] }),
-        { ...WEBLLM_GENERATION }
-    );
+test('the settings are given to reload() as chat options, with the q4f32 model, as the official client does', async () => {
+    const { llm } = await session(() => ({ text: 'Hi!' }));
+    assert.deepEqual(llm.state.reloads, [{ modelId: WEBLLM_MODEL_ID, chatOpts: { ...WEBLLM_CHAT_OPTIONS } }]);
+    assert.equal(WEBLLM_MODEL_ID, 'Llama-3.2-1B-Instruct-q4f32_1-MLC');
+    const [record] = llm.state.engineConfig.appConfig.model_list;
+    assert.equal(record.model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC');
+    assert.match(record.model, /\/mlc-ai\/Llama-3\.2-1B-Instruct-q4f32_1-MLC\//);
+    assert.match(record.model_lib, /\/v0_2_84\/base\/Llama-3\.2-1B-Instruct-q4f32_1_cs1k-webgpu\.wasm$/);
+    assert.equal(record.vram_required_MB, 1128.82);
+    assert.deepEqual(record.overrides, { context_window_size: 4096 });
+    assert.equal(llm.state.engineConfig.appConfig.model_list.length, 1);
 });
 
-test('every request carries the settings, a system prompt first, and asks for a stream with usage', async () => {
+test('a request carries the messages and the stream flags only — no sampling settings, no system prompt', async () => {
     const { controller, llm } = await session(() => ({ text: 'Hey! What can I help you with?' }));
     await controller.send('hey');
 
     const [request] = llm.state.requests;
-    assert.equal(request.stream, true);
-    assert.deepEqual(request.stream_options, { include_usage: true });
-    for (const [key, value] of Object.entries(WEBLLM_GENERATION)) assert.equal(request[key], value, key);
-    assert.deepEqual(request.messages, [
-        { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
-        { role: 'user', content: 'hey' }
-    ]);
-});
-
-test('the system prompt asks for short, direct, non-repeating English', () => {
-    assert.match(WEBLLM_SYSTEM_PROMPT, /\bEnglish\b/);
-    assert.match(WEBLLM_SYSTEM_PROMPT, /greeting/);
-    assert.match(WEBLLM_SYSTEM_PROMPT, /short/i);
-    assert.match(WEBLLM_SYSTEM_PROMPT, /[Nn]ever repeat/);
-    assert.match(WEBLLM_SYSTEM_PROMPT, /filler/);
-    // Small models echo what they are shown: no example replies, and not a wall of rules.
-    assert.doesNotMatch(WEBLLM_SYSTEM_PROMPT, /e\.g\.|for example|"/);
-    assert.ok(WEBLLM_SYSTEM_PROMPT.length < 600);
-    assert.ok(estimateTokens(WEBLLM_SYSTEM_PROMPT) < 200);
+    assert.deepEqual(request, {
+        messages: [{ role: 'user', content: 'hey' }],
+        stream: true,
+        stream_options: { include_usage: true }
+    });
 });
 
 // ── representative conversations, through the whole pipeline ────────────────
@@ -196,8 +172,8 @@ test('simple messages: one short reply that ends on its own and is not flagged',
     assert.equal(controller.state.generating, false);
 });
 
-test('multi-turn: each request carries the earlier exchanges, in order, after the system prompt', async () => {
-    const { controller, llm } = await session((messages) => ({ text: `Answer ${messages.length / 2}.` }));
+test('multi-turn: each request carries the recent exchanges, in order', async () => {
+    const { controller, llm } = await session((messages) => ({ text: `Answer ${(messages.length + 1) / 2}.` }));
     await controller.send('My name is Sam.');
     await controller.send('What is a prime number?');
     await controller.send('And what is my name?');
@@ -205,13 +181,19 @@ test('multi-turn: each request carries the earlier exchanges, in order, after th
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => [message.role, message.content]),
         [
-            ['system', WEBLLM_SYSTEM_PROMPT],
             ['user', 'My name is Sam.'],
             ['assistant', 'Answer 1.'],
             ['user', 'What is a prime number?'],
             ['assistant', 'Answer 2.'],
             ['user', 'And what is my name?']
         ]
+    );
+
+    // A fourth turn sees the last two exchanges, as chat.webllm.ai sends them.
+    await controller.send('Thanks!');
+    assert.deepEqual(
+        llm.state.requests.at(-1).messages.map((message) => message.content),
+        ['What is a prime number?', 'Answer 2.', 'And what is my name?', 'Answer 3.', 'Thanks!']
     );
 });
 
@@ -228,7 +210,7 @@ test('a longer explanation cut by the length limit says so and is still remember
     assert.equal(reply.content, cut);
 
     await controller.send('ok');
-    assert.equal(llm.state.requests.at(-1).messages[2].content, cut, 'a cut-off answer is still context');
+    assert.equal(llm.state.requests.at(-1).messages[1].content, cut, 'a cut-off answer is still context');
 });
 
 // ── loops ───────────────────────────────────────────────────────────────────
@@ -264,10 +246,7 @@ test('a reply that looped is not passed back, and chat carries on normally', asy
     await controller.send('hey');
     await controller.send('What is the capital of France?');
 
-    assert.deepEqual(llm.state.requests.at(-1).messages, [
-        { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
-        { role: 'user', content: 'What is the capital of France?' }
-    ]);
+    assert.deepEqual(llm.state.requests.at(-1).messages, [{ role: 'user', content: 'What is the capital of France?' }]);
     assert.equal(lastReply(controller).content, 'Paris.');
     assert.equal(lastReply(controller).finishReason, 'stop');
 });
@@ -293,7 +272,7 @@ test('the user pressing Stop is "abort", never "loop", and is not passed back ei
     await controller.send('hi');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.role),
-        ['system', 'user']
+        ['user']
     );
 });
 
@@ -312,7 +291,7 @@ test('New chat during a reply stops it and starts clean', async () => {
     await controller.send('second');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.content),
-        [WEBLLM_SYSTEM_PROMPT, 'second']
+        ['second']
     );
     assert.equal(lastReply(controller).content, 'Fresh start.');
 });
@@ -348,26 +327,25 @@ test('asking for repetition is respected: five hellos are not a loop', async () 
 
 // ── context ─────────────────────────────────────────────────────────────────
 
-test('a long conversation is trimmed to the window: oldest exchanges go, the newest and the system prompt stay', async () => {
-    const { controller, llm } = await session((messages) => ({ text: filler(`r${messages.length}x`, 1500) }));
+test('a long conversation is held to the last two exchanges and the token budget', async () => {
+    const { controller, llm } = await session((messages) => ({ text: filler(`r${messages.length}x`, 2500) }));
 
-    for (let i = 1; i <= 14; i += 1)
-        await controller.send(`question ${String(i).padStart(2, '0')} ${filler('q', 1500)}`);
+    for (let i = 1; i <= 8; i += 1)
+        await controller.send(`question ${String(i).padStart(2, '0')} ${filler('q', 2500)}`);
 
     const lengths = llm.state.requests.map(({ messages }) => messages.length);
     for (const { messages } of llm.state.requests) {
-        const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 5);
+        const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 24);
         assert.ok(tokens <= WEBLLM_PROMPT_TOKEN_BUDGET, `${tokens} estimated tokens`);
-        assert.equal(messages[0].role, 'system');
-        assert.equal(messages[1].role, 'user', 'it starts on a question, never a reply');
-        assert.equal(messages.length % 2, 0, 'whole exchanges, then the newest question');
+        assert.equal(messages[0].role, 'user', 'it starts on a question, never a reply');
+        assert.equal(messages.length % 2, 1, 'whole exchanges, then the newest question');
+        assert.ok(messages.length <= 5, 'never more than the last four messages and the new one');
     }
-    // The history grows while it fits, then stops growing as the oldest exchanges are dropped.
-    assert.ok(lengths[3] > lengths[1], 'earlier exchanges are passed back');
-    assert.ok(Math.max(...lengths) < 2 * 14 + 2, 'but not all of them');
-    assert.equal(lengths.at(-1), lengths.at(-2), 'a steady window once full');
+    // Long messages: the token budget, not the message count, is what binds here.
+    assert.ok(Math.max(...lengths) < 5, `lengths ${lengths}`);
+    assert.ok(Math.max(...lengths) > 1, 'but earlier exchanges are still passed back');
     const last = llm.state.requests.at(-1).messages;
-    assert.match(last.at(-1).content, /^question 14 /);
+    assert.match(last.at(-1).content, /^question 08 /);
     assert.equal(
         last.some((message) => message.content.startsWith('question 01')),
         false
@@ -378,16 +356,16 @@ test('when the engine says the prompt does not fit, it is asked once more with l
     const overflow = Object.assign(new Error('Prompt tokens exceed context window size'), {
         name: 'ContextWindowSizeExceededError'
     });
-    const big = (label) => `${label} ${filler('q', 900)}`;
+    const big = (label) => `${label} ${filler('q', 1500)}`;
     let overflowed = false;
     const { controller, llm } = await session((messages) => {
         if (messages.at(-1).content.startsWith('final') && !overflowed) {
             overflowed = true;
             throw overflow;
         }
-        return { text: filler('a', 900) };
+        return { text: filler('a', 1500) };
     });
-    // Fills about three quarters of the budget: it fits, but only just.
+    // Two exchanges plus the new message fill most of the budget: it fits, but only just.
     for (let i = 1; i <= 4; i += 1) await controller.send(big(`message ${i}`));
     const before = llm.state.requests.length;
 
@@ -412,7 +390,7 @@ test('a message too big for the window is refused up front, with nothing sent', 
 
     await controller.send('hi');
     assert.equal(llm.state.requests.length, 1);
-    assert.deepEqual(llm.state.requests[0].messages.map((message) => message.content).slice(1), ['hi']);
+    assert.deepEqual(llm.state.requests[0].messages, [{ role: 'user', content: 'hi' }]);
 });
 
 test('a failed request is shown, kept out of context, and does not poison the next one', async () => {
@@ -428,7 +406,7 @@ test('a failed request is shown, kept out of context, and does not poison the ne
     await controller.send('hello');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.role),
-        ['system', 'user']
+        ['user']
     );
     assert.equal(lastReply(controller).content, 'fine.');
 });

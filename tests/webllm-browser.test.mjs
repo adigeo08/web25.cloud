@@ -144,9 +144,9 @@ async function openWebLLMTab(page, viewport = DESKTOP, { scripted = false } = {}
 }
 
 /** Bind the real controller and panel to a scripted engine. */
-async function startScriptedChat(page, chunks, result = { finishReason: 'stop' }) {
+async function startScriptedChat(page, chunks, result = { finishReason: 'stop' }, legacyBytes = 0) {
     await page.evaluate(
-        async ({ chunks: replyChunks, result: replyResult }) => {
+        async ({ chunks: replyChunks, result: replyResult, legacyBytes: oldBytes }) => {
             const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
             const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
             const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
@@ -171,7 +171,16 @@ async function startScriptedChat(page, chunks, result = { finishReason: 'stop' }
             const controller = new WebLLMController({
                 detectWebGPU: async () => ({ supported: true, vendor: 'test', description: 'gpu' }),
                 swClient: {
-                    status: async () => ({ model: { state: 'absent', bytesCached: 0, bytesTotal: 0 } }),
+                    status: async () => ({
+                        model: { state: 'absent', bytesCached: 0, bytesTotal: 0 },
+                        legacy: window.__legacyRemoved
+                            ? []
+                            : [{ state: oldBytes ? 'installed' : 'absent', bytesCached: oldBytes }]
+                    }),
+                    clearLegacyModels: async () => {
+                        window.__legacyRemoved = (window.__legacyRemoved || 0) + 1;
+                        return [];
+                    },
                     prepareLibrary: async () => ({}),
                     clearModel: async () => ({})
                 },
@@ -183,7 +192,7 @@ async function startScriptedChat(page, chunks, result = { finishReason: 'stop' }
             controller.setAllowed(true);
             await controller.activate();
         },
-        { chunks, result }
+        { chunks, result, legacyBytes }
     );
 }
 
@@ -344,7 +353,7 @@ test('a reply stopped by the loop guard or the length limit says why, as text, a
         {
             chunks: ['A long answer that goes on and'],
             result: { finishReason: 'length' },
-            note: /reached the length limit/,
+            note: /filled the model’s memory and was cut off/,
             looped: false
         },
         { chunks: ['Partial'], result: { finishReason: 'abort' }, note: /^Stopped\.$/, looped: false }
@@ -375,5 +384,36 @@ test('a reply stopped by the loop guard or the length limit says why, as text, a
         } finally {
             await context.close();
         }
+    }
+});
+
+test('an earlier model build is offered for removal, and only removed on request', async () => {
+    const { page, context, problems } = await openApp();
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, ['Hi.'], { finishReason: 'stop' }, 700 * 1024 * 1024);
+
+        await page.waitForSelector('#webllm-legacy:not(.hidden)');
+        assert.match(await page.textContent('#webllm-legacy'), /earlier version of Llama 3\.2 1B \(about 700 MB\)/);
+        assert.equal(await page.evaluate(() => window.__legacyRemoved || 0), 0, 'nothing is removed by showing it');
+
+        // Installing the new model does not remove it; the chat says it is still there.
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        assert.equal(await page.evaluate(() => window.__legacyRemoved || 0), 0);
+        assert.equal(await page.isVisible('#webllm-legacy-chat'), true);
+
+        // Declining the confirmation removes nothing; accepting removes it.
+        page.once('dialog', (dialog) => dialog.dismiss());
+        await page.click('#webllm-legacy-chat [data-webllm-remove-legacy]');
+        assert.equal(await page.evaluate(() => window.__legacyRemoved || 0), 0);
+        page.once('dialog', (dialog) => dialog.accept());
+        await page.click('#webllm-legacy-chat [data-webllm-remove-legacy]');
+        await page.waitForSelector('#webllm-legacy-chat.hidden', { state: 'attached' });
+        assert.equal(await page.evaluate(() => window.__legacyRemoved), 1);
+        assert.equal(await page.isVisible('#webllm-chat'), true, 'the chat carries on');
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
     }
 });

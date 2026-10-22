@@ -1169,7 +1169,7 @@
                             future sessions.
                         </p>
                         <ul class="webllm-facts" aria-label="About this model">
-                            <li><b>~750 MB</b> one-time download</li>
+                            <li><b>~800 MB</b> one-time download</li>
                             <li><b>WebGPU</b> runs on your GPU</li>
                             <li><b>Private</b> no servers, no API keys</li>
                         </ul>
@@ -1197,6 +1197,22 @@
                                 <li data-step="cache" data-state="todo">Load weights</li>
                                 <li data-step="shaders" data-state="todo">Prepare GPU</li>
                             </ol>
+                        </div>
+
+                        <!--
+                            An earlier build of the model (q4f16) still in this
+                            browser. It is never loaded, and it is never deleted
+                            unless the user asks here.
+                        -->
+                        <div id="webllm-legacy" class="webllm-legacy hidden" role="note">
+                            <p class="webllm-legacy-text">
+                                An earlier version of Llama 3.2 1B<span class="webllm-legacy-size"></span> is still stored in
+                                this browser and is no longer used. Installing downloads the updated version; the earlier
+                                one stays until you remove it.
+                            </p>
+                            <button type="button" class="btn btn-secondary btn-sm" data-webllm-remove-legacy>
+                                Remove earlier version
+                            </button>
                         </div>
 
                         <p id="webllm-error" class="webllm-error hidden" role="alert"></p>
@@ -1303,6 +1319,11 @@
                                     </svg>
                                 </button>
                             </form>
+                            <p id="webllm-legacy-chat" class="webllm-legacy-chat hidden" role="note">
+                                An earlier version of the model<span class="webllm-legacy-size"></span> is still stored in
+                                this browser.
+                                <button type="button" class="webllm-link-btn" data-webllm-remove-legacy>Remove it</button>
+                            </p>
                             <p class="webllm-disclaimer">
                                 Llama runs locally and can make mistakes. Conversations are kept in memory only and are
                                 cleared when you lock your wallet.

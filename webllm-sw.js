@@ -21,7 +21,9 @@
  *   - reports whether the model is in this browser by reading WebLLM's native
  *     caches (`webllm/model`, `webllm/config`, `webllm/wasm`) — the weights are
  *     never copied, so nothing large is stored twice;
- *   - removes the model and its own assets on request.
+ *   - removes the model and its own assets on request;
+ *   - reports, and on request removes, an older model build the page no
+ *     longer loads (the q4f16 build WEB25 first shipped).
  *
  * What it never does: run inference, touch the GPU, hold wallet state, or
  * delete a cache it does not own. Model files stay cached when the wallet is
@@ -263,12 +265,19 @@ async function handleRequest(data) {
         case 'STATUS': {
             assertModel(data.model);
             if (data.library) assertLibraryUrl(data.library.url);
-            const [model, library, storage] = await Promise.all([
+            // Builds the page no longer loads, reported so the user can decide
+            // what to do with them. Reading them changes nothing.
+            const legacyModels = Array.isArray(data.legacy) ? data.legacy : [];
+            legacyModels.forEach(assertModel);
+            const [model, library, storage, legacy] = await Promise.all([
                 modelStatus(data.model),
                 data.library ? libraryCached(data.library.url) : Promise.resolve(false),
-                storageEstimate()
+                storageEstimate(),
+                Promise.all(
+                    legacyModels.map(async (entry) => ({ modelUrl: entry.modelUrl, ...(await modelStatus(entry)) }))
+                )
             ]);
-            return { version: SW_VERSION, model, libraryCached: library, storage };
+            return { version: SW_VERSION, model, libraryCached: library, storage, legacy };
         }
         case 'PREPARE_LIBRARY':
             return prepareLibrary(data.library);

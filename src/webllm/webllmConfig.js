@@ -22,73 +22,89 @@ export const WEBLLM_LIBRARY_URL = `https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@
 /** SHA-384 of that file as published on npm. A CDN serving anything else is refused. */
 export const WEBLLM_LIBRARY_INTEGRITY = 'sha384-rfElDdXnNkSgbLTTGiKHTrsetCVAYzzLZBD96/rZdD9XYvryEyShqz3ph8j+x7HH';
 
-export const WEBLLM_MODEL_ID = 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
+/**
+ * The q4f32_1 build — the one chat.webllm.ai runs by default. Its 4-bit weights
+ * carry 32-bit scales and run with 32-bit activations, so it needs no
+ * `shader-f16` and does not depend on a GPU's half-precision arithmetic. With
+ * the q4f16_1 build WEB25 shipped first, replies were reported incoherent and
+ * looping on a device where chat.webllm.ai, running this build, answers well.
+ */
+export const WEBLLM_MODEL_ID = 'Llama-3.2-1B-Instruct-q4f32_1-MLC';
 export const WEBLLM_MODEL_LABEL = 'Llama 3.2 1B';
 
 /** Where WebLLM fetches the weights from, normalised the way WebLLM does (`…/resolve/main/`). */
-export const WEBLLM_MODEL_URL = 'https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/';
+export const WEBLLM_MODEL_URL = 'https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f32_1-MLC/resolve/main/';
 
 export const WEBLLM_MODEL_LIB_URL =
-    'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Llama-3.2-1B-Instruct-q4f16_1_cs1k-webgpu.wasm';
+    'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Llama-3.2-1B-Instruct-q4f32_1_cs1k-webgpu.wasm';
 
-/** Roughly what the weights take on disk, for the storage check before a download. */
-export const WEBLLM_MODEL_DOWNLOAD_BYTES = 750 * 1024 * 1024;
+/** From the 0.2.85 prebuilt record. */
+export const WEBLLM_MODEL_VRAM_MB = 1128.82;
+
+/**
+ * Roughly what the weights take on disk, for the storage check before a
+ * download: 1.24 billion parameters at 4 bits plus a 32-bit scale per group of
+ * 32 is about 775 MB, rounded up.
+ */
+export const WEBLLM_MODEL_DOWNLOAD_BYTES = 850 * 1024 * 1024;
+
+/**
+ * The build WEB25 used before. Never loaded again; it is only looked for, so a
+ * browser that still holds it can be told — and can delete it when the user
+ * chooses to. Nothing removes it on its own.
+ */
+export const WEBLLM_LEGACY_MODELS = Object.freeze([
+    Object.freeze({
+        modelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+        modelUrl: 'https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/',
+        modelLibUrl:
+            'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Llama-3.2-1B-Instruct-q4f16_1_cs1k-webgpu.wasm'
+    })
+]);
 
 export const WEBLLM_CONTEXT_WINDOW = 4096;
 
 /**
- * How the model is sampled. Sent with every chat completion; WebLLM's own
- * defaults (the model's `mlc-chat-config.json`) apply to anything left out.
+ * Generation settings, as chat.webllm.ai uses them for this model: its
+ * `recommended_config` (temperature 0.6, top_p 0.9, no presence or frequency
+ * penalty) and the record's 4096-token context window.
  *
- *   temperature 0.6, top_p 0.9   Meta's recommended sampling for the Llama 3
- *                                Instruct models. A 1B model drifts and loops
- *                                more the hotter it is run.
- *   repetition_penalty 1.1       WebLLM applies it to the tokens the model has
- *                                itself generated in this reply — never to the
- *                                prompt — dividing a seen token's positive
- *                                logit by 1.1. Mild on purpose: it is applied
- *                                to every distinct token already used, so a
- *                                stronger value starts to hurt ordinary words.
- *   frequency/presence 0         Off. Their additive, count-scaled penalty is
- *                                what a looping 1B model would need to break
- *                                out of a cycle, but it also pushes it away from
- *                                words it has to reuse; the loop guard is the
- *                                safety net instead.
- *   max_tokens 384               About 280 words. The system prompt asks for
- *                                short answers, so this is a ceiling, not a
- *                                target; hitting it ends the reply with
- *                                `finish_reason: "length"`.
- *
- * The ranges WebLLM enforces (`postInitAndCheckGenerationConfigValues` in
- * @mlc-ai/web-llm@0.2.85): temperature >= 0, 0 < top_p <= 1, repetition_penalty
- * > 0, -2 <= frequency/presence_penalty <= 2, max_tokens > 0.
+ * Like the official app, these are given to `engine.reload()` as chat options,
+ * where they replace the matching fields of the model's `mlc-chat-config.json`
+ * — not sent with every request. Everything else stays the model's own:
+ * `repetition_penalty` (1.0), the Llama 3 conversation template and its stop
+ * tokens. No reply length limit is set: a reply ends at the model's end-of-turn
+ * token, or when the context window is full.
  */
-export const WEBLLM_GENERATION = Object.freeze({
+export const WEBLLM_CHAT_OPTIONS = Object.freeze({
     temperature: 0.6,
     top_p: 0.9,
-    repetition_penalty: 1.1,
-    frequency_penalty: 0,
     presence_penalty: 0,
-    max_tokens: 384
+    frequency_penalty: 0,
+    context_window_size: WEBLLM_CONTEXT_WINDOW
 });
 
 /**
- * The prompt and the reply share the 4096-token KV cache, so the prompt may
- * only use what the reply and a margin leave over. A prompt that does not fit
- * is rejected (`ContextWindowSizeExceededError`); one that only just fits has
- * its reply cut short by the cache filling up (`finish_reason: "length"`).
+ * History, as the official app sends it: the last four messages before the new
+ * one (its `historyMessageCount`), under a token budget.
+ *
+ * The official app's `max_tokens: 4000` is that budget — it caps the estimated
+ * tokens of history sent, and never limits a reply (it is not a chat-config
+ * field, so `reload()` ignores it). With no reply limit here either, the budget
+ * has to leave the reply room inside the same 4096-token window: the prompt
+ * gets 3072 estimated tokens and the reply at least 1024.
  */
-export const WEBLLM_CONTEXT_SAFETY_TOKENS = 192;
+export const WEBLLM_HISTORY_MESSAGES = 4;
+export const WEBLLM_REPLY_RESERVE_TOKENS = 1024;
 
 /** Tokens the Llama 3 template spends around each message: header start, role, header end, "\n\n", `<|eot_id|>`. */
 export const WEBLLM_MESSAGE_FRAMING_TOKENS = 5;
 
-/** `<|begin_of_text|>` plus the assistant header the reply continues from. */
-export const WEBLLM_REQUEST_FRAMING_TOKENS = 5;
+/** `<|begin_of_text|>`, the template's default system message, and the assistant header the reply continues from. */
+export const WEBLLM_REQUEST_FRAMING_TOKENS = 24;
 
 /** Estimated tokens the whole prompt may take. */
-export const WEBLLM_PROMPT_TOKEN_BUDGET =
-    WEBLLM_CONTEXT_WINDOW - WEBLLM_GENERATION.max_tokens - WEBLLM_CONTEXT_SAFETY_TOKENS;
+export const WEBLLM_PROMPT_TOKEN_BUDGET = WEBLLM_CONTEXT_WINDOW - WEBLLM_REPLY_RESERVE_TOKENS;
 
 export const LLAMA_LICENSE_URL = 'https://www.llama.com/llama3_2/license/';
 
@@ -109,7 +125,7 @@ export const WEBLLM_SW_SCOPE = './webllm/';
 /** Kept in step with `ASSET_CACHE` in webllm-sw.js. */
 export const WEBLLM_ASSET_CACHE = 'web25-webllm-assets-v1';
 
-/** The engine's app config: one model, Cache API storage. */
+/** The engine's app config: one model, with the same files, VRAM and context window as the 0.2.85 prebuilt record for it, on Cache API storage. */
 export function createAppConfig() {
     return {
         cacheBackend: 'cache',
@@ -118,24 +134,10 @@ export function createAppConfig() {
                 model: WEBLLM_MODEL_URL,
                 model_id: WEBLLM_MODEL_ID,
                 model_lib: WEBLLM_MODEL_LIB_URL,
-                vram_required_MB: 879.04,
+                vram_required_MB: WEBLLM_MODEL_VRAM_MB,
                 low_resource_required: true,
                 overrides: { context_window_size: WEBLLM_CONTEXT_WINDOW }
             }
         ]
     };
 }
-
-/**
- * Short and concrete: a 1B model follows a few plain sentences far better than
- * a long list of rules, and echoes example phrases it is shown. The greeting
- * rule is spelled out because "hey" is where it rambles most.
- */
-export const WEBLLM_SYSTEM_PROMPT = [
-    'You are Llama, a friendly assistant running locally in the user’s browser.',
-    'Reply in natural, direct English and get to the point.',
-    'Match the size of your answer to the question: a greeting or a simple question gets one or two short sentences.',
-    'Explain bigger topics in a few short paragraphs or a short list, and finish your thought.',
-    'Never repeat a sentence or phrase you already wrote, and leave out filler openers, closers and apologies.',
-    'If you do not know something, say so briefly.'
-].join(' ');

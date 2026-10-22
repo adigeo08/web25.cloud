@@ -50,9 +50,12 @@ test('the install screen says exactly what the model is and does, in English', (
         squash(html),
         /Download Llama directly into your browser and chat with a local AI\. The model runs entirely on your device, without external inference servers\. Once downloaded, it stays cached for future sessions\./
     );
-    // One model, one install button.
+    // One model, one install button. (The only other button removes an older
+    // build of the model, and is hidden unless one is stored.)
     const install = html.slice(html.indexOf('<section id="webllm-install"'), html.indexOf('</section>'));
-    assert.equal(install.match(/<button/g).length, 1);
+    assert.equal(install.match(/Install Llama/g).length, 2, 'the title and the one button');
+    assert.equal(install.match(/<button/g).length, 2);
+    assert.match(install, /<div id="webllm-legacy" class="webllm-legacy hidden"[\s\S]*?data-webllm-remove-legacy/);
     assert.match(squash(install), /<button id="webllm-install-btn"[^>]*> Install Llama 3\.2 1B <\/button>/);
     // Meta's attribution and the official license.
     assert.match(squash(install), /Llama 3\.2 by Meta · © Meta Platforms, Inc\./);
@@ -73,7 +76,7 @@ test('the chat re-uses the messenger’s look with its own ids, and none of its 
 test('the library is the official package on jsDelivr, at a pinned version, for one model', () => {
     assert.match(WEBLLM_VERSION, /^\d+\.\d+\.\d+$/);
     assert.equal(WEBLLM_LIBRARY_URL, `https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@${WEBLLM_VERSION}/lib/index.js`);
-    assert.equal(WEBLLM_MODEL_ID, 'Llama-3.2-1B-Instruct-q4f16_1-MLC');
+    assert.equal(WEBLLM_MODEL_ID, 'Llama-3.2-1B-Instruct-q4f32_1-MLC');
     const config = createAppConfig();
     assert.equal(config.model_list.length, 1);
     assert.equal(config.model_list[0].model_id, WEBLLM_MODEL_ID);

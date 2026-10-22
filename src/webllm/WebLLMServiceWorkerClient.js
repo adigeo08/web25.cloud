@@ -15,6 +15,7 @@
  */
 
 import {
+    WEBLLM_LEGACY_MODELS,
     WEBLLM_LIBRARY_INTEGRITY,
     WEBLLM_LIBRARY_URL,
     WEBLLM_MODEL_LIB_URL,
@@ -110,15 +111,22 @@ export function createWebLLMServiceWorkerClient({
 
     const model = { modelUrl: WEBLLM_MODEL_URL, modelLibUrl: WEBLLM_MODEL_LIB_URL };
     const library = { url: WEBLLM_LIBRARY_URL, integrity: WEBLLM_LIBRARY_INTEGRITY };
+    const legacy = WEBLLM_LEGACY_MODELS.map(({ modelUrl, modelLibUrl }) => ({ modelUrl, modelLibUrl }));
 
     return {
         register,
         ping: () => request('PING'),
-        /** Model cache state, library cache state and the storage estimate. */
-        status: () => request('STATUS', { model, library }),
+        /** Model cache state, library cache state, the storage estimate, and any older build still stored. */
+        status: () => request('STATUS', { model, library, legacy }),
         /** Download and verify the WebLLM library into the worker's cache. */
         prepareLibrary: () => request('PREPARE_LIBRARY', { library }),
         /** Delete the model from WebLLM's caches, and the cached library. */
-        clearModel: () => request('CLEAR_MODEL', { model, includeLibrary: true })
+        clearModel: () => request('CLEAR_MODEL', { model, includeLibrary: true }),
+        /**
+         * Delete older builds the page no longer loads. Only ever called from the
+         * user's own click; the library cache is shared and left alone.
+         */
+        clearLegacyModels: () =>
+            Promise.all(legacy.map((entry) => request('CLEAR_MODEL', { model: entry, includeLibrary: false })))
     };
 }

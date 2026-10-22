@@ -16,6 +16,7 @@
  */
 
 import {
+    WEBLLM_HISTORY_MESSAGES,
     WEBLLM_MESSAGE_FRAMING_TOKENS,
     WEBLLM_PROMPT_TOKEN_BUDGET,
     WEBLLM_REQUEST_FRAMING_TOKENS
@@ -25,8 +26,12 @@ import {
 export const LOOP_NOTICE =
     'Stopped automatically: Llama started repeating itself. Try rephrasing, or start a new chat.';
 
-/** Shown under a reply that hit the length limit. */
-export const LENGTH_NOTICE = 'This reply reached the length limit. Ask Llama to continue if you want more.';
+/**
+ * Shown under a reply that ended with `finish_reason: "length"`. With no reply
+ * limit set, that only happens when the 4096-token context window is full.
+ */
+export const LENGTH_NOTICE =
+    'This reply filled the model’s memory and was cut off. Ask Llama to continue if you want more.';
 
 /** Shown when the newest message alone is more than the model can read at once. */
 export const MESSAGE_TOO_LONG = 'That message is too long for Llama to read at once. Try a shorter one.';
@@ -183,7 +188,7 @@ export function classifyError(error) {
             kind: 'storage',
             retryable: true,
             message:
-                'There is not enough storage space in this browser for the model (about 750 MB). Free up some space and try again.',
+                'There is not enough storage space in this browser for the model (about 800 MB). Free up some space and try again.',
             detail
         };
     }
@@ -261,11 +266,16 @@ const messageTokens = (message) => estimateTokens(message.content) + WEBLLM_MESS
  * it, so what the model sees still alternates user and assistant and no
  * question is answered twice.
  *
+ * Of those, only the last `limit` messages are sent — the official WebLLM
+ * Chat's `historyMessageCount` of 4, i.e. the two most recent exchanges. A 1B
+ * model stays on topic far better with a short history.
+ *
  * @param {{ role: string, content: string, pending?: boolean, error?: string|null,
  *           stopped?: boolean, finishReason?: string|null }[]} messages
+ * @param {{ limit?: number }} [options]
  * @returns {{ role: 'user'|'assistant', content: string }[]}
  */
-export function selectContextMessages(messages) {
+export function selectContextMessages(messages, { limit = WEBLLM_HISTORY_MESSAGES } = {}) {
     /** @type {{ role: 'user'|'assistant', content: string }[]} */
     const context = [];
     for (let i = 0; i + 1 < messages.length; i += 1) {
@@ -283,20 +293,22 @@ export function selectContextMessages(messages) {
         if (!finished) continue;
         context.push({ role: 'user', content: question.content }, { role: 'assistant', content: answer.content });
     }
-    return context;
+    // Whole exchanges: an odd limit still starts on a question.
+    const keep = Math.max(0, limit - (limit % 2));
+    return keep === 0 ? [] : context.slice(-keep);
 }
 
 /**
  * Keep the prompt inside the model's context window, with room left to reply.
  *
- * The oldest turns go first, and the system prompt and the newest message
+ * The oldest turns go first, and any system message and the newest message
  * always stay. `budget` is in estimated tokens (see `estimateTokens`) and
- * already has the reply and a safety margin taken out of the window.
+ * already has room for the reply taken out of the window.
  *
- * @param {{ role: string, content: string }[]} messages the system prompt, then the conversation ending on the new user message
+ * @param {{ role: string, content: string }[]} messages the conversation (after an optional system message), ending on the new user message
  * @param {{ budget?: number }} [options]
  * @returns {{ messages: { role: string, content: string }[], tokens: number, dropped: number, fits: boolean }}
- *   `fits` is false when the system prompt and the newest message alone are
+ *   `fits` is false when the system message and the newest message alone are
  *   over budget — there is nothing left to drop.
  */
 export function trimHistory(messages, { budget = WEBLLM_PROMPT_TOKEN_BUDGET } = {}) {

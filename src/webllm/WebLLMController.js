@@ -19,7 +19,7 @@
  * DOM-free: the panel renders `state`, the tests drive it with doubles.
  */
 
-import { WEBLLM_MODEL_DOWNLOAD_BYTES, WEBLLM_PROMPT_TOKEN_BUDGET, WEBLLM_SYSTEM_PROMPT } from './webllmConfig.js';
+import { WEBLLM_MODEL_DOWNLOAD_BYTES, WEBLLM_PROMPT_TOKEN_BUDGET } from './webllmConfig.js';
 import {
     LENGTH_NOTICE,
     LOOP_NOTICE,
@@ -49,8 +49,12 @@ function initialState() {
     return {
         /** @type {WebLLMStatus} */
         status: 'locked',
-        /** @type {{ state: 'unknown'|'absent'|'partial'|'installed', percent: number }} */
-        cache: { state: 'unknown', percent: 0 },
+        /**
+         * The current model in WebLLM's cache, and `legacyBytes`: how much of
+         * an older build (q4f16) is still stored, 0 when none.
+         * @type {{ state: 'unknown'|'absent'|'partial'|'installed', percent: number, legacyBytes?: number }}
+         */
+        cache: { state: 'unknown', percent: 0, legacyBytes: 0 },
         /** Loading weights that are already here, rather than downloading them. */
         fromCache: false,
         /** @type {import('./webllmProgress.js').LoadProgress|null} */
@@ -181,12 +185,22 @@ export class WebLLMController {
         try {
             const status = await this.swClient.status();
             const model = status?.model;
-            if (!model) return { state: 'unknown', percent: 0 };
+            if (!model) return { state: 'unknown', percent: 0, legacyBytes: 0 };
             const percent = model.bytesTotal > 0 ? Math.floor((model.bytesCached / model.bytesTotal) * 100) : 0;
-            return { state: model.state, percent, bytesCached: model.bytesCached, storage: status.storage || null };
+            // An older build still in this browser: shown, never removed unasked.
+            const legacyBytes = (Array.isArray(status.legacy) ? status.legacy : [])
+                .filter((entry) => entry?.state && entry.state !== 'absent')
+                .reduce((sum, entry) => sum + Math.max(Number(entry.bytesCached) || 0, 1), 0);
+            return {
+                state: model.state,
+                percent,
+                bytesCached: model.bytesCached,
+                storage: status.storage || null,
+                legacyBytes
+            };
         } catch (error) {
             this.log(`WebLLM cache status unavailable: ${error?.message || error}`);
-            return { state: 'unknown', percent: 0 };
+            return { state: 'unknown', percent: 0, legacyBytes: 0 };
         }
     }
 
@@ -267,7 +281,7 @@ export class WebLLMController {
 
             this.update({
                 status: 'ready',
-                cache: { state: 'installed', percent: 100 },
+                cache: { ...this.state.cache, state: 'installed', percent: 100 },
                 progress: {
                     phase: 'done',
                     percent: 100,
@@ -352,22 +366,16 @@ export class WebLLMController {
     }
 
     /**
-     * The prompt for the next reply: the system prompt, the finished exchanges,
-     * and the new message, trimmed to what the context window can hold.
+     * The prompt for the next reply: the recent finished exchanges and the new
+     * message, trimmed to what the context window can hold. No system message:
+     * like chat.webllm.ai, the model gets its conversation template's own.
      *
      * @param {ChatMessage[]} prior the conversation before the new message
      * @param {string} content the new message
      * @param {number} budget estimated tokens the prompt may use
      */
     planPrompt(prior, content, budget) {
-        return trimHistory(
-            [
-                { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
-                ...selectContextMessages(prior),
-                { role: 'user', content }
-            ],
-            { budget }
-        );
+        return trimHistory([...selectContextMessages(prior), { role: 'user', content }], { budget });
     }
 
     /**
@@ -519,6 +527,24 @@ export class WebLLMController {
             gpu: this.state.gpu,
             cache
         });
+    }
+
+    /**
+     * Delete the older model build this browser still holds. Only ever run
+     * from the user's click: neither installing nor updating removes it.
+     */
+    async removeLegacyModels() {
+        if (!this.allowed || !this.swClient.clearLegacyModels) return;
+        const epoch = this.epoch;
+        try {
+            await this.swClient.clearLegacyModels();
+        } catch (error) {
+            this.log(`WebLLM could not remove the older model: ${error?.message || error}`);
+        }
+        const cache = await this.readCache();
+        if (epoch !== this.epoch) return;
+        // The current model's state is unchanged; only the old build is gone.
+        this.update({ cache: { ...this.state.cache, legacyBytes: cache.legacyBytes } });
     }
 
     releaseEngine() {

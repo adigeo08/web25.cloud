@@ -147,10 +147,19 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     });
     byId('webllm-remove-btn')?.addEventListener('click', () => {
         const ok = confirm(
-            'Remove Llama 3.2 1B from this browser? The downloaded model files (about 750 MB) are deleted and the next chat needs a new download.'
+            'Remove Llama 3.2 1B from this browser? The downloaded model files (about 800 MB) are deleted and the next chat needs a new download.'
         );
         if (ok) void controller.removeModel();
     });
+
+    document.querySelectorAll('[data-webllm-remove-legacy]').forEach((button) =>
+        button.addEventListener('click', () => {
+            const ok = confirm(
+                'Remove the earlier version of Llama 3.2 1B from this browser? The model you use now is not affected.'
+            );
+            if (ok) void controller.removeLegacyModels();
+        })
+    );
 
     messages?.addEventListener('scroll', () => setHidden(scrollBtn, isNearBottom(messages)));
     scrollBtn?.addEventListener('click', () => {
@@ -210,6 +219,16 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
             installBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
             setHidden(installBtn, state.status === 'installing');
         }
+
+        // The earlier build: offered for removal, never while an install is writing to the same caches.
+        const legacyBytes = Number(state.cache?.legacyBytes) || 0;
+        const showLegacy = legacyBytes > 0 && state.status !== 'locked' && state.status !== 'installing';
+        setHidden(byId('webllm-legacy'), !showLegacy || chat);
+        setHidden(byId('webllm-legacy-chat'), !showLegacy || !chat);
+        const megabytes = Math.round(legacyBytes / (1024 * 1024));
+        document.querySelectorAll('.webllm-legacy-size').forEach((el) => {
+            el.textContent = megabytes >= 1 ? ` (about ${megabytes} MB)` : '';
+        });
 
         const device = byId('webllm-device');
         if (device) device.textContent = deviceLine(state);

@@ -183,10 +183,9 @@ export class WebLLMEngineClient {
     /**
      * @param {{ role: string, content: string }[]} messages
      * @param {(text: string) => void} onDelta
-     * @param {Record<string, number>} [options]
      */
-    chat(messages, onDelta, options = {}) {
-        return this.request('chat', { messages, options }, onDelta);
+    chat(messages, onDelta) {
+        return this.request('chat', { messages }, onDelta);
     }
 
     interrupt() {
