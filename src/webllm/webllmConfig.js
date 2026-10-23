@@ -103,8 +103,97 @@ export const WEBLLM_MESSAGE_FRAMING_TOKENS = 5;
 /** `<|begin_of_text|>`, the template's default system message, and the assistant header the reply continues from. */
 export const WEBLLM_REQUEST_FRAMING_TOKENS = 24;
 
-/** Estimated tokens the whole prompt may take. */
+/** Estimated tokens the whole prompt may take (desktop profile). */
 export const WEBLLM_PROMPT_TOKEN_BUDGET = WEBLLM_CONTEXT_WINDOW - WEBLLM_REPLY_RESERVE_TOKENS;
+
+/**
+ * Memory profiles. Same model, same sampling; what differs is how much memory
+ * the engine reserves and how long a reply may run.
+ *
+ * The KV cache is allocated for the whole context window when the model loads.
+ * For Llama 3.2 1B (16 layers × 8 KV heads × 64 dims, keys and values, 32-bit in
+ * the q4f32 build) that is 64 KB per token: 256 MB at 4096 tokens, 128 MB at
+ * 2048 — computed from the model shape, not measured on a device.
+ *
+ *   desktop  4096 context, no reply limit, 3072-token prompt budget. Unchanged.
+ *   mobile   2048 context set at engine initialisation, `max_tokens: 256` on every
+ *            request, and a prompt budget that leaves those 256 tokens plus a
+ *            margin free: 2048 − 256 − 128 = 1664 estimated tokens.
+ *
+ * @typedef {{ id: 'desktop'|'mobile', contextWindow: number, maxTokens: number|null,
+ *             promptTokenBudget: number }} WebLLMProfile
+ */
+export const WEBLLM_PROFILES = Object.freeze({
+    desktop: Object.freeze({
+        id: 'desktop',
+        contextWindow: WEBLLM_CONTEXT_WINDOW,
+        maxTokens: null,
+        promptTokenBudget: WEBLLM_PROMPT_TOKEN_BUDGET
+    }),
+    mobile: Object.freeze({
+        id: 'mobile',
+        contextWindow: 2048,
+        maxTokens: 256,
+        promptTokenBudget: 2048 - 256 - 128
+    })
+});
+
+/**
+ * Dev-only override: `?webllm-profile=mobile` or `?webllm-profile=desktop` in the
+ * page URL. Honoured only on development hosts — localhost, loopback, `.local`
+ * names and private LAN addresses, so a phone can test against a dev server —
+ * and ignored on web25.cloud. Nothing is stored and nothing in the production
+ * UI exposes it; the chat's status line names the profile while it is in use.
+ */
+export const WEBLLM_PROFILE_OVERRIDE_PARAM = 'webllm-profile';
+
+/** @param {string} hostname */
+export function isDevelopmentHost(hostname) {
+    const host = `${hostname || ''}`.toLowerCase();
+    return (
+        host === 'localhost' ||
+        host === '[::1]' ||
+        host === '::1' ||
+        host.endsWith('.local') ||
+        host.endsWith('.localhost') ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    );
+}
+
+/**
+ * Whether this is a phone or tablet: User-Agent Client Hints where the browser
+ * has them, the user agent string otherwise, and iPadOS — which reports itself
+ * as a Mac — by its touch points.
+ * @param {any} nav
+ */
+export function isMobileDevice(nav) {
+    if (typeof nav?.userAgentData?.mobile === 'boolean' && nav.userAgentData.mobile) return true;
+    const ua = `${nav?.userAgent || ''}`;
+    if (/Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua)) return true;
+    return /Macintosh/.test(ua) && Number(nav?.maxTouchPoints) > 1;
+}
+
+/**
+ * Pick the profile for this page.
+ *
+ * @param {{ navigator?: any, location?: { hostname?: string, search?: string } }} [env]
+ * @returns {WebLLMProfile & { overridden: boolean }}
+ */
+export function resolveWebLLMProfile({ navigator: nav = globalThis.navigator, location = globalThis.location } = {}) {
+    if (isDevelopmentHost(location?.hostname)) {
+        let wanted = null;
+        try {
+            wanted = new URLSearchParams(location?.search || '').get(WEBLLM_PROFILE_OVERRIDE_PARAM);
+        } catch (_) {
+            wanted = null;
+        }
+        if (wanted && Object.hasOwn(WEBLLM_PROFILES, wanted)) return { ...WEBLLM_PROFILES[wanted], overridden: true };
+    }
+    return { ...WEBLLM_PROFILES[isMobileDevice(nav) ? 'mobile' : 'desktop'], overridden: false };
+}
 
 export const LLAMA_LICENSE_URL = 'https://www.llama.com/llama3_2/license/';
 
@@ -125,8 +214,14 @@ export const WEBLLM_SW_SCOPE = './webllm/';
 /** Kept in step with `ASSET_CACHE` in webllm-sw.js. */
 export const WEBLLM_ASSET_CACHE = 'web25-webllm-assets-v1';
 
-/** The engine's app config: one model, with the same files, VRAM and context window as the 0.2.85 prebuilt record for it, on Cache API storage. */
-export function createAppConfig() {
+/**
+ * The engine's app config: one model, with the same files, VRAM and context
+ * window as the 0.2.85 prebuilt record for it, on Cache API storage. A profile
+ * with a smaller window sets it here too, so the record and the chat options agree.
+ *
+ * @param {number} [contextWindow]
+ */
+export function createAppConfig(contextWindow = WEBLLM_CONTEXT_WINDOW) {
     return {
         cacheBackend: 'cache',
         model_list: [
@@ -136,7 +231,7 @@ export function createAppConfig() {
                 model_lib: WEBLLM_MODEL_LIB_URL,
                 vram_required_MB: WEBLLM_MODEL_VRAM_MB,
                 low_resource_required: true,
-                overrides: { context_window_size: WEBLLM_CONTEXT_WINDOW }
+                overrides: { context_window_size: contextWindow }
             }
         ]
     };

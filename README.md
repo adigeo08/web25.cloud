@@ -775,6 +775,53 @@ To compare with the reference on a WebGPU device, select the same model on chat.
 and try `hey`, `Hello, how are you?`, `What is JavaScript?`, `Explain WebRTC briefly.`, and a
 short multi-turn exchange in both.
 
+#### Mobile memory profile and batched streaming
+
+Phones and tablets get a smaller memory profile; desktops keep exactly the settings above.
+Both live in `WEBLLM_PROFILES` (`src/webllm/webllmConfig.js`).
+
+| Setting             | Desktop (unchanged)  | Mobile                           |
+| ------------------- | -------------------- | -------------------------------- |
+| Model               | q4f32_1              | q4f32_1                          |
+| Sampling            | 0.6 / 0.9 / 0 / 0    | same                             |
+| Context window      | 4096                 | 2048 (set at engine `reload()`)  |
+| Max reply tokens    | none (end of turn or full context) | 256 (`max_tokens` on every request) |
+| Prompt budget       | 3072 estimated tokens | 1664 (2048 − 256 − 128 margin)  |
+| KV cache (computed) | 256 MB               | 128 MB                           |
+| Streaming render    | batched              | batched                          |
+
+- **Which profile.** Mobile when User-Agent Client Hints say so, the user agent names a phone
+  or tablet (Android, iPhone, iPad, …), or a "Mac" has touch points (iPadOS). Decided once
+  per page.
+- **Memory.** WebLLM allocates the KV cache for the whole context window when the model
+  loads. For Llama 3.2 1B (16 layers × 8 KV heads × 64 dims, keys and values, 32-bit in the
+  q4f32 build) that is 64 KB per token, so 2048 tokens saves about 128 MB of GPU memory.
+  This is computed from the model's shape, not measured on a device. The 256-token reply
+  limit bounds how long one generation runs and keeps prompt + reply inside the smaller
+  window. A reply that reaches it says so ("reached the length limit on this device").
+- **Batched streaming (both profiles).** A streamed token only marks the reply as changed; it
+  is drawn at most once per animation frame and no more than every 66 ms
+  (`src/ui/webllm/streamBatcher.js`). Each draw appends only the new text to one text node,
+  with one layout read and one scroll. Finishing, Stop, an error or New chat redraw from
+  state, so the final text is always shown in full.
+- **Dev-only switch.** On a development host (localhost, loopback, `.local`, private LAN
+  addresses) `?webllm-profile=mobile` or `?webllm-profile=desktop` forces a profile, and
+  the chat's status line says "mobile profile (dev)". Nothing is stored, nothing appears in
+  the production UI, and web25.cloud ignores the parameter. Each reply logs its profile,
+  token count, decode speed and finish reason to the console (`[WebLLM]`, debug level)
+  for comparing profiles on a device.
+
+Measured in headless Chromium (scripted 600-token stream, no model), from `main` to this change:
+
+| Viewport                     | DOM mutations | Layouts   | Layout time      | Script time  |
+| ---------------------------- | ------------- | --------- | ---------------- | ------------ |
+| Desktop 1280×800             | 1851 → 69     | 621 → 66  | 737 → 57 ms      | 5 → 33 ms    |
+| Phone 390×844, 4× CPU slowdown | 1851 → 75   | 621 → 73  | 2936 → 231 ms    | 22 → 110 ms  |
+
+Not measured: response quality, generation speed, memory stability and long-reply crashes on
+real phones (iPhone 15, Galaxy S22). None was available, and the model can't be downloaded in
+the test environment.
+
 ---
 
 ## Security profile (current)

@@ -19,10 +19,11 @@
  * DOM-free: the panel renders `state`, the tests drive it with doubles.
  */
 
-import { WEBLLM_MODEL_DOWNLOAD_BYTES, WEBLLM_PROMPT_TOKEN_BUDGET } from './webllmConfig.js';
+import { WEBLLM_MODEL_DOWNLOAD_BYTES, WEBLLM_PROFILES } from './webllmConfig.js';
 import {
     LENGTH_NOTICE,
     LOOP_NOTICE,
+    REPLY_LIMIT_NOTICE,
     MESSAGE_TOO_LONG,
     classifyError,
     parseInitProgress,
@@ -80,7 +81,8 @@ export class WebLLMController {
      *           storage?: { estimate?: () => Promise<{ usage?: number, quota?: number }>, persist?: () => Promise<boolean> } | null,
      *           locks?: { request: Function } | null,
      *           onChange?: (state: any, change: { type: string, messageId?: number }) => void,
-     *           log?: (message: string) => void }} deps
+     *           log?: (message: string) => void,
+     *           profile?: import('./webllmConfig.js').WebLLMProfile & { overridden?: boolean } }} deps
      */
     constructor({
         detectWebGPU,
@@ -89,8 +91,11 @@ export class WebLLMController {
         storage = null,
         locks = null,
         onChange = () => {},
-        log = () => {}
+        log = () => {},
+        profile = WEBLLM_PROFILES.desktop
     }) {
+        /** Memory profile: context window, reply limit and prompt budget. Fixed for the page's lifetime. */
+        this.profile = profile;
         this.detectWebGPU = detectWebGPU;
         this.swClient = swClient;
         this.createEngine = createEngine;
@@ -275,7 +280,11 @@ export class WebLLMController {
                 await engine.load((report) => {
                     if (stale()) return;
                     this.update({ progress: parseInitProgress(report) }, { type: 'progress' });
-                });
+                }, this.profile);
+                this.log(
+                    `Loaded with the ${this.profile.id} profile: ${this.profile.contextWindow}-token context, ` +
+                        `${this.profile.maxTokens ? `${this.profile.maxTokens}-token replies` : 'no reply limit'}.`
+                );
             });
             if (stale()) return;
 
@@ -391,7 +400,8 @@ export class WebLLMController {
     async generate(engine, prior, content, onDelta, stale) {
         let sent = null;
         let lastError = null;
-        for (const budget of [WEBLLM_PROMPT_TOKEN_BUDGET, Math.floor(WEBLLM_PROMPT_TOKEN_BUDGET * 0.6)]) {
+        const full = this.profile.promptTokenBudget;
+        for (const budget of [full, Math.floor(full * 0.6)]) {
             const plan = this.planPrompt(prior, content, budget);
             if (!plan.fits) throw Object.assign(new Error(MESSAGE_TOO_LONG), { name: 'MessageTooLong' });
             // Nothing more to drop: a second attempt would be the same request.
@@ -410,10 +420,19 @@ export class WebLLMController {
     /**
      * Record how a reply ended.
      * @param {ChatMessage} reply
-     * @param {{ finishReason?: string|null, keepChars?: number }|undefined} result
+     * @param {{ finishReason?: string|null, keepChars?: number, usage?: any }|undefined} result
      */
     finishReply(reply, result) {
         const reason = result?.finishReason || 'stop';
+        const usage = result?.usage;
+        // One line per reply, for comparing profiles on a device: length, speed, ending.
+        if (usage) {
+            const decode = Number(usage.extra?.decode_tokens_per_s);
+            this.log(
+                `Reply (${this.profile.id}): ${usage.completion_tokens ?? '?'} tokens, ` +
+                    `${Number.isFinite(decode) ? `${decode.toFixed(1)} tok/s` : 'speed n/a'}, finish: ${reason}.`
+            );
+        }
         reply.finishReason = /** @type {FinishReason} */ (reason);
         if (reason === 'abort') {
             reply.stopped = true;
@@ -425,7 +444,11 @@ export class WebLLMController {
             reply.notice = LOOP_NOTICE;
             this.log('WebLLM reply stopped: it was repeating itself.');
         } else if (reason === 'length') {
-            reply.notice = LENGTH_NOTICE;
+            // With a reply limit, `length` is that limit — unless usage shows the
+            // reply stopped short of it, which means the context window filled.
+            const limit = this.profile.maxTokens;
+            const hitLimit = Boolean(limit) && !(Number(usage?.completion_tokens) < limit);
+            reply.notice = hitLimit ? REPLY_LIMIT_NOTICE : LENGTH_NOTICE;
         }
     }
 

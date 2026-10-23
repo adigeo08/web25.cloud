@@ -20,9 +20,16 @@ import {
     WEBLLM_CHAT_OPTIONS,
     WEBLLM_CONTEXT_WINDOW,
     WEBLLM_MODEL_ID,
+    WEBLLM_PROFILES,
     WEBLLM_PROMPT_TOKEN_BUDGET
 } from '../src/webllm/webllmConfig.js';
-import { LENGTH_NOTICE, LOOP_NOTICE, MESSAGE_TOO_LONG, estimateTokens } from '../src/webllm/webllmProgress.js';
+import {
+    LENGTH_NOTICE,
+    LOOP_NOTICE,
+    MESSAGE_TOO_LONG,
+    REPLY_LIMIT_NOTICE,
+    estimateTokens
+} from '../src/webllm/webllmProgress.js';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const rep = (text, times, separator = ' ') => Array(times).fill(text).join(separator);
@@ -51,8 +58,15 @@ function scriptedWebLLM(respond) {
                         this.interrupted = false;
                         const plan = respond(request.messages, state.requests.length);
                         const size = plan.size ?? 5;
-                        const pieces = [];
+                        let pieces = [];
                         for (let at = 0; at < plan.text.length; at += size) pieces.push(plan.text.slice(at, at + size));
+                        // Like the real engine, `max_tokens` ends a reply with "length"
+                        // (one piece stands for one token here).
+                        let finish = plan.finish ?? 'stop';
+                        if (request.max_tokens && pieces.length >= request.max_tokens) {
+                            pieces = pieces.slice(0, request.max_tokens);
+                            finish = 'length';
+                        }
                         const engine = this;
                         return (async function* () {
                             for (const piece of pieces) {
@@ -65,7 +79,7 @@ function scriptedWebLLM(respond) {
                                 yield { choices: [{ delta: { content: piece } }] };
                             }
                             yield {
-                                choices: [{ delta: {}, finish_reason: plan.finish ?? 'stop' }],
+                                choices: [{ delta: {}, finish_reason: finish }],
                                 usage: { prompt_tokens: 10, completion_tokens: pieces.length }
                             };
                         })();
@@ -86,9 +100,10 @@ function scriptedWebLLM(respond) {
 }
 
 /** The controller, wired to the scripted model through the real host and client. */
-async function session(respond) {
+async function session(respond, { profile } = {}) {
     const llm = scriptedWebLLM(respond);
     const controller = new WebLLMController({
+        ...(profile ? { profile } : {}),
         detectWebGPU: async () => ({ supported: true, reason: null, vendor: 'test', description: 'gpu' }),
         swClient: {
             status: async () => ({ model: { state: 'absent', bytesCached: 0, bytesTotal: 0 } }),
@@ -409,4 +424,95 @@ test('a failed request is shown, kept out of context, and does not poison the ne
         ['user']
     );
     assert.equal(lastReply(controller).content, 'fine.');
+});
+
+// ── the mobile memory profile ───────────────────────────────────────────────
+
+const MOBILE = WEBLLM_PROFILES.mobile;
+const DESKTOP = WEBLLM_PROFILES.desktop;
+
+test('mobile: the engine is initialised with a 2048-token context, sampling unchanged', async () => {
+    const { llm } = await session(() => ({ text: 'Hi!' }), { profile: MOBILE });
+    assert.deepEqual(llm.state.reloads, [
+        { modelId: WEBLLM_MODEL_ID, chatOpts: { ...WEBLLM_CHAT_OPTIONS, context_window_size: 2048 } }
+    ]);
+    const [record] = llm.state.engineConfig.appConfig.model_list;
+    assert.deepEqual(record.overrides, { context_window_size: 2048 });
+    assert.equal(record.model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC', 'same model');
+});
+
+test('mobile: every request carries max_tokens 256, and a reply that reaches it says so', async () => {
+    const long = filler('w', 5 * 400); // 400 pieces: more than the limit
+    const { controller, llm } = await session(() => ({ text: long }), { profile: MOBILE });
+    await controller.send('Write a long essay about the ocean');
+
+    const [request] = llm.state.requests;
+    assert.equal(request.max_tokens, 256);
+    assert.deepEqual(Object.keys(request).sort(), ['max_tokens', 'messages', 'stream', 'stream_options']);
+    const reply = lastReply(controller);
+    assert.equal(reply.finishReason, 'length');
+    assert.equal(reply.notice, REPLY_LIMIT_NOTICE);
+    assert.equal(reply.content, long.slice(0, 256 * 5), 'every streamed token is kept, up to the limit');
+    assert.equal(llm.state.emitted, 256);
+});
+
+test('mobile: a short reply is untouched by the limit', async () => {
+    const { controller } = await session(() => ({ text: 'Hello! How can I help?' }), { profile: MOBILE });
+    await controller.send('hey');
+    assert.equal(lastReply(controller).finishReason, 'stop');
+    assert.equal(lastReply(controller).notice, null);
+});
+
+test('desktop is unchanged: 4096 context at reload, no max_tokens, the context-full note', async () => {
+    const { controller, llm } = await session(() => ({ text: 'cut', finish: 'length' }), { profile: DESKTOP });
+    await controller.send('hi');
+    assert.deepEqual(llm.state.reloads[0].chatOpts, { ...WEBLLM_CHAT_OPTIONS });
+    assert.equal('max_tokens' in llm.state.requests[0], false);
+    assert.equal(lastReply(controller).notice, LENGTH_NOTICE);
+
+    // No profile given is the desktop one.
+    const plain = await session(() => ({ text: 'ok' }));
+    await plain.controller.send('hi');
+    assert.equal(plain.controller.profile.id, 'desktop');
+    assert.equal('max_tokens' in plain.llm.state.requests[0], false);
+});
+
+test('mobile: a reply cut by a full context, short of the limit, gets the context note instead', async () => {
+    const { controller } = await session(() => ({ text: 'Partial answer', finish: 'length' }), { profile: MOBILE });
+    await controller.send('hi');
+    assert.equal(lastReply(controller).notice, LENGTH_NOTICE);
+});
+
+test('mobile: history is trimmed to the smaller budget, leaving room for the 256-token reply', async () => {
+    assert.ok(MOBILE.promptTokenBudget + MOBILE.maxTokens < MOBILE.contextWindow);
+    const { controller, llm } = await session((messages) => ({ text: filler(`r${messages.length}x`, 1200) }), {
+        profile: MOBILE
+    });
+    for (let i = 1; i <= 6; i += 1) await controller.send(`question ${i} ${filler('q', 1200)}`);
+
+    for (const { messages } of llm.state.requests) {
+        const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 24);
+        assert.ok(tokens <= MOBILE.promptTokenBudget, `${tokens} estimated tokens > ${MOBILE.promptTokenBudget}`);
+        assert.equal(messages[0].role, 'user');
+    }
+    // The same conversation keeps more history on desktop.
+    const desktop = await session((messages) => ({ text: filler(`r${messages.length}x`, 1200) }));
+    for (let i = 1; i <= 6; i += 1) await desktop.controller.send(`question ${i} ${filler('q', 1200)}`);
+    assert.ok(desktop.llm.state.requests.at(-1).messages.length > llm.state.requests.at(-1).messages.length);
+});
+
+test('mobile: Stop and New chat still work under the limit', async () => {
+    const { controller, llm } = await session(() => ({ text: filler('s', 5 * 200) }), { profile: MOBILE });
+    const sending = controller.send('tell me everything');
+    while (llm.state.emitted < 5) await tick();
+    controller.stop();
+    await sending;
+    assert.equal(lastReply(controller).finishReason, 'abort');
+    assert.equal(lastReply(controller).stopped, true);
+    assert.ok(llm.state.emitted < 200);
+
+    controller.newChat();
+    assert.equal(controller.state.messages.length, 0);
+    await controller.send('hi');
+    assert.deepEqual(llm.state.requests.at(-1).messages, [{ role: 'user', content: 'hi' }]);
 });

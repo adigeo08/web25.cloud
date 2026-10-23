@@ -158,13 +158,17 @@ async function startScriptedChat(page, chunks, result = { finishReason: 'stop' }
                     return { alreadyLoaded: false };
                 },
                 async chat(_messages, onDelta) {
+                    window.__interrupted = false;
                     for (const chunk of replyChunks) {
                         await tick();
+                        if (window.__interrupted) return { finishReason: 'abort' };
                         onDelta(chunk);
                     }
                     return replyResult;
                 },
-                interrupt() {},
+                interrupt() {
+                    window.__interrupted = true;
+                },
                 dispose() {}
             };
             let render = () => {};
@@ -413,6 +417,117 @@ test('an earlier model build is offered for removal, and only removed on request
         assert.equal(await page.evaluate(() => window.__legacyRemoved), 1);
         assert.equal(await page.isVisible('#webllm-chat'), true, 'the chat carries on');
         assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+/** Count DOM changes inside the thread while a reply streams. */
+async function watchThread(page) {
+    await page.evaluate(() => {
+        window.__mutations = 0;
+        window.__observer?.disconnect();
+        window.__observer = new MutationObserver((records) => {
+            window.__mutations += records.length;
+        });
+        window.__observer.observe(document.getElementById('webllm-messages'), {
+            subtree: true,
+            childList: true,
+            characterData: true,
+            attributes: true
+        });
+    });
+}
+
+test('a streamed reply is drawn in batches, and every token reaches the screen', async () => {
+    const chunks = Array.from({ length: 300 }, (_, i) => `w${i} `);
+    const { page, context, problems } = await openApp();
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, chunks);
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        await page.fill('#webllm-input', 'Count for me');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => window.__controller.state.messages[1]?.content.length > 0);
+        await watchThread(page);
+        await page.waitForFunction(() => !window.__controller.state.generating);
+
+        const { mutations, shown, expected } = await page.evaluate(() => ({
+            mutations: window.__mutations,
+            shown: document.querySelector('#webllm-messages .webllm-message:not(.is-own) .channels-message-body')
+                .textContent,
+            expected: window.__controller.state.messages[1].content
+        }));
+        assert.equal(expected, chunks.join(''), 'nothing lost on the way in');
+        assert.equal(shown, expected, 'nothing lost on the way to the screen');
+        // ~300 deltas over ~1.5 s: drawn ~20 times, plus the final full render.
+        assert.ok(mutations < 120, `${mutations} DOM mutations for ${chunks.length} deltas`);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test('Stop mid-stream shows everything generated so far, and New chat clears it', async () => {
+    const chunks = Array.from({ length: 400 }, (_, i) => `t${i} `);
+    const { page, context, problems } = await openApp();
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, chunks);
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        await page.fill('#webllm-input', 'Go');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => window.__controller.state.messages[1]?.content.length > 100);
+        await page.click('#webllm-stop-btn');
+        await page.waitForFunction(() => !window.__controller.state.generating);
+
+        const after = await page.evaluate(() => ({
+            shown: document.querySelector('#webllm-messages .webllm-message:not(.is-own) .channels-message-body')
+                .textContent,
+            content: window.__controller.state.messages[1].content,
+            note: document.querySelector('#webllm-messages .webllm-message-note')?.textContent
+        }));
+        assert.equal(after.shown, after.content, 'the last batch is flushed on Stop');
+        assert.ok(after.content.length < chunks.join('').length);
+        assert.equal(after.note, 'Stopped.');
+
+        await page.click('#webllm-new-chat-btn');
+        assert.equal(await page.$('#webllm-messages .webllm-message'), null);
+        // Nothing from the old reply is drawn after New chat.
+        await page.waitForTimeout(200);
+        assert.equal(await page.$('#webllm-messages .webllm-message'), null);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test('the dev profile override is named in the chat, on a development host only', async () => {
+    const { page, context } = await openApp();
+    try {
+        const profiles = await page.evaluate(async () => {
+            const { resolveWebLLMProfile } = await import('/src/webllm/webllmConfig.js');
+            return {
+                here: resolveWebLLMProfile({
+                    location: { hostname: location.hostname, search: '?webllm-profile=mobile' }
+                }),
+                prod: resolveWebLLMProfile({ location: { hostname: 'web25.cloud', search: '?webllm-profile=mobile' } })
+            };
+        });
+        assert.equal(profiles.here.id, 'mobile');
+        assert.equal(profiles.here.overridden, true);
+        assert.equal(profiles.prod.overridden, false);
+
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, ['Hi.']);
+        await page.evaluate(() => {
+            window.__controller.profile = { id: 'mobile', contextWindow: 2048, maxTokens: 256, overridden: true };
+        });
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        assert.match(await page.textContent('#webllm-chat-status'), /mobile profile \(dev\)/);
     } finally {
         await context.close();
     }

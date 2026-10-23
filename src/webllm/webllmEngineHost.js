@@ -8,7 +8,8 @@
  * same messages — so the controller never knows or cares which it got.
  *
  * Inbound (all carry a `requestId` the reply echoes):
- *   { type: 'load' }                     download if needed, then initialise
+ *   { type: 'load', profile? }           download if needed, then initialise with
+ *                                        the profile's context window and reply limit
  *   { type: 'chat', messages }           one streamed chat completion
  *   { type: 'interrupt' }                stop the current generation
  *   { type: 'unload' }                   release the GPU; the cache stays
@@ -28,6 +29,7 @@
 import {
     WEBLLM_ASSET_CACHE,
     WEBLLM_CHAT_OPTIONS,
+    WEBLLM_CONTEXT_WINDOW,
     WEBLLM_LIBRARY_INTEGRITY,
     WEBLLM_LIBRARY_URL,
     WEBLLM_MODEL_ID,
@@ -111,6 +113,22 @@ function serializeError(error) {
 }
 
 /**
+ * The memory settings a `load` asked for, reduced to values WebLLM accepts. A
+ * missing or malformed profile is the desktop one: the default never shrinks.
+ *
+ * @param {any} profile
+ * @returns {{ contextWindow: number, maxTokens: number|null }}
+ */
+export function sanitizeProfile(profile) {
+    const window = Number(profile?.contextWindow);
+    const contextWindow =
+        Number.isInteger(window) && window >= 512 && window <= WEBLLM_CONTEXT_WINDOW ? window : WEBLLM_CONTEXT_WINDOW;
+    const tokens = Number(profile?.maxTokens);
+    const maxTokens = Number.isInteger(tokens) && tokens > 0 && tokens < contextWindow ? tokens : null;
+    return { contextWindow, maxTokens };
+}
+
+/**
  * @param {{ post: (message: any) => void,
  *           loadLibrary?: () => Promise<any>,
  *           modelId?: string,
@@ -121,9 +139,11 @@ export function createEngineHost({
     post,
     loadLibrary = () => loadWebLLMLibrary(),
     modelId = WEBLLM_MODEL_ID,
-    appConfig = createAppConfig(),
+    appConfig = null,
     chatOptions = WEBLLM_CHAT_OPTIONS
 }) {
+    /** The profile the engine was loaded with; fixed until it is unloaded. */
+    let limits = sanitizeProfile(null);
     /** A fully loaded engine, or null. */
     let engine = null;
     /** The engine while `reload` is still running, so `unload` can abort it. */
@@ -135,15 +155,17 @@ export function createEngineHost({
     const reply = (requestId, value) => post({ type: 'result', requestId, ok: true, value });
     const fail = (requestId, error) => post({ type: 'result', requestId, ok: false, error: serializeError(error) });
 
-    async function load() {
-        if (engine) return { alreadyLoaded: true };
+    /** @param {any} profile */
+    async function load(profile) {
+        if (engine) return { alreadyLoaded: true, ...limits };
         // Two loads at once share one download: WebLLM would otherwise fetch
         // every shard twice and fight over the GPU.
         if (!loading) {
+            limits = sanitizeProfile(profile);
             loading = (async () => {
                 const webllm = await loadLibrary();
                 const candidate = new webllm.MLCEngine({
-                    appConfig,
+                    appConfig: appConfig || createAppConfig(limits.contextWindow),
                     initProgressCallback: (report) =>
                         post({
                             type: 'progress',
@@ -156,7 +178,9 @@ export function createEngineHost({
                 try {
                     // As chat.webllm.ai does it: the sampling settings become the
                     // model's chat config here, once, instead of riding on each request.
-                    await candidate.reload(modelId, { ...chatOptions });
+                    // The context window is set here, at initialisation: the KV
+                    // cache is allocated for it, so a smaller one is less memory.
+                    await candidate.reload(modelId, { ...chatOptions, context_window_size: limits.contextWindow });
                 } finally {
                     loadingEngine = null;
                 }
@@ -166,7 +190,7 @@ export function createEngineHost({
             });
         }
         await loading;
-        return { alreadyLoaded: false };
+        return { alreadyLoaded: false, ...limits };
     }
 
     async function chat(requestId, messages) {
@@ -178,10 +202,13 @@ export function createEngineHost({
             // Sampling comes from the chat config set at reload; there is no
             // reply limit, so a reply ends at the end-of-turn token (or a full
             // context window).
+            // The mobile profile caps the reply; desktop leaves it to the
+            // end-of-turn token, as the official client does.
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
-                stream_options: { include_usage: true }
+                stream_options: { include_usage: true },
+                ...(limits.maxTokens ? { max_tokens: limits.maxTokens } : {})
             });
 
             // Somebody asking for the same line five times is not a loop.
@@ -228,7 +255,7 @@ export function createEngineHost({
         try {
             switch (type) {
                 case 'load':
-                    reply(requestId, await load());
+                    reply(requestId, await load(message.profile));
                     break;
                 case 'chat':
                     reply(requestId, await chat(requestId, message.messages));
