@@ -174,10 +174,16 @@ export class WebLLMEngineClient {
         });
     }
 
-    /** @param {(report: { progress: number, text: string, timeElapsed: number }) => void} onProgress */
-    load(onProgress) {
+    /**
+     * @param {(report: { progress: number, text: string, timeElapsed: number }) => void} onProgress
+     * @param {{ contextWindow: number, maxTokens: number|null }} [profile] the memory profile to load with
+     */
+    load(onProgress, profile) {
         this.onProgress = onProgress;
-        return this.request('load');
+        return this.request(
+            'load',
+            profile ? { profile: { contextWindow: profile.contextWindow, maxTokens: profile.maxTokens } } : {}
+        );
     }
 
     /**

@@ -11,6 +11,7 @@
  */
 
 import { describeProgress } from '../../webllm/webllmProgress.js';
+import { createStreamBatcher } from './streamBatcher.js';
 
 const STEP_ORDER = ['download', 'cache', 'shaders'];
 
@@ -182,15 +183,23 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
      * @param {any} state
      * @param {{ type: string, messageId?: number }} [change]
      */
+    // Streamed text is drawn in batches (see streamBatcher.js); a delta only
+    // marks its message as changed. The flush reads the controller's state, so
+    // whatever arrived in between is all drawn.
+    const batcher = createStreamBatcher({ flush: (messageId) => renderDelta(controller.state, messageId) });
+
     function render(state, change = { type: 'state' }) {
         if (change.type === 'delta') {
-            renderDelta(state, change.messageId);
+            batcher.schedule(change.messageId);
             return;
         }
         if (change.type === 'progress') {
             renderProgress(state);
             return;
         }
+        // Every other change (finished, stopped, failed, New chat, lock) redraws
+        // the thread from state, final text included: a pending batch is moot.
+        batcher.cancel();
         renderScreen(state);
         renderMessages(state);
         renderComposer(state);
@@ -235,11 +244,14 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
 
         const chip = byId('webllm-chat-status');
         if (chip) {
-            chip.textContent = state.generating
-                ? 'Generating…'
-                : state.engineKind === 'page'
-                  ? 'Running on this device · main thread'
-                  : 'Running on this device';
+            // Only when the dev-only profile override is in use: which one.
+            const profile = controller.profile?.overridden ? ` · ${controller.profile.id} profile (dev)` : '';
+            chip.textContent =
+                (state.generating
+                    ? 'Generating…'
+                    : state.engineKind === 'page'
+                      ? 'Running on this device · main thread'
+                      : 'Running on this device') + profile;
             chip.className = `status-chip ${state.generating ? 'status-pending' : 'status-success'}`;
         }
     }
@@ -303,8 +315,17 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         });
     }
 
+    /**
+     * Where streamed text goes: the reply's text node and how much of the reply
+     * it already shows, so a flush appends only what is new. Reset whenever the
+     * thread is rebuilt.
+     * @type {{ id: number, item: any, text: Text|null, shown: string } | null}
+     */
+    let stream = null;
+
     function renderMessages(state) {
         if (!messages) return;
+        stream = null;
         const follow = isNearBottom(messages);
         messages.textContent = '';
         if (state.messages.length === 0) {
@@ -316,13 +337,40 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         setHidden(scrollBtn, isNearBottom(messages));
     }
 
+    /**
+     * Draw the latest text of a streaming reply: one layout read, one text
+     * write — appending only what is new — and one scroll.
+     */
     function renderDelta(state, messageId) {
         if (!messages) return;
-        const message = state.messages.find((entry) => entry.id === messageId);
-        const item = messages.querySelector(`[data-message-id="${messageId}"]`);
-        if (!message || !item) return renderMessages(state);
+        let message = null;
+        for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+            if (state.messages[i].id === messageId) {
+                message = state.messages[i];
+                break;
+            }
+        }
+        if (!message) return;
+        if (stream?.id !== messageId) {
+            const item = messages.querySelector(`[data-message-id="${messageId}"]`);
+            if (!item) return renderMessages(state);
+            stream = { id: messageId, item, text: null, shown: '' };
+        }
+        const content = message.content;
+        if (content === stream.shown) return;
+
         const follow = isNearBottom(messages);
-        updateBubble(item, message);
+        const body = stream.item.firstElementChild;
+        if (!stream.text) {
+            // The first text replaces the typing dots.
+            body.textContent = '';
+            stream.text = document.createTextNode('');
+            body.appendChild(stream.text);
+        }
+        if (content.startsWith(stream.shown)) stream.text.appendData(content.slice(stream.shown.length));
+        else stream.text.data = content;
+        stream.shown = content;
+
         if (follow) scrollToBottom(messages);
         else setHidden(scrollBtn, false);
     }

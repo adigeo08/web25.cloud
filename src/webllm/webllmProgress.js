@@ -28,10 +28,14 @@ export const LOOP_NOTICE =
 
 /**
  * Shown under a reply that ended with `finish_reason: "length"`. With no reply
- * limit set, that only happens when the 4096-token context window is full.
+ * limit set, that only happens when the context window is full.
  */
 export const LENGTH_NOTICE =
     'This reply filled the model’s memory and was cut off. Ask Llama to continue if you want more.';
+
+/** Shown under a reply cut at the mobile profile's reply limit (`max_tokens`). */
+export const REPLY_LIMIT_NOTICE =
+    'This reply reached the length limit on this device. Ask Llama to continue if you want more.';
 
 /** Shown when the newest message alone is more than the model can read at once. */
 export const MESSAGE_TOO_LONG = 'That message is too long for Llama to read at once. Try a shorter one.';
