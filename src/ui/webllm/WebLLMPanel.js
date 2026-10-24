@@ -39,23 +39,50 @@ function scrollToBottom(el) {
 }
 
 /**
- * @param {import('../../webllm/WebLLMController.js').ChatMessage} message
+ * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null }} BubbleContext
  */
-function createBubble(message) {
+
+/**
+ * @param {import('../../webllm/WebLLMController.js').ChatMessage} message
+ * @param {BubbleContext} context
+ */
+function createBubble(message, context) {
     const item = document.createElement('div');
     item.dataset.messageId = `${message.id}`;
     const body = document.createElement('div');
     body.className = 'channels-message-body';
     item.appendChild(body);
-    updateBubble(item, message);
+    updateBubble(item, message, context);
     return item;
+}
+
+/**
+ * A small block under a bubble's text, created on demand and removed when empty.
+ * @param {any} item
+ * @param {string} className
+ * @param {boolean} wanted
+ */
+function slot(item, className, wanted) {
+    let el = item.querySelector(`.${className}`);
+    if (!wanted) {
+        el?.remove();
+        return null;
+    }
+    if (!el) {
+        el = document.createElement('div');
+        el.className = className;
+        item.appendChild(el);
+    }
+    el.textContent = '';
+    return el;
 }
 
 /**
  * @param {any} item
  * @param {import('../../webllm/WebLLMController.js').ChatMessage} message
+ * @param {BubbleContext} context
  */
-function updateBubble(item, message) {
+function updateBubble(item, message, context) {
     const typing = message.pending && !message.content;
     item.className = [
         'channels-message',
@@ -74,25 +101,76 @@ function updateBubble(item, message) {
         body.textContent = '';
         const dots = document.createElement('span');
         dots.className = 'webllm-typing';
-        dots.setAttribute('aria-label', 'Llama is thinking');
+        dots.setAttribute(
+            'aria-label',
+            context.lookup === 'searching' ? 'Checking MDN documentation' : 'Llama is thinking'
+        );
         for (let i = 0; i < 3; i += 1) dots.appendChild(document.createElement('span'));
         body.appendChild(dots);
+        if (context.lookup === 'searching') {
+            const label = document.createElement('span');
+            label.className = 'webllm-lookup-label';
+            label.textContent = 'Checking MDN…';
+            body.appendChild(label);
+        }
     } else {
         body.textContent = message.content;
     }
 
-    const note = message.error || message.notice || (message.stopped ? 'Stopped.' : '');
-    let noteEl = item.querySelector('.webllm-message-note');
-    if (note) {
-        if (!noteEl) {
-            noteEl = document.createElement('div');
-            noteEl.className = 'webllm-message-note';
-            item.appendChild(noteEl);
-        }
-        noteEl.textContent = note;
-    } else {
-        noteEl?.remove();
+    // Where the documentation came from: MDN pages only, opened outside the app.
+    const sources = Array.isArray(message.sources) ? message.sources.filter((entry) => isMdnLink(entry?.url)) : [];
+    const sourcesEl = slot(item, 'webllm-sources', sources.length > 0 && !message.pending);
+    if (sourcesEl) {
+        sourcesEl.append('Source: ');
+        sources.forEach((source, index) => {
+            if (index > 0) sourcesEl.append(', ');
+            const link = document.createElement('a');
+            link.href = source.url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = `MDN — ${source.title}`;
+            sourcesEl.appendChild(link);
+        });
     }
+
+    const note = message.error || message.notice || (message.stopped ? 'Stopped.' : '') || message.lookupNote || '';
+    const noteEl = slot(item, 'webllm-message-note', Boolean(note) && !message.pending);
+    if (noteEl) noteEl.textContent = note;
+
+    // A reply cut at the length limit: one click picks it up where it stopped.
+    const offer = message.role === 'assistant' && message.continuable && context.isLast && !message.pending;
+    const continueEl = slot(item, 'webllm-continue', offer);
+    if (continueEl) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'webllm-continue-btn';
+        button.dataset.continue = `${message.id}`;
+        button.textContent = 'Continue →';
+        button.setAttribute('aria-label', 'Continue this reply');
+        button.disabled = context.generating;
+        continueEl.appendChild(button);
+    }
+}
+
+/** Only links to MDN docs pages are ever rendered. */
+function isMdnLink(url) {
+    try {
+        const parsed = new URL(url);
+        return parsed.origin === 'https://developer.mozilla.org' && /^\/[a-zA-Z-]+\/docs\//.test(parsed.pathname);
+    } catch (_) {
+        return false;
+    }
+}
+
+/** "5 min ago", "Yesterday", "3 Oct" — when a conversation was last used. */
+export function relativeTime(timestamp, now = Date.now()) {
+    const minutes = Math.floor((now - timestamp) / 60000);
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} h ago`;
+    if (hours < 48) return 'Yesterday';
+    return new Date(timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 function renderEmptyThread(list) {
@@ -103,7 +181,8 @@ function renderEmptyThread(list) {
     title.textContent = 'Llama is ready';
     const sub = document.createElement('p');
     sub.className = 'webllm-empty-sub';
-    sub.textContent = 'Ask anything. Replies are generated on this device and never leave your browser.';
+    sub.textContent =
+        'Ask about JavaScript, HTML, CSS, Web APIs or anything else. Replies are generated on this device.';
     empty.appendChild(title);
     empty.appendChild(sub);
     list.appendChild(empty);
@@ -142,25 +221,49 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     input?.addEventListener('input', () => autosize(input));
 
     byId('webllm-stop-btn')?.addEventListener('click', () => controller.stop());
+    const layout = byId('webllm-layout');
+    const sidebarToggle = byId('webllm-sidebar-toggle');
+    /** On a phone the conversation list is a drawer over the chat. */
+    function setSidebarOpen(open) {
+        layout?.classList.toggle('is-sidebar-open', open);
+        sidebarToggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    sidebarToggle?.addEventListener('click', () => setSidebarOpen(!layout?.classList.contains('is-sidebar-open')));
+
     byId('webllm-new-chat-btn')?.addEventListener('click', () => {
         controller.newChat();
+        setSidebarOpen(false);
         input?.focus();
     });
-    byId('webllm-remove-btn')?.addEventListener('click', () => {
+    byId('webllm-delete-btn')?.addEventListener('click', () => {
         const ok = confirm(
-            'Remove Llama 3.2 1B from this browser? The downloaded model files (about 800 MB) are deleted and the next chat needs a new download.'
+            'Delete this conversation? Its messages are removed from this browser. The downloaded model is not affected.'
         );
-        if (ok) void controller.removeModel();
+        if (ok) void controller.deleteConversation();
     });
 
-    document.querySelectorAll('[data-webllm-remove-legacy]').forEach((button) =>
-        button.addEventListener('click', () => {
-            const ok = confirm(
-                'Remove the earlier version of Llama 3.2 1B from this browser? The model you use now is not affected.'
-            );
-            if (ok) void controller.removeLegacyModels();
-        })
-    );
+    byId('webllm-conversations')?.addEventListener('click', (event) => {
+        const button = /** @type {any} */ (event.target)?.closest?.('[data-conversation-id]');
+        if (!button) return;
+        void controller.openConversation(button.dataset.conversationId);
+        setSidebarOpen(false);
+    });
+
+    messages?.addEventListener('click', (event) => {
+        const button = /** @type {any} */ (event.target)?.closest?.('[data-continue]');
+        if (!button || button.disabled) return;
+        void controller.continueReply(button.dataset.continue);
+    });
+
+    const settings = /** @type {any} */ (byId('webllm-settings'));
+    const retention = /** @type {any} */ (byId('webllm-retention'));
+    const mdnToggle = /** @type {any} */ (byId('webllm-mdn-toggle'));
+    byId('webllm-settings-btn')?.addEventListener('click', () => {
+        if (typeof settings?.showModal === 'function') settings.showModal();
+        else settings?.setAttribute('open', '');
+    });
+    retention?.addEventListener('change', () => void controller.setRetention(retention.value));
+    mdnToggle?.addEventListener('change', () => void controller.setMdnEnabled(mdnToggle.checked));
 
     messages?.addEventListener('scroll', () => setHidden(scrollBtn, isNearBottom(messages)));
     scrollBtn?.addEventListener('click', () => {
@@ -201,6 +304,8 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         // the thread from state, final text included: a pending batch is moot.
         batcher.cancel();
         renderScreen(state);
+        renderConversations(state);
+        renderSettings(state);
         renderMessages(state);
         renderComposer(state);
         if (state.status === 'ready' && lastStatus !== 'ready') input?.focus();
@@ -229,16 +334,6 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
             setHidden(installBtn, state.status === 'installing');
         }
 
-        // The earlier build: offered for removal, never while an install is writing to the same caches.
-        const legacyBytes = Number(state.cache?.legacyBytes) || 0;
-        const showLegacy = legacyBytes > 0 && state.status !== 'locked' && state.status !== 'installing';
-        setHidden(byId('webllm-legacy'), !showLegacy || chat);
-        setHidden(byId('webllm-legacy-chat'), !showLegacy || !chat);
-        const megabytes = Math.round(legacyBytes / (1024 * 1024));
-        document.querySelectorAll('.webllm-legacy-size').forEach((el) => {
-            el.textContent = megabytes >= 1 ? ` (about ${megabytes} MB)` : '';
-        });
-
         const device = byId('webllm-device');
         if (device) device.textContent = deviceLine(state);
 
@@ -247,11 +342,13 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
             // Only when the dev-only profile override is in use: which one.
             const profile = controller.profile?.overridden ? ` · ${controller.profile.id} profile (dev)` : '';
             chip.textContent =
-                (state.generating
-                    ? 'Generating…'
-                    : state.engineKind === 'page'
-                      ? 'Running on this device · main thread'
-                      : 'Running on this device') + profile;
+                (state.lookup === 'searching'
+                    ? 'Checking MDN…'
+                    : state.generating
+                      ? 'Generating…'
+                      : state.engineKind === 'page'
+                        ? 'Running on this device · main thread'
+                        : 'Running on this device') + profile;
             chip.className = `status-chip ${state.generating ? 'status-pending' : 'status-success'}`;
         }
     }
@@ -319,9 +416,51 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
      * Where streamed text goes: the reply's text node and how much of the reply
      * it already shows, so a flush appends only what is new. Reset whenever the
      * thread is rebuilt.
-     * @type {{ id: number, item: any, text: Text|null, shown: string } | null}
+     * @type {{ id: string, item: any, text: Text|null, shown: string } | null}
      */
     let stream = null;
+
+    function renderConversations(state) {
+        const list = byId('webllm-conversations');
+        if (!list) return;
+        list.textContent = '';
+        for (const conversation of state.conversations) {
+            const row = document.createElement('li');
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'webllm-conversation';
+            button.dataset.conversationId = conversation.id;
+            const active = conversation.id === state.activeConversationId;
+            if (active) button.setAttribute('aria-current', 'true');
+            const title = document.createElement('span');
+            title.className = 'webllm-conversation-title';
+            title.textContent = conversation.title;
+            const time = document.createElement('span');
+            time.className = 'webllm-conversation-time';
+            time.textContent = relativeTime(conversation.updatedAt);
+            button.append(title, time);
+            row.appendChild(button);
+            list.appendChild(row);
+        }
+        const count = byId('webllm-conversation-count');
+        if (count) count.textContent = `${state.conversations.length}`;
+        setHidden(byId('webllm-conversations-empty'), state.conversations.length > 0);
+
+        const note = byId('webllm-history-note');
+        if (note) {
+            note.textContent =
+                state.history === 'unavailable'
+                    ? 'Conversations can’t be saved in this browser; they last until you lock your wallet.'
+                    : state.history === 'off'
+                      ? 'Conversations are not saved in this session.'
+                      : 'Saved only in this browser, for this wallet.';
+        }
+    }
+
+    function renderSettings(state) {
+        if (retention) retention.value = state.settings.retention;
+        if (mdnToggle) mdnToggle.checked = Boolean(state.settings.mdnEnabled);
+    }
 
     function renderMessages(state) {
         if (!messages) return;
@@ -331,7 +470,16 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         if (state.messages.length === 0) {
             renderEmptyThread(messages);
         } else {
-            state.messages.forEach((message) => messages.appendChild(createBubble(message)));
+            const last = state.messages.length - 1;
+            state.messages.forEach((message, index) =>
+                messages.appendChild(
+                    createBubble(message, {
+                        isLast: index === last,
+                        generating: state.generating,
+                        lookup: state.lookup
+                    })
+                )
+            );
         }
         if (follow) scrollToBottom(messages);
         setHidden(scrollBtn, isNearBottom(messages));
@@ -379,14 +527,18 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         const ready = state.status === 'ready';
         if (input) {
             input.disabled = !ready;
-            input.placeholder = state.generating ? 'Llama is replying…' : 'Message Llama…';
+            input.placeholder = state.generating
+                ? 'Llama is replying…'
+                : 'Ask about JavaScript, HTML, CSS or anything else…';
         }
         const send = /** @type {any} */ (byId('webllm-send-btn'));
         if (send) send.disabled = !ready || state.generating;
         setHidden(send, state.generating);
         setHidden(byId('webllm-stop-btn'), !state.generating);
         const newChat = /** @type {any} */ (byId('webllm-new-chat-btn'));
-        if (newChat) newChat.disabled = state.messages.length === 0 && !state.generating;
+        if (newChat) newChat.disabled = state.messages.length === 0 && !state.activeConversationId;
+        const remove = /** @type {any} */ (byId('webllm-delete-btn'));
+        if (remove) remove.disabled = state.messages.length === 0 && !state.activeConversationId;
     }
 
     return render;

@@ -10,6 +10,8 @@ import { createEngineClient } from './WebLLMEngineClient.js';
 import { createWebLLMServiceWorkerClient } from './WebLLMServiceWorkerClient.js';
 import { detectWebGPU } from './webgpuSupport.js';
 import { resolveWebLLMProfile } from './webllmConfig.js';
+import { openWebLLMHistory } from './webllmHistoryStore.js';
+import { createMcpClient } from './mdnMcpClient.js';
 import { bindWebLLMPanel } from '../ui/webllm/WebLLMPanel.js';
 
 /** @param {{ log?: (message: string) => void }} [options] */
@@ -27,10 +29,16 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
         onChange: (state, change) => render(state, change),
         log,
         // Desktop or mobile memory profile, decided once per page.
-        profile: resolveWebLLMProfile()
+        profile: resolveWebLLMProfile(),
+        // Conversations, saved per wallet in this browser.
+        openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
+        // MDN's public MCP server, contacted only for development questions.
+        mdnClient: createMcpClient()
     });
 
     render = bindWebLLMPanel(controller);
     render(controller.state);
+    // A tab closed mid-reply keeps what was written, marked as interrupted.
+    globalThis.addEventListener?.('pagehide', () => controller.saveInterruptedReply());
     return controller;
 }

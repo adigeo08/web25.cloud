@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { WebLLMController, WEBLLM_INSTALL_LOCK } from '../src/webllm/WebLLMController.js';
+import { WEBLLM_SYSTEM_PROMPT } from '../src/webllm/webllmConfig.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -323,16 +324,18 @@ test('replies stream into the assistant bubble as they arrive', async () => {
     assert.equal(controller.state.generating, false);
     assert.equal(changes.filter((change) => change.type === 'delta').length, 3);
 
-    // The model is given the user's turn and nothing else: no injected system
-    // prompt, as in the official WebLLM Chat.
+    // The model is given the developer system prompt and the user's turn.
     const sent = engine.chats[0];
-    assert.deepEqual(sent, [{ role: 'user', content: 'Hi Llama' }]);
+    assert.deepEqual(sent, [
+        { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
+        { role: 'user', content: 'Hi Llama' }
+    ]);
 
     // The next turn carries the conversation so far.
     await controller.send('And again?');
     assert.deepEqual(
         engine.chats[1].map((message) => message.role),
-        ['user', 'assistant', 'user']
+        ['system', 'user', 'assistant', 'user']
     );
 });
 
@@ -429,18 +432,24 @@ test('a lock mid-reply drops the reply instead of finishing it', async () => {
     assert.equal(controller.state.generating, false);
 });
 
-test('Remove model clears the WebLLM caches and returns to the install screen', async () => {
+test('starting a new chat or deleting one never touches the model cache', async () => {
     const engine = fakeEngine();
     const { controller, calls } = harness({ engines: [engine] });
     controller.setAllowed(true);
     await controller.activate();
     await controller.install();
+    await controller.send('Hello');
 
-    await controller.removeModel();
-    assert.equal(calls.clear, 1);
-    assert.equal(engine.disposed, 1);
-    assert.equal(controller.state.status, 'not-installed');
-    assert.equal(controller.state.cache.state, 'absent');
+    controller.newChat();
+    await controller.send('Again');
+    await controller.deleteConversation();
+    assert.equal(controller.state.messages.length, 0);
+    assert.equal(calls.clear, 0, 'no model files are removed');
+    assert.equal(engine.disposed, 0, 'the loaded model stays loaded');
+    assert.equal(controller.state.status, 'ready');
+    // There is no way left to remove the model from the chat.
+    assert.equal(typeof controller.removeModel, 'undefined');
+    assert.equal(typeof controller.removeLegacyModels, 'undefined');
 });
 
 test('a check left over from before a lock does not disturb the next session', async () => {
@@ -465,39 +474,4 @@ test('a check left over from before a lock does not disturb the next session', a
     // Opening the tab again does not start a third check.
     await controller.activate();
     assert.equal(detections, 2);
-});
-
-test('an old q4f16 install is reported, never deleted unasked, and not taken for the new model', async () => {
-    const MB = 1024 * 1024;
-    const { controller, calls } = harness({ legacyBytes: 700 * MB });
-    controller.setAllowed(true);
-    await controller.activate();
-
-    // The new model is not there: the install screen, with nothing downloaded yet.
-    assert.equal(controller.state.status, 'not-installed');
-    assert.equal(controller.state.cache.legacyBytes, 700 * MB);
-    assert.equal(calls.create, 0);
-
-    // Installing the new model leaves the old files where they are.
-    await controller.install();
-    assert.equal(controller.state.status, 'ready');
-    assert.equal(calls.clearLegacy, 0);
-    assert.equal(calls.clear, 0);
-    assert.equal(controller.state.cache.legacyBytes, 700 * MB, 'still offered for removal');
-
-    // Only the user's own request removes them — and only them.
-    await controller.removeLegacyModels();
-    assert.equal(calls.clearLegacy, 1);
-    assert.equal(calls.clear, 0, 'the new model is not touched');
-    assert.equal(controller.state.cache.legacyBytes, 0);
-    assert.equal(controller.state.status, 'ready');
-});
-
-test('locking the wallet never removes an old install either', async () => {
-    const { controller, calls } = harness({ legacyBytes: 1 });
-    controller.setAllowed(true);
-    await controller.activate();
-    controller.setAllowed(false);
-    await controller.removeLegacyModels();
-    assert.equal(calls.clearLegacy, 0, 'nothing is removed while locked');
 });

@@ -194,6 +194,16 @@ export class WebLLMEngineClient {
         return this.request('chat', { messages }, onDelta);
     }
 
+    /**
+     * Continue a reply in place; `onDelta` receives only the new text.
+     * @param {{ role: string, content: string }[]} messages system first, ending on the question
+     * @param {string} partial the reply so far
+     * @param {(text: string) => void} onDelta
+     */
+    continue(messages, partial, onDelta) {
+        return this.request('continue', { messages, partial }, onDelta);
+    }
+
     interrupt() {
         if (!this.disposed) this.transport.post({ type: 'interrupt' });
     }

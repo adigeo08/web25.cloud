@@ -2851,7 +2851,8 @@ export function setupAuthAwareUi(state) {
     if (webllmTabPanel) {
         webllmTabPanel.style.display = hasIdentity ? '' : 'none';
     }
-    setWebLLMAccess(hasIdentity);
+    // The address scopes the chat's saved conversations to this wallet.
+    setWebLLMAccess(hasIdentity, { walletAddress: hasIdentity ? state.address : null });
 
     // A publisher's own deployments are behind the wallet, exactly like Chat:
     // the sites go on seeding with it locked — that is the whole point of the

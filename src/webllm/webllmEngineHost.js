@@ -11,6 +11,8 @@
  *   { type: 'load', profile? }           download if needed, then initialise with
  *                                        the profile's context window and reply limit
  *   { type: 'chat', messages }           one streamed chat completion
+ *   { type: 'continue', messages, partial }  more of a reply cut at the length
+ *                                        limit, appended to it
  *   { type: 'interrupt' }                stop the current generation
  *   { type: 'unload' }                   release the GPU; the cache stays
  *
@@ -36,6 +38,7 @@ import {
     createAppConfig
 } from './webllmConfig.js';
 import { asksForRepetition, createLoopGuard } from './webllmLoopGuard.js';
+import { formatContinuationPrompt } from './webllmPromptFormat.js';
 
 /**
  * Compare bytes against an SRI string (`sha384-…`).
@@ -193,50 +196,102 @@ export function createEngineHost({
         return { alreadyLoaded: false, ...limits };
     }
 
+    /**
+     * Stream one reply: post its text as it comes, stop it if it loops, and
+     * report how it ended. `partial` is text the reply already had (a
+     * continuation): the loop guard reads it too, so a continuation that
+     * starts repeating the reply is caught, but it is never cut.
+     *
+     * @param {number} requestId
+     * @param {AsyncIterable<any>} stream
+     * @param {{ allowRepeats: boolean, partial?: string }} options
+     */
+    async function streamReply(requestId, stream, { allowRepeats, partial = '' }) {
+        const guard = createLoopGuard({ allowRepeats });
+        if (partial) guard.push(partial);
+
+        let finishReason = null;
+        let usage = null;
+        /** @type {import('./webllmLoopGuard.js').LoopVerdict|null} */
+        let loop = null;
+        for await (const chunk of stream) {
+            const choice = chunk?.choices?.[0];
+            // Chat chunks carry `delta.content`; text-completion chunks carry `text`.
+            const text = choice?.delta?.content ?? choice?.text;
+            // After a loop is found the stream is only drained: WebLLM ends
+            // it once the interrupt lands, and nothing more is shown.
+            if (text && !loop) {
+                loop = guard.push(text);
+                if (loop) void engine.interruptGenerate();
+                else post({ type: 'delta', requestId, text });
+            }
+            if (choice?.finish_reason) finishReason = choice.finish_reason;
+            if (chunk?.usage) usage = chunk.usage;
+        }
+
+        // The engine reports its own interrupt as `abort`, which is what a
+        // user pressing Stop gets too; `loop` is how the page tells them apart.
+        if (loop) {
+            return {
+                finishReason: 'loop',
+                keepChars: Math.max(loop.keepChars, partial.length),
+                loopKind: loop.reason,
+                usage
+            };
+        }
+        return { finishReason, usage };
+    }
+
+    /** @param {{ role: string, content: string }[]} messages */
+    const lastUserText = (messages) => [...messages].reverse().find((message) => message.role === 'user')?.content;
+
     async function chat(requestId, messages) {
         if (!engine) throw new Error('The model is not loaded.');
         if (generating) throw new Error('A reply is already being generated.');
         generating = true;
         try {
-            // Exactly what the official client sends: the messages and a stream.
-            // Sampling comes from the chat config set at reload; there is no
-            // reply limit, so a reply ends at the end-of-turn token (or a full
-            // context window).
-            // The mobile profile caps the reply; desktop leaves it to the
-            // end-of-turn token, as the official client does.
+            // What the official client sends — the messages and a stream —
+            // with sampling from the chat config set at reload. The mobile
+            // profile caps the reply; desktop leaves it to the end-of-turn
+            // token.
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
                 stream_options: { include_usage: true },
                 ...(limits.maxTokens ? { max_tokens: limits.maxTokens } : {})
             });
-
             // Somebody asking for the same line five times is not a loop.
-            const lastUser = [...messages].reverse().find((message) => message.role === 'user');
-            const guard = createLoopGuard({ allowRepeats: asksForRepetition(lastUser?.content) });
+            return await streamReply(requestId, stream, { allowRepeats: asksForRepetition(lastUserText(messages)) });
+        } finally {
+            generating = false;
+        }
+    }
 
-            let finishReason = null;
-            let usage = null;
-            /** @type {import('./webllmLoopGuard.js').LoopVerdict|null} */
-            let loop = null;
-            for await (const chunk of stream) {
-                const choice = chunk?.choices?.[0];
-                const text = choice?.delta?.content;
-                // After a loop is found the stream is only drained: WebLLM ends
-                // it once the interrupt lands, and nothing more is shown.
-                if (text && !loop) {
-                    loop = guard.push(text);
-                    if (loop) void engine.interruptGenerate();
-                    else post({ type: 'delta', requestId, text });
-                }
-                if (choice?.finish_reason) finishReason = choice.finish_reason;
-                if (chunk?.usage) usage = chunk.usage;
-            }
-
-            // The engine reports its own interrupt as `abort`, which is what a
-            // user pressing Stop gets too; `loop` is how the page tells them apart.
-            if (loop) return { finishReason: 'loop', keepChars: loop.keepChars, loopKind: loop.reason, usage };
-            return { finishReason, usage };
+    /**
+     * Continue a reply in place: a text completion whose prompt ends inside
+     * the unfinished assistant turn (see webllmPromptFormat.js). The same
+     * sampling, stop tokens and reply limit apply.
+     *
+     * @param {number} requestId
+     * @param {{ role: string, content: string }[]} messages system first, ending on the question
+     * @param {string} partial
+     */
+    async function continueReply(requestId, messages, partial) {
+        if (!engine) throw new Error('The model is not loaded.');
+        if (generating) throw new Error('A reply is already being generated.');
+        if (typeof partial !== 'string' || !partial) throw new Error('There is no reply to continue.');
+        generating = true;
+        try {
+            const stream = await engine.completions.create({
+                prompt: formatContinuationPrompt(messages, partial),
+                stream: true,
+                stream_options: { include_usage: true },
+                ...(limits.maxTokens ? { max_tokens: limits.maxTokens } : {})
+            });
+            return await streamReply(requestId, stream, {
+                allowRepeats: asksForRepetition(lastUserText(messages)),
+                partial
+            });
         } finally {
             generating = false;
         }
@@ -259,6 +314,9 @@ export function createEngineHost({
                     break;
                 case 'chat':
                     reply(requestId, await chat(requestId, message.messages));
+                    break;
+                case 'continue':
+                    reply(requestId, await continueReply(requestId, message.messages, message.partial));
                     break;
                 case 'interrupt':
                     engine?.interruptGenerate();
