@@ -50,12 +50,11 @@ test('the install screen says exactly what the model is and does, in English', (
         squash(html),
         /Download Llama directly into your browser and chat with a local AI\. The model runs entirely on your device, without external inference servers\. Once downloaded, it stays cached for future sessions\./
     );
-    // One model, one install button. (The only other button removes an older
-    // build of the model, and is hidden unless one is stored.)
+    // One model, one install button, and no way to remove the model from here.
     const install = html.slice(html.indexOf('<section id="webllm-install"'), html.indexOf('</section>'));
     assert.equal(install.match(/Install Llama/g).length, 2, 'the title and the one button');
-    assert.equal(install.match(/<button/g).length, 2);
-    assert.match(install, /<div id="webllm-legacy" class="webllm-legacy hidden"[\s\S]*?data-webllm-remove-legacy/);
+    assert.equal(install.match(/<button/g).length, 1);
+    assert.doesNotMatch(html, /webllm-remove|webllm-legacy|Remove model/i);
     assert.match(squash(install), /<button id="webllm-install-btn"[^>]*> Install Llama 3\.2 1B <\/button>/);
     // Meta's attribution and the official license.
     assert.match(squash(install), /Llama 3\.2 by Meta · © Meta Platforms, Inc\./);
@@ -110,6 +109,10 @@ test('the WebLLM code talks to no other WEB25 service', () => {
         'src/webllm/webllmConfig.js',
         'src/webllm/webllmProgress.js',
         'src/webllm/webgpuSupport.js',
+        'src/webllm/webllmHistoryStore.js',
+        'src/webllm/webllmPromptFormat.js',
+        'src/webllm/mdnMcpClient.js',
+        'src/webllm/mdnLookup.js',
         'src/ui/webllm/WebLLMPanel.js',
         'webllm-sw.js'
     ];
@@ -125,12 +128,23 @@ test('the WebLLM code talks to no other WEB25 service', () => {
             /from '[^']*(nostr|channels|auth|torrent|gofile|core)\//i,
             `${file} imports app internals`
         );
-        assert.doesNotMatch(
-            source,
-            /RTCPeerConnection|WebSocket|serviceWorker\.controller|localStorage|indexedDB\.open/,
-            file
-        );
+        assert.doesNotMatch(source, /RTCPeerConnection|WebSocket|serviceWorker\.controller|localStorage/, file);
+        // Saved chats are the one database, and it is WebLLM's own.
+        if (file !== 'src/webllm/webllmHistoryStore.js') assert.doesNotMatch(source, /indexedDB\.open/, file);
     }
+    assert.match(code('src/webllm/webllmHistoryStore.js'), /WEBLLM_HISTORY_DB_PREFIX = 'web25-webllm-history-'/);
+    // Besides downloading WebLLM and the model, the only request the chat makes
+    // is to MDN's MCP endpoint, without cookies.
+    for (const file of [
+        'src/webllm/WebLLMController.js',
+        'src/webllm/webllmHistoryStore.js',
+        'src/webllm/mdnLookup.js',
+        'src/ui/webllm/WebLLMPanel.js'
+    ]) {
+        assert.doesNotMatch(code(file), /\bfetch\(|XMLHttpRequest|sendBeacon/, file);
+    }
+    assert.match(code('src/webllm/mdnMcpClient.js'), /credentials: 'omit'/);
+    assert.match(code('src/webllm/webllmConfig.js'), /MDN_MCP_ENDPOINT = 'https:\/\/mcp\.mdn\.mozilla\.net\/'/);
     // Model output is only ever text.
     assert.doesNotMatch(read('src/ui/webllm/WebLLMPanel.js'), /innerHTML|insertAdjacentHTML/);
 });

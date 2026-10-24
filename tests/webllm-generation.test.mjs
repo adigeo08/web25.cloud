@@ -21,13 +21,14 @@ import {
     WEBLLM_CONTEXT_WINDOW,
     WEBLLM_MODEL_ID,
     WEBLLM_PROFILES,
-    WEBLLM_PROMPT_TOKEN_BUDGET
+    WEBLLM_PROMPT_TOKEN_BUDGET,
+    WEBLLM_SYSTEM_PROMPT
 } from '../src/webllm/webllmConfig.js';
 import {
-    LENGTH_NOTICE,
+    CONTINUE_EXHAUSTED_NOTICE,
     LOOP_NOTICE,
+    MDN_UNAVAILABLE_NOTE,
     MESSAGE_TOO_LONG,
-    REPLY_LIMIT_NOTICE,
     estimateTokens
 } from '../src/webllm/webllmProgress.js';
 
@@ -42,48 +43,58 @@ const filler = (seed, chars) => {
 
 /**
  * A stand-in for `@mlc-ai/web-llm` whose model says what `respond` says.
- * `respond(messages, callNumber)` returns `{ text, finish?, size? }` or throws.
- * Like the real engine, an interrupt ends the stream with `finish_reason: "abort"`.
+ * `respond(messages, callNumber, request)` returns `{ text, finish?, size? }` or
+ * throws. A text completion (Continue) is answered by the same function, with
+ * `messages` null and the raw prompt on `request.prompt`. Like the real engine,
+ * an interrupt ends the stream with `finish_reason: "abort"`, and `max_tokens`
+ * ends it with "length" (one piece stands for one token here).
  */
 function scriptedWebLLM(respond) {
-    const state = { requests: [], emitted: 0, interrupts: 0, reloads: [], engineConfig: null };
+    const state = { requests: [], completions: [], emitted: 0, interrupts: 0, reloads: [], engineConfig: null };
     class MLCEngine {
         constructor(engineConfig) {
             state.engineConfig = engineConfig;
             this.interrupted = false;
+            const engine = this;
+            const stream = (request, plan, chat) => {
+                engine.interrupted = false;
+                const size = plan.size ?? 5;
+                let pieces = [];
+                for (let at = 0; at < plan.text.length; at += size) pieces.push(plan.text.slice(at, at + size));
+                let finish = plan.finish ?? 'stop';
+                if (request.max_tokens && pieces.length >= request.max_tokens) {
+                    pieces = pieces.slice(0, request.max_tokens);
+                    finish = 'length';
+                }
+                const chunk = (text, finishReason = null) =>
+                    chat
+                        ? { choices: [{ delta: text ? { content: text } : {}, finish_reason: finishReason }] }
+                        : { choices: [{ text: text || '', finish_reason: finishReason }] };
+                return (async function* () {
+                    for (const piece of pieces) {
+                        await tick();
+                        if (engine.interrupted) {
+                            yield chunk('', 'abort');
+                            return;
+                        }
+                        state.emitted += 1;
+                        yield chunk(piece);
+                    }
+                    yield { ...chunk('', finish), usage: { prompt_tokens: 10, completion_tokens: pieces.length } };
+                })();
+            };
             this.chat = {
                 completions: {
                     create: async (request) => {
                         state.requests.push(request);
-                        this.interrupted = false;
-                        const plan = respond(request.messages, state.requests.length);
-                        const size = plan.size ?? 5;
-                        let pieces = [];
-                        for (let at = 0; at < plan.text.length; at += size) pieces.push(plan.text.slice(at, at + size));
-                        // Like the real engine, `max_tokens` ends a reply with "length"
-                        // (one piece stands for one token here).
-                        let finish = plan.finish ?? 'stop';
-                        if (request.max_tokens && pieces.length >= request.max_tokens) {
-                            pieces = pieces.slice(0, request.max_tokens);
-                            finish = 'length';
-                        }
-                        const engine = this;
-                        return (async function* () {
-                            for (const piece of pieces) {
-                                await tick();
-                                if (engine.interrupted) {
-                                    yield { choices: [{ delta: {}, finish_reason: 'abort' }] };
-                                    return;
-                                }
-                                state.emitted += 1;
-                                yield { choices: [{ delta: { content: piece } }] };
-                            }
-                            yield {
-                                choices: [{ delta: {}, finish_reason: finish }],
-                                usage: { prompt_tokens: 10, completion_tokens: pieces.length }
-                            };
-                        })();
+                        return stream(request, respond(request.messages, state.requests.length, request), true);
                     }
+                }
+            };
+            this.completions = {
+                create: async (request) => {
+                    state.completions.push(request);
+                    return stream(request, respond(null, state.completions.length, request), false);
                 }
             };
         }
@@ -99,11 +110,15 @@ function scriptedWebLLM(respond) {
     return { module: { MLCEngine }, state };
 }
 
+/** The conversation part of a request: everything after the system prompt. */
+const turns = (messages) => messages.filter((message) => message.role !== 'system');
+
 /** The controller, wired to the scripted model through the real host and client. */
-async function session(respond, { profile } = {}) {
+async function session(respond, { profile, mdnClient } = {}) {
     const llm = scriptedWebLLM(respond);
     const controller = new WebLLMController({
         ...(profile ? { profile } : {}),
+        ...(mdnClient ? { mdnClient } : {}),
         detectWebGPU: async () => ({ supported: true, reason: null, vendor: 'test', description: 'gpu' }),
         swClient: {
             status: async () => ({ model: { state: 'absent', bytesCached: 0, bytesTotal: 0 } }),
@@ -152,13 +167,16 @@ test('the settings are given to reload() as chat options, with the q4f32 model, 
     assert.equal(llm.state.engineConfig.appConfig.model_list.length, 1);
 });
 
-test('a request carries the messages and the stream flags only — no sampling settings, no system prompt', async () => {
+test('a request carries the developer system prompt, the messages and the stream flags — no sampling settings', async () => {
     const { controller, llm } = await session(() => ({ text: 'Hey! What can I help you with?' }));
     await controller.send('hey');
 
     const [request] = llm.state.requests;
     assert.deepEqual(request, {
-        messages: [{ role: 'user', content: 'hey' }],
+        messages: [
+            { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
+            { role: 'user', content: 'hey' }
+        ],
         stream: true,
         stream_options: { include_usage: true }
     });
@@ -188,13 +206,14 @@ test('simple messages: one short reply that ends on its own and is not flagged',
 });
 
 test('multi-turn: each request carries the recent exchanges, in order', async () => {
-    const { controller, llm } = await session((messages) => ({ text: `Answer ${(messages.length + 1) / 2}.` }));
+    const { controller, llm } = await session((messages) => ({ text: `Answer ${(turns(messages).length + 1) / 2}.` }));
     await controller.send('My name is Sam.');
     await controller.send('What is a prime number?');
     await controller.send('And what is my name?');
 
+    assert.equal(llm.state.requests.at(-1).messages[0].content, WEBLLM_SYSTEM_PROMPT);
     assert.deepEqual(
-        llm.state.requests.at(-1).messages.map((message) => [message.role, message.content]),
+        turns(llm.state.requests.at(-1).messages).map((message) => [message.role, message.content]),
         [
             ['user', 'My name is Sam.'],
             ['assistant', 'Answer 1.'],
@@ -207,12 +226,12 @@ test('multi-turn: each request carries the recent exchanges, in order', async ()
     // A fourth turn sees the last two exchanges, as chat.webllm.ai sends them.
     await controller.send('Thanks!');
     assert.deepEqual(
-        llm.state.requests.at(-1).messages.map((message) => message.content),
+        turns(llm.state.requests.at(-1).messages).map((message) => message.content),
         ['What is a prime number?', 'Answer 2.', 'And what is my name?', 'Answer 3.', 'Thanks!']
     );
 });
 
-test('a longer explanation cut by the length limit says so and is still remembered', async () => {
+test('a longer explanation cut by the length limit offers Continue and is still remembered', async () => {
     const cut = 'Sure. A neural network is built from layers of simple units, each of which takes numbers in and';
     const { controller, llm } = await session((messages) =>
         messages.at(-1).content.startsWith('Explain') ? { text: cut, finish: 'length' } : { text: 'Yes.' }
@@ -221,11 +240,12 @@ test('a longer explanation cut by the length limit says so and is still remember
 
     const reply = lastReply(controller);
     assert.equal(reply.finishReason, 'length');
-    assert.equal(reply.notice, LENGTH_NOTICE);
+    assert.equal(reply.continuable, true);
+    assert.equal(reply.notice, null, 'Continue replaces the old "ask it to continue" note');
     assert.equal(reply.content, cut);
 
     await controller.send('ok');
-    assert.equal(llm.state.requests.at(-1).messages[1].content, cut, 'a cut-off answer is still context');
+    assert.equal(turns(llm.state.requests.at(-1).messages)[1].content, cut, 'a cut-off answer is still context');
 });
 
 // ── loops ───────────────────────────────────────────────────────────────────
@@ -261,7 +281,9 @@ test('a reply that looped is not passed back, and chat carries on normally', asy
     await controller.send('hey');
     await controller.send('What is the capital of France?');
 
-    assert.deepEqual(llm.state.requests.at(-1).messages, [{ role: 'user', content: 'What is the capital of France?' }]);
+    assert.deepEqual(turns(llm.state.requests.at(-1).messages), [
+        { role: 'user', content: 'What is the capital of France?' }
+    ]);
     assert.equal(lastReply(controller).content, 'Paris.');
     assert.equal(lastReply(controller).finishReason, 'stop');
 });
@@ -287,7 +309,7 @@ test('the user pressing Stop is "abort", never "loop", and is not passed back ei
     await controller.send('hi');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.role),
-        ['user']
+        ['system', 'user']
     );
 });
 
@@ -306,7 +328,7 @@ test('New chat during a reply stops it and starts clean', async () => {
     await controller.send('second');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.content),
-        ['second']
+        [WEBLLM_SYSTEM_PROMPT, 'second']
     );
     assert.equal(lastReply(controller).content, 'Fresh start.');
 });
@@ -348,13 +370,14 @@ test('a long conversation is held to the last two exchanges and the token budget
     for (let i = 1; i <= 8; i += 1)
         await controller.send(`question ${String(i).padStart(2, '0')} ${filler('q', 2500)}`);
 
-    const lengths = llm.state.requests.map(({ messages }) => messages.length);
+    const lengths = llm.state.requests.map(({ messages }) => turns(messages).length);
     for (const { messages } of llm.state.requests) {
         const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 24);
         assert.ok(tokens <= WEBLLM_PROMPT_TOKEN_BUDGET, `${tokens} estimated tokens`);
-        assert.equal(messages[0].role, 'user', 'it starts on a question, never a reply');
-        assert.equal(messages.length % 2, 1, 'whole exchanges, then the newest question');
-        assert.ok(messages.length <= 5, 'never more than the last four messages and the new one');
+        assert.equal(messages[0].role, 'system');
+        assert.equal(turns(messages)[0].role, 'user', 'it starts on a question, never a reply');
+        assert.equal(turns(messages).length % 2, 1, 'whole exchanges, then the newest question');
+        assert.ok(turns(messages).length <= 5, 'never more than the last four messages and the new one');
     }
     // Long messages: the token budget, not the message count, is what binds here.
     assert.ok(Math.max(...lengths) < 5, `lengths ${lengths}`);
@@ -405,7 +428,7 @@ test('a message too big for the window is refused up front, with nothing sent', 
 
     await controller.send('hi');
     assert.equal(llm.state.requests.length, 1);
-    assert.deepEqual(llm.state.requests[0].messages, [{ role: 'user', content: 'hi' }]);
+    assert.deepEqual(turns(llm.state.requests[0].messages), [{ role: 'user', content: 'hi' }]);
 });
 
 test('a failed request is shown, kept out of context, and does not poison the next one', async () => {
@@ -421,7 +444,7 @@ test('a failed request is shown, kept out of context, and does not poison the ne
     await controller.send('hello');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.role),
-        ['user']
+        ['system', 'user']
     );
     assert.equal(lastReply(controller).content, 'fine.');
 });
@@ -441,7 +464,7 @@ test('mobile: the engine is initialised with a 2048-token context, sampling unch
     assert.equal(record.model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC', 'same model');
 });
 
-test('mobile: every request carries max_tokens 256, and a reply that reaches it says so', async () => {
+test('mobile: every request carries max_tokens 256, and a reply that reaches it can be continued', async () => {
     const long = filler('w', 5 * 400); // 400 pieces: more than the limit
     const { controller, llm } = await session(() => ({ text: long }), { profile: MOBILE });
     await controller.send('Write a long essay about the ocean');
@@ -451,7 +474,8 @@ test('mobile: every request carries max_tokens 256, and a reply that reaches it 
     assert.deepEqual(Object.keys(request).sort(), ['max_tokens', 'messages', 'stream', 'stream_options']);
     const reply = lastReply(controller);
     assert.equal(reply.finishReason, 'length');
-    assert.equal(reply.notice, REPLY_LIMIT_NOTICE);
+    assert.equal(reply.continuable, true);
+    assert.equal(reply.notice, null);
     assert.equal(reply.content, long.slice(0, 256 * 5), 'every streamed token is kept, up to the limit');
     assert.equal(llm.state.emitted, 256);
 });
@@ -463,12 +487,12 @@ test('mobile: a short reply is untouched by the limit', async () => {
     assert.equal(lastReply(controller).notice, null);
 });
 
-test('desktop is unchanged: 4096 context at reload, no max_tokens, the context-full note', async () => {
+test('desktop is unchanged: 4096 context at reload, no max_tokens', async () => {
     const { controller, llm } = await session(() => ({ text: 'cut', finish: 'length' }), { profile: DESKTOP });
     await controller.send('hi');
     assert.deepEqual(llm.state.reloads[0].chatOpts, { ...WEBLLM_CHAT_OPTIONS });
     assert.equal('max_tokens' in llm.state.requests[0], false);
-    assert.equal(lastReply(controller).notice, LENGTH_NOTICE);
+    assert.equal(lastReply(controller).continuable, true);
 
     // No profile given is the desktop one.
     const plain = await session(() => ({ text: 'ok' }));
@@ -477,10 +501,10 @@ test('desktop is unchanged: 4096 context at reload, no max_tokens, the context-f
     assert.equal('max_tokens' in plain.llm.state.requests[0], false);
 });
 
-test('mobile: a reply cut by a full context, short of the limit, gets the context note instead', async () => {
+test('mobile: a reply cut short of the limit by a full context can still be continued while there is room', async () => {
     const { controller } = await session(() => ({ text: 'Partial answer', finish: 'length' }), { profile: MOBILE });
     await controller.send('hi');
-    assert.equal(lastReply(controller).notice, LENGTH_NOTICE);
+    assert.equal(lastReply(controller).continuable, true);
 });
 
 test('mobile: history is trimmed to the smaller budget, leaving room for the 256-token reply', async () => {
@@ -493,7 +517,8 @@ test('mobile: history is trimmed to the smaller budget, leaving room for the 256
     for (const { messages } of llm.state.requests) {
         const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 24);
         assert.ok(tokens <= MOBILE.promptTokenBudget, `${tokens} estimated tokens > ${MOBILE.promptTokenBudget}`);
-        assert.equal(messages[0].role, 'user');
+        assert.equal(messages[0].role, 'system');
+        assert.equal(turns(messages)[0].role, 'user');
     }
     // The same conversation keeps more history on desktop.
     const desktop = await session((messages) => ({ text: filler(`r${messages.length}x`, 1200) }));
@@ -514,5 +539,273 @@ test('mobile: Stop and New chat still work under the limit', async () => {
     controller.newChat();
     assert.equal(controller.state.messages.length, 0);
     await controller.send('hi');
-    assert.deepEqual(llm.state.requests.at(-1).messages, [{ role: 'user', content: 'hi' }]);
+    assert.deepEqual(turns(llm.state.requests.at(-1).messages), [{ role: 'user', content: 'hi' }]);
+});
+
+// ── Continue ────────────────────────────────────────────────────────────────
+
+test('Continue picks the reply up in place: same message, no new question, the prompt ends inside the reply', async () => {
+    const first = filler('a', 5 * 300); // more than the 256-token mobile limit
+    const { controller, llm } = await session(
+        (messages) => (messages ? { text: first } : { text: ' and that is the end.', finish: 'stop' }),
+        { profile: MOBILE }
+    );
+    await controller.send('Explain closures in detail');
+    const reply = lastReply(controller);
+    const cut = reply.content;
+    assert.equal(reply.continuable, true);
+    assert.equal(controller.state.messages.length, 2);
+
+    assert.equal(await controller.continueReply(reply.id), true);
+    assert.equal(controller.state.messages.length, 2, 'no new user or assistant message');
+    assert.equal(lastReply(controller), reply, 'the same message object, extended');
+    assert.equal(reply.content, `${cut} and that is the end.`, 'new text appended, nothing repeated');
+    assert.equal(reply.finishReason, 'stop');
+    assert.equal(reply.continuable, false);
+
+    const [request] = llm.state.completions;
+    assert.equal(request.max_tokens, 256, 'the mobile limit applies to each continuation');
+    assert.equal(request.stream, true);
+    assert.ok(request.prompt.startsWith('<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n'));
+    assert.ok(
+        request.prompt.includes('<|start_header_id|>user<|end_header_id|>\n\nExplain closures in detail<|eot_id|>')
+    );
+    assert.ok(
+        request.prompt.endsWith(`<|start_header_id|>assistant<|end_header_id|>\n\n${cut}`),
+        'the prompt stops inside the unfinished reply, with no end-of-turn after it'
+    );
+    assert.equal(llm.state.requests.length, 1, 'Continue is not a chat request');
+});
+
+test('Continue keeps the conversation as context, and offers itself again if the limit is hit again', async () => {
+    let completions = 0;
+    const { controller, llm } = await session(
+        (messages) => {
+            if (!messages) {
+                completions += 1;
+                return { text: filler(`c${completions}x`, 5 * 300) };
+            }
+            return turns(messages).length === 1
+                ? { text: 'Closures capture variables.' }
+                : { text: filler('b', 5 * 300) };
+        },
+        { profile: MOBILE }
+    );
+    await controller.send('What is a closure?');
+    await controller.send('Show a long example');
+    const reply = lastReply(controller);
+    await controller.continueReply(reply.id);
+
+    assert.equal(reply.finishReason, 'length');
+    assert.equal(reply.continuable, true, 'cut again: Continue again');
+    const prompt = llm.state.completions[0].prompt;
+    assert.ok(prompt.includes('What is a closure?'), 'earlier questions are still context');
+    assert.ok(prompt.includes('Closures capture variables.'), 'earlier answers too');
+});
+
+test('Continue stops offering itself when the reply has filled the context', async () => {
+    let n = 0;
+    const { controller, llm } = await session(
+        (messages) => ({ text: filler(messages ? 'q' : `k${(n += 1)}x`, 5 * 400) }),
+        { profile: MOBILE }
+    );
+    await controller.send('Write everything about CSS grid');
+    const reply = lastReply(controller);
+    let rounds = 0;
+    while (reply.continuable && rounds < 20) {
+        await controller.continueReply(reply.id);
+        rounds += 1;
+    }
+    assert.ok(rounds >= 2 && rounds < 20, `${rounds} continuations`);
+    assert.equal(reply.continuable, false);
+    assert.equal(reply.notice, CONTINUE_EXHAUSTED_NOTICE);
+    // Every continuation that was sent fitted the mobile budget, reply room included.
+    for (const request of llm.state.completions) {
+        assert.ok(estimateTokens(request.prompt) <= MOBILE.contextWindow - MOBILE.maxTokens, 'room for 256 more');
+    }
+    assert.equal(await controller.continueReply(reply.id), false);
+});
+
+test('Continue is refused while generating, and Stop still works during a continuation', async () => {
+    const { controller, llm } = await session((messages) => ({ text: filler(messages ? 'x' : 'y', 5 * 300) }), {
+        profile: MOBILE
+    });
+    await controller.send('Long answer please');
+    const reply = lastReply(controller);
+
+    const continuing = controller.continueReply(reply.id);
+    assert.equal(controller.state.generating, true);
+    assert.equal(await controller.continueReply(reply.id), false, 'no second continuation at once');
+    while (llm.state.emitted < 256 + 5) await tick();
+    controller.stop();
+    await continuing;
+    assert.equal(reply.finishReason, 'abort');
+    assert.equal(reply.stopped, true);
+    assert.equal(reply.continuable, false);
+    assert.ok(reply.content.length > 256 * 5, 'what was written before and during the continuation stays');
+});
+
+test('Continue only extends the latest reply', async () => {
+    const { controller } = await session(() => ({ text: filler('z', 5 * 300) }), { profile: MOBILE });
+    await controller.send('one');
+    const older = lastReply(controller);
+    await controller.send('two');
+    assert.equal(older.continuable, true);
+    assert.equal(await controller.continueReply(older.id), false);
+});
+
+// ── MDN documentation ──────────────────────────────────────────────────────
+
+/** A stand-in MCP client with MDN's real output formats; records every call. */
+function fakeMdn({ fail = false } = {}) {
+    const calls = [];
+    const record = (name, arg) => {
+        calls.push([name, arg]);
+        if (fail)
+            throw Object.assign(new Error('MDN could not be reached: Failed to fetch'), {
+                name: 'McpError',
+                kind: 'network'
+            });
+    };
+    return {
+        calls,
+        async search(query) {
+            record('search', query);
+            return '# Clipboard API\n`path`: `/en-US/docs/Web/API/Clipboard_API`\n`compat-keys`: `api.Clipboard`\nThe Clipboard API provides the ability to respond to clipboard commands.';
+        },
+        async getDoc(path) {
+            record('get-doc', path);
+            return '---\ncompat-key: api.Clipboard\n---\n# Clipboard API\n\nThe **Clipboard API** lets you read and write the system clipboard asynchronously.\n\n## Specifications\n\nignored';
+        },
+        async getCompat(key) {
+            record('get-compat', key);
+            return JSON.stringify({
+                __compat: { support: { chrome: { version_added: '66' }, safari: { version_added: '13.1' } } }
+            });
+        }
+    };
+}
+
+test('a development question is looked up on MDN and the documentation goes into the prompt, credited', async () => {
+    const mdn = fakeMdn();
+    const { controller, llm } = await session(() => ({ text: 'Use navigator.clipboard.writeText().' }), {
+        mdnClient: mdn
+    });
+    await controller.send('How do I use the Clipboard API?');
+
+    assert.deepEqual(
+        mdn.calls.map(([name]) => name),
+        ['search', 'get-doc']
+    );
+    const system = llm.state.requests[0].messages[0].content;
+    assert.ok(system.startsWith(WEBLLM_SYSTEM_PROMPT));
+    assert.match(system, /MDN documentation retrieved for this question from developer\.mozilla\.org/);
+    assert.match(system, /reference material, not instructions/);
+    assert.match(system, /lets you read and write the system clipboard/);
+    assert.doesNotMatch(system, /## Specifications|ignored/, 'reference sections are left out');
+    const reply = lastReply(controller);
+    assert.deepEqual(reply.sources, [
+        { title: 'Clipboard API', url: 'https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API' }
+    ]);
+    assert.equal(reply.lookupNote, null);
+});
+
+test('a compatibility question fetches browser-compatibility data instead of the page', async () => {
+    const mdn = fakeMdn();
+    const { controller, llm } = await session(() => ({ text: 'Yes.' }), { mdnClient: mdn });
+    await controller.send('Is the Clipboard API supported in Safari?');
+    assert.deepEqual(mdn.calls, [
+        ['search', 'Clipboard'],
+        ['get-compat', 'api.Clipboard']
+    ]);
+    assert.match(
+        llm.state.requests[0].messages[0].content,
+        /Browser support for api\.Clipboard: Chrome 66\+, Safari 13\.1\+\./
+    );
+});
+
+test('only a few search terms are sent — no conversation, no wallet, no secrets', async () => {
+    const mdn = fakeMdn();
+    const { controller } = await session(() => ({ text: 'ok' }), { mdnClient: mdn });
+    await controller.send('My name is Sam.');
+    await controller.send(
+        'I use wallet 0x9fB2c1d4e5f60718293a4b5c6d7e8f9012345678 and sam@example.com — how does fetch() work?'
+    );
+    const [[tool, query]] = mdn.calls;
+    assert.equal(tool, 'search');
+    assert.ok(query.length <= 60);
+    assert.doesNotMatch(query, /0x|@|example\.com|Sam/);
+    assert.match(query, /fetch/);
+});
+
+test('ordinary conversation is never looked up, and the lookup can be turned off', async () => {
+    const mdn = fakeMdn();
+    const { controller } = await session(() => ({ text: 'Hi!' }), { mdnClient: mdn });
+    await controller.send('hey');
+    await controller.send('Hello, how are you?');
+    assert.equal(mdn.calls.length, 0);
+
+    await controller.setMdnEnabled(false);
+    await controller.send('What is JavaScript?');
+    assert.equal(mdn.calls.length, 0);
+});
+
+test('when MDN is unreachable, Llama answers on its own and does not claim to have checked', async () => {
+    const mdn = fakeMdn({ fail: true });
+    const { controller, llm } = await session(() => ({ text: 'WebRTC connects peers.' }), { mdnClient: mdn });
+    await controller.send('Explain WebRTC briefly.');
+
+    const reply = lastReply(controller);
+    assert.equal(reply.content, 'WebRTC connects peers.');
+    assert.equal(reply.finishReason, 'stop');
+    assert.deepEqual(reply.sources, []);
+    assert.equal(reply.lookupNote, MDN_UNAVAILABLE_NOTE);
+    assert.equal(llm.state.requests[0].messages[0].content, WEBLLM_SYSTEM_PROMPT, 'no documentation is claimed');
+});
+
+test('on a phone the documentation fits the 1664-token budget with the question and the 256-token reply', async () => {
+    const huge = fakeMdn();
+    huge.getDoc = async (path) => {
+        huge.calls.push(['get-doc', path]);
+        return `# Clipboard API\n\n${filler('doc', 20000)}`;
+    };
+    const { controller, llm } = await session(() => ({ text: 'ok' }), { profile: MOBILE, mdnClient: huge });
+    await controller.send('How do I use the Clipboard API?');
+    const messages = llm.state.requests[0].messages;
+    const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 24);
+    assert.ok(tokens <= MOBILE.promptTokenBudget, `${tokens} > ${MOBILE.promptTokenBudget}`);
+    assert.match(messages[0].content, /MDN documentation retrieved/);
+    assert.equal(llm.state.requests[0].max_tokens, 256);
+});
+
+test('Stop during the MDN lookup ends the turn without generating', async () => {
+    let release;
+    const slow = fakeMdn();
+    slow.search = (query, signal) =>
+        new Promise((resolve, reject) => {
+            release = resolve;
+            signal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { kind: 'aborted' })));
+        });
+    const { controller, llm } = await session(() => ({ text: 'never' }), { mdnClient: slow });
+    const sending = controller.send('How does fetch work?');
+    while (!release) await tick();
+    assert.equal(controller.state.lookup, 'searching');
+    controller.stop();
+    await sending;
+    assert.equal(llm.state.requests.length, 0);
+    assert.equal(lastReply(controller).finishReason, 'abort');
+    assert.equal(lastReply(controller).lookupNote, null, 'a cancelled lookup is not an outage');
+    assert.equal(controller.state.generating, false);
+});
+
+test('Continue keeps the documentation the reply was written from', async () => {
+    const mdn = fakeMdn();
+    const { controller, llm } = await session(
+        (messages) => (messages ? { text: filler('d', 5 * 300) } : { text: ' Done.' }),
+        { profile: MOBILE, mdnClient: mdn }
+    );
+    await controller.send('How do I use the Clipboard API?');
+    await controller.continueReply(lastReply(controller).id);
+    assert.match(llm.state.completions[0].prompt, /lets you read and write the system clipboard/);
+    assert.equal(mdn.calls.length, 2, 'no second lookup for a continuation');
 });

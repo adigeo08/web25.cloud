@@ -10,6 +10,8 @@
  */
 
 let allowed = false;
+/** Whose conversations the chat may open: the unlocked wallet's address. */
+let identity = { walletAddress: null };
 /** @type {Promise<any>|null} */
 let app = null;
 
@@ -37,7 +39,7 @@ export function installWebLLMTab({ loadApp } = {}) {
         void openApp(loadApp)
             .then((controller) => {
                 // Re-read: the wallet may have locked while the app loaded.
-                controller.setAllowed(allowed);
+                controller.setAllowed(allowed, identity);
                 return controller.activate();
             })
             .catch((error) => console.error('WebLLM could not start:', error));
@@ -45,19 +47,23 @@ export function installWebLLMTab({ loadApp } = {}) {
 }
 
 /**
- * Whether the signed-in-only WebLLM tab may be used. Turning it off locks the
- * chat: the engine is released and the conversation dropped, while the
- * downloaded model stays cached for the next session.
+ * Whether the signed-in-only WebLLM tab may be used, and by which wallet.
+ * Turning it off locks the chat: the engine is released and the conversation
+ * dropped from memory, while saved conversations and the downloaded model
+ * stay for the next session of the same wallet.
  * @param {boolean} isAllowed
+ * @param {{ walletAddress?: string|null }} [who]
  */
-export function setWebLLMAccess(isAllowed) {
+export function setWebLLMAccess(isAllowed, { walletAddress = null } = {}) {
     allowed = Boolean(isAllowed);
+    identity = { walletAddress: allowed ? walletAddress : null };
     // Only an app that was already opened has anything to lock or unlock.
-    void app?.then((controller) => controller.setAllowed(allowed)).catch(() => {});
+    void app?.then((controller) => controller.setAllowed(allowed, identity)).catch(() => {});
 }
 
 /** For tests: forget the loaded app and the gate. */
 export function resetWebLLMTabForTests() {
     allowed = false;
+    identity = { walletAddress: null };
     app = null;
 }

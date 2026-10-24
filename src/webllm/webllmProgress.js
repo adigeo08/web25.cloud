@@ -27,15 +27,16 @@ export const LOOP_NOTICE =
     'Stopped automatically: Llama started repeating itself. Try rephrasing, or start a new chat.';
 
 /**
- * Shown under a reply that ended with `finish_reason: "length"`. With no reply
- * limit set, that only happens when the context window is full.
+ * Shown under a reply that stopped at the length limit and cannot be continued:
+ * the question, the reply so far and the room for more no longer fit the
+ * context window.
  */
-export const LENGTH_NOTICE =
-    'This reply filled the model’s memory and was cut off. Ask Llama to continue if you want more.';
+export const CONTINUE_EXHAUSTED_NOTICE =
+    'This reply has filled the model’s memory and can’t be continued. Ask a follow-up question, or start a new chat.';
 
-/** Shown under a reply cut at the mobile profile's reply limit (`max_tokens`). */
-export const REPLY_LIMIT_NOTICE =
-    'This reply reached the length limit on this device. Ask Llama to continue if you want more.';
+/** Shown when an MDN lookup was tried and failed: the answer is the model's own. */
+export const MDN_UNAVAILABLE_NOTE =
+    'MDN documentation couldn’t be reached, so this answer comes from the model’s own knowledge.';
 
 /** Shown when the newest message alone is more than the model can read at once. */
 export const MESSAGE_TOO_LONG = 'That message is too long for Llama to read at once. Try a shorter one.';

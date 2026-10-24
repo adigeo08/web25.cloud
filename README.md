@@ -723,8 +723,11 @@ Chat service.
   from the cache. The storage quota is checked first and persistent storage
   requested.
 - **Wallet lock.** Locking hides the tab, terminates the worker (freeing the
-  GPU) and drops the in-memory conversation. The model files stay cached for
-  the next unlock; only **Remove model** in the chat header deletes them.
+  GPU) and closes that wallet's saved conversations (a reply being written is
+  saved as interrupted first). The model files stay cached for the next unlock.
+  The chat has no control that removes the model: deleting conversations never
+  touches the weights, and the browser's own site-data settings are the way to
+  reclaim that space.
 
 #### Model and generation settings — matched to the official WebLLM Chat
 
@@ -745,10 +748,13 @@ WEB25's first configuration did not.
   messages and `stream`/`stream_options`. Everything else is the model's own:
   `repetition_penalty` 1.0, the Llama 3 conversation template, and its stop tokens
   (128001 `<|end_of_text|>`, 128008 `<|eom_id|>`, 128009 `<|eot_id|>`).
-- **No system prompt** is injected (the official app's `enableInjectSystemPrompts` is false):
-  the template's default system message applies.
+- **System prompt.** Unlike the official app, WEB25 sends one short system message
+  (`WEBLLM_SYSTEM_PROMPT`): a local web-development assistant for JavaScript, HTML, CSS,
+  Web APIs and browser compatibility that also answers general questions, bases its answer
+  on MDN documentation when some is included and says so, and otherwise answers from its
+  own knowledge without claiming to have checked documentation or inventing sources.
 - **No reply limit.** A reply ends at the end-of-turn token, or when the context window is
-  full (`finish_reason: "length"`, shown as a note).
+  full (`finish_reason: "length"`), where **Continue →** picks it up (see below).
 - **History**, as the official app sends it: the last **4** messages before the new one
   (its `historyMessageCount`), under a token budget. The official app's `max_tokens: 4000` is
   that budget — it caps the estimated tokens of history sent and never limits a reply
@@ -766,10 +772,8 @@ WEB25's first configuration did not.
   table rules and code, and relaxes when the user asks for repetition. The reply is cut back
   to its first occurrence and labelled.
 - **The earlier q4f16 install.** Its files are different, so a browser that has it is shown
-  the install screen for the new model, with a note that the earlier version is still stored
-  and a **Remove earlier version** button. Nothing is downloaded until **Install** is pressed,
-  and the old files are only deleted by that button (after a confirmation) — never by
-  installing, updating or locking the wallet.
+  the install screen for the new model. Nothing is downloaded until **Install** is pressed,
+  and the old files are never deleted by the app.
 
 To compare with the reference on a WebGPU device, select the same model on chat.webllm.ai
 and try `hey`, `Hello, how are you?`, `What is JavaScript?`, `Explain WebRTC briefly.`, and a
@@ -798,7 +802,8 @@ Both live in `WEBLLM_PROFILES` (`src/webllm/webllmConfig.js`).
   q4f32 build) that is 64 KB per token, so 2048 tokens saves about 128 MB of GPU memory.
   This is computed from the model's shape, not measured on a device. The 256-token reply
   limit bounds how long one generation runs and keeps prompt + reply inside the smaller
-  window. A reply that reaches it says so ("reached the length limit on this device").
+  window. A reply that reaches it offers **Continue →**, which asks for up to 256 more
+  tokens of the same reply.
 - **Batched streaming (both profiles).** A streamed token only marks the reply as changed; it
   is drawn at most once per animation frame and no more than every 66 ms
   (`src/ui/webllm/streamBatcher.js`). Each draw appends only the new text to one text node,
@@ -821,6 +826,56 @@ Measured in headless Chromium (scripted 600-token stream, no model), from `main`
 Not measured: response quality, generation speed, memory stability and long-reply crashes on
 real phones (iPhone 15, Galaxy S22). None was available, and the model can't be downloaded in
 the test environment.
+
+#### Conversations, Continue and MDN documentation
+
+- **Saved conversations.** Each conversation is kept in IndexedDB in this browser only — no
+  server, sync or external database. The sidebar (a drawer on phones, behind the menu button)
+  lists them by last activity, titled from the first question. **New chat** starts one (it is
+  saved with its first message), a click opens one, and **Delete** removes only the open one,
+  after a confirmation. Questions are saved when sent and replies when they finish; a reply cut
+  short by Stop, an error, a wallet lock or a closed tab is saved with what was written and
+  marked as interrupted, and is not sent back to the model as context.
+- **Per wallet.** Every wallet has its own database, `web25-webllm-history-<id>`, where `<id>`
+  is derived from a SHA-256 of the wallet address (the address itself is not in the name).
+  Unlocking a wallet restores its conversations, most recent open; another wallet on the same
+  browser sees none of them. This is separation, **not encryption**: anyone with access to the
+  browser profile can read IndexedDB.
+- **Retention.** Conversations are deleted after **7 days** without activity by default;
+  **Settings** offers 1 day, 7 days, 30 days or **Until manually deleted**. The choice is stored
+  in the same per-wallet database. Expired conversations are removed when the history is
+  opened, whenever the list is read, and when the setting changes.
+- **Continue →.** A reply that stopped at the length limit (256 tokens on mobile, the full
+  context on desktop) shows an inline **Continue →** button. It resumes the same message — no
+  new question, no repeat of what is there — by sending a text completion whose prompt is the
+  conversation in Llama 3's own chat template ending inside that reply
+  (`src/webllm/webllmPromptFormat.js`), with the same sampling, stop tokens and per-profile
+  `max_tokens`. It is offered again if the continuation is cut off too, is disabled while
+  anything is generating, and Stop works as usual. When the prompt plus the reply so far no
+  longer fits the context, the button is replaced by a note to ask a follow-up or start a new
+  chat. Only the latest reply can be continued.
+- **MDN documentation.** For questions about web development, the chat looks things up on
+  [MDN's MCP server](https://github.com/mdn/mcp) (`https://mcp.mdn.mozilla.net/`), directly
+  from the browser over Streamable HTTP (`src/webllm/mdnMcpClient.js`) — MDN's server allows
+  any origin, so there is no proxy. The lookup is deterministic, not chosen by the model
+  (`src/webllm/mdnLookup.js`): `search` with a few keywords from the question, then `get-compat`
+  for a compatibility question with a BCD key, otherwise `get-doc` for the top result, falling
+  back to the search summary. The result is trimmed to a budget (900 estimated tokens on
+  desktop, 420 on mobile, and never more than the prompt budget leaves), cleaned of template
+  tokens, markup and links, and added to the system message as reference material, not
+  instructions. The reply links its MDN pages (opened in a new tab, `noopener noreferrer`).
+- **What is sent to MDN.** Only up to five keywords (60 characters) from the question — email
+  addresses, URLs, hex strings and Nostr keys are removed first — then the page path or
+  compatibility key MDN returned. Never the wallet, credentials, or the conversation. Requests
+  carry `X-Moz-1st-Party-Data-Opt-Out: 1` (MDN's analytics opt-out), no cookies
+  (`credentials: 'omit'`) and no referrer. **Settings → Look up MDN documentation** turns it off.
+- **When MDN is unreachable** (offline, timeout after 8 s, an error), the model answers on its
+  own and the reply says that MDN couldn't be reached, so the answer does not claim to be
+  checked against documentation. Small talk and general questions never trigger a lookup.
+
+Tested here with the official MDN MCP server code (`mdn/mcp`) run locally with fixture
+responses for its upstream MDN and BCD requests, from headless Chromium on another origin;
+the public endpoint and the model itself could not be reached from the test environment.
 
 ---
 
@@ -1018,6 +1073,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
   — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
 - WebLLM (only after the WebLLM tab is opened): the library from `cdn.jsdelivr.net`, model weights from
   `huggingface.co/mlc-ai`, the compiled model library from `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`
+- MDN MCP server (only for web-development questions in the WebLLM chat, and only while enabled in its
+  settings): `https://mcp.mdn.mozilla.net/` — receives a few search keywords, never wallet data
 
 ---
 

@@ -236,3 +236,45 @@ export function createAppConfig(contextWindow = WEBLLM_CONTEXT_WINDOW) {
         ]
     };
 }
+
+/**
+ * The developer-focused system prompt. Short on purpose: it is sent with every
+ * request, and on a phone the whole prompt has 1664 estimated tokens.
+ * Documentation, when a lookup found some, is appended below it by
+ * `buildSystemPrompt` — never claimed when there was none.
+ */
+export const WEBLLM_SYSTEM_PROMPT = [
+    'You are Llama, a local web-development assistant running in the user’s browser.',
+    'You specialize in JavaScript, HTML, CSS, Web APIs and browser compatibility, and you also help with general questions.',
+    'Give accurate, practical answers, with short code examples when they help.',
+    'When MDN documentation is included below, base your answer on it and say it comes from MDN.',
+    'Otherwise answer from your own knowledge, and never claim to have checked documentation or invent sources or links.'
+].join(' ');
+
+/**
+ * How long a conversation is kept after its last activity. Local only; the
+ * choice is stored per wallet with the history itself.
+ */
+export const WEBLLM_RETENTION_OPTIONS = Object.freeze([
+    Object.freeze({ id: '1d', label: '1 day', ms: 24 * 60 * 60 * 1000 }),
+    Object.freeze({ id: '7d', label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 }),
+    Object.freeze({ id: '30d', label: '30 days', ms: 30 * 24 * 60 * 60 * 1000 }),
+    Object.freeze({ id: 'forever', label: 'Until manually deleted', ms: null })
+]);
+export const WEBLLM_DEFAULT_RETENTION = '7d';
+
+/**
+ * Mozilla's public MDN MCP server (https://developer.mozilla.org/en-US/mcp),
+ * spoken to directly from the page over Streamable HTTP; it allows browser
+ * origins, so there is no proxy. Only short search terms are sent.
+ */
+export const MDN_MCP_ENDPOINT = 'https://mcp.mdn.mozilla.net/';
+export const MDN_MCP_PROTOCOL_VERSION = '2025-06-18';
+export const MDN_ORIGIN = 'https://developer.mozilla.org';
+
+/**
+ * How much documentation may go into a prompt, in estimated tokens. Sized so
+ * the system prompt, the documentation, the question and some history still
+ * fit each profile's prompt budget.
+ */
+export const MDN_CONTEXT_TOKENS = Object.freeze({ desktop: 900, mobile: 420 });
