@@ -10,7 +10,8 @@
  *   conversations  { id, title, createdAt, updatedAt }
  *   messages       { id, conversationId, seq, role, content, finishReason, notice,
  *                    stopped, error, sources, docContext, lookupNote, createdAt }
- *   meta           { key, value }  — retention and the MDN lookup preference
+ *   meta           { key, value }  — retention, the MDN lookup preference, the reply
+ *                  mode and where the engine runs
  *
  * Retention is counted from a conversation's last activity. Expired
  * conversations are deleted when the history is opened and whenever the list
@@ -20,7 +21,12 @@
  * the downloaded model.
  */
 
-import { WEBLLM_DEFAULT_RETENTION, WEBLLM_RETENTION_OPTIONS } from './webllmConfig.js';
+import {
+    WEBLLM_DEFAULT_REPLY_MODE,
+    WEBLLM_DEFAULT_RETENTION,
+    WEBLLM_REPLY_MODES,
+    WEBLLM_RETENTION_OPTIONS
+} from './webllmConfig.js';
 
 export const WEBLLM_HISTORY_DB_PREFIX = 'web25-webllm-history-';
 const DB_VERSION = 1;
@@ -100,8 +106,10 @@ function storedMessage(conversationId, seq, message, now) {
         sources: Array.isArray(message.sources) ? message.sources.map(({ title, url }) => ({ title, url })) : [],
         docContext: message.docContext || null,
         lookupNote: message.lookupNote || null,
-        mode: message.mode === 'informative' || message.mode === 'productive' ? message.mode : null,
+        mode: message.mode === 'short' || message.mode === 'thinking' ? message.mode : null,
+        autoMode: Boolean(message.autoMode),
         steps: Number.isInteger(message.steps) ? message.steps : 0,
+        sequenceId: message.sequenceId || null,
         createdAt: message.createdAt || now
     };
 }
@@ -145,17 +153,19 @@ export class WebLLMHistoryStore {
             retention: isRetention(values.retention) ? values.retention : WEBLLM_DEFAULT_RETENTION,
             mdnEnabled: values.mdnEnabled !== false,
             // Where the engine runs on this device, once the worker has said.
-            engine: values.engine === 'worker' || values.engine === 'page' ? values.engine : null
+            engine: values.engine === 'worker' || values.engine === 'page' ? values.engine : null,
+            replyMode: WEBLLM_REPLY_MODES.includes(values.replyMode) ? values.replyMode : WEBLLM_DEFAULT_REPLY_MODE
         };
     }
 
     /**
-     * @param {'retention'|'mdnEnabled'|'engine'} key
+     * @param {'retention'|'mdnEnabled'|'engine'|'replyMode'} key
      * @param {any} value
      */
     async setSetting(key, value) {
         if (key === 'retention' && !isRetention(value)) throw new Error(`Unknown retention: ${value}`);
         if (key === 'engine' && value !== 'worker' && value !== 'page') throw new Error(`Unknown engine: ${value}`);
+        if (key === 'replyMode' && !WEBLLM_REPLY_MODES.includes(value)) throw new Error(`Unknown reply mode: ${value}`);
         if (key === 'mdnEnabled') value = Boolean(value);
         await this.run(['meta'], 'readwrite', (tx) => promisify(tx.objectStore('meta').put({ key, value })));
         if (key === 'retention') await this.purgeExpired();

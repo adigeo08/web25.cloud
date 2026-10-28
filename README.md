@@ -806,8 +806,9 @@ Both live in `WEBLLM_PROFILES` (`src/webllm/webllmConfig.js`).
   tokens of the same reply.
 - **Batched streaming (both profiles).** A streamed token only marks the reply as changed; it
   is drawn at most once per animation frame and no more than every 66 ms
-  (`src/ui/webllm/streamBatcher.js`). Each draw appends only the new text to one text node,
-  with one layout read and one scroll. Finishing, Stop, an error or New chat redraw from
+  (`src/ui/webllm/streamBatcher.js`). Each draw redraws the reply's body once — so a code
+  fence that has just opened or closed is drawn as a block — with one layout read and one
+  scroll. Finishing, Stop, an error or New chat redraw from
   state, so the final text is always shown in full.
 - **Dev-only switch.** On a development host (localhost, loopback, `.local`, private LAN
   addresses) `?webllm-profile=mobile` or `?webllm-profile=desktop` forces a profile, and
@@ -876,6 +877,42 @@ the test environment.
 Tested here with the official MDN MCP server code (`mdn/mcp`) run locally with fixture
 responses for its upstream MDN and BCD requests, from headless Chromium on another origin;
 the public endpoint and the model itself could not be reached from the test environment.
+
+#### Reply modes, the sequence thinker, and GPU / CPU
+
+- **Reply mode (Settings → How Llama answers).** **Short** is one answer in a small token
+  window (360 tokens on desktop, 200 on mobile). **Thinking** writes a plan and then each step
+  in its own request (up to 4 steps of 900 tokens on desktop, 3 of 256 on mobile), each step
+  with its own MDN lookup. **Auto** (the default) lets Llama choose per message. Nothing is
+  guessed from keywords: on Auto, Llama answers `{"mode": "short"|"thinking"}` and the plan is
+  `{"steps": [...]}`, both constrained to a JSON schema with WebLLM's `response_format` and read
+  with `JSON.parse` (`src/webllm/webllmThinking.js`). An answer that is not a valid decision is
+  taken as Short; a plan with fewer than two steps means the task is written in one go.
+- **The sequence thinker** (`src/webllm/webllmThoughtStore.js`) keeps each Thinking reply as a
+  sequence of thoughts in IndexedDB, per wallet (`web25-webllm-thoughts-<id>`). It is modelled on
+  [durable-thinking](https://github.com/linxule/durable-thinking)'s `ThoughtStore`: numbered
+  thoughts with `totalThoughts` and `nextThoughtNeeded`, revisions (`isRevision`,
+  `revisesThought`), branches (`branchId`, `branchFromThought`, branch-scoped numbers),
+  idempotent appends by `clientRequestId`, and `{ ok, value | error: { code, message } }`
+  results. The plan is thought 1 and each step the next one. Before a step is written, the
+  earlier thoughts most like it are recalled (this reply's first, then earlier answers in the
+  same conversation) and given to Llama instead of a blind tail of the text. Thoughts go when
+  their conversation is deleted or expires.
+- **Recall by similarity, on the CPU.** Each thought is embedded in plain JavaScript by feature
+  hashing (`src/webllm/thoughtEmbedding.js`: words, word pairs and three-letter pieces, 256
+  dimensions, no model and no download) and indexed in
+  [idb-vector](https://github.com/PaulKinlan/idb-vector) 0.2.0 (`web25-webllm-thought-vectors-<id>`).
+  idb-vector is loaded from jsDelivr only after both of its files match their pinned SHA-384
+  (`src/webllm/idbVectorLoader.js`). Without it, the same embedding is compared in the page.
+- **GPU for Llama only.** Llama runs on WebGPU and nothing else: every adapter request asks
+  for `high-performance` without a fallback, a CPU-emulated (fallback) adapter is reported as
+  unsupported instead of being used, and the inference worker is used only when it reports a
+  real GPU (the choice is remembered with the chat settings). The thought store, the embedding
+  and idb-vector never touch WebGPU — a test checks their code for it.
+- **Code in replies.** Fenced blocks are drawn as code blocks with their language and a
+  **Copy** button, and inline code, bold and headings are formatted
+  (`src/ui/webllm/replyFormat.js`). Everything is built from text nodes: model output is never
+  parsed as HTML.
 
 ---
 

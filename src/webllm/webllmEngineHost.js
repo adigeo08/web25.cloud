@@ -10,7 +10,8 @@
  * Inbound (all carry a `requestId` the reply echoes):
  *   { type: 'load', profile? }           download if needed, then initialise with
  *                                        the profile's context window and reply limit
- *   { type: 'chat', messages, maxTokens? }   one streamed chat completion
+ *   { type: 'chat', messages, maxTokens?, schema? }   one streamed chat completion;
+ *                                        with a JSON schema, constrained to it
  *   { type: 'continue', messages, partial, maxTokens? }  more of a reply cut at
  *                                        the length limit, appended to it
  *
@@ -149,6 +150,17 @@ export function replyLimit(profileLimit, requested) {
 }
 
 /**
+ * WebLLM's `response_format` for a JSON schema: the schema as a string, which
+ * is how its grammar compiler takes it. Anything that is not a plain object is
+ * no schema.
+ * @param {any} schema
+ */
+export function jsonResponseFormat(schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+    return { type: 'json_object', schema: JSON.stringify(schema) };
+}
+
+/**
  * @param {{ post: (message: any) => void,
  *           loadLibrary?: () => Promise<any>,
  *           modelId?: string,
@@ -262,7 +274,7 @@ export function createEngineHost({
     /** @param {{ role: string, content: string }[]} messages */
     const lastUserText = (messages) => [...messages].reverse().find((message) => message.role === 'user')?.content;
 
-    async function chat(requestId, messages, requestedMax) {
+    async function chat(requestId, messages, requestedMax, schema) {
         if (!engine) throw new Error('The model is not loaded.');
         if (generating) throw new Error('A reply is already being generated.');
         generating = true;
@@ -272,11 +284,13 @@ export function createEngineHost({
             // profile caps the reply; desktop leaves it to the end-of-turn
             // token — unless the request itself asks for a short reply.
             const maxTokens = replyLimit(limits.maxTokens, requestedMax);
+            const responseFormat = jsonResponseFormat(schema);
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
                 stream_options: { include_usage: true },
-                ...(maxTokens ? { max_tokens: maxTokens } : {})
+                ...(maxTokens ? { max_tokens: maxTokens } : {}),
+                ...(responseFormat ? { response_format: responseFormat } : {})
             });
             // Somebody asking for the same line five times is not a loop.
             return await streamReply(requestId, stream, { allowRepeats: asksForRepetition(lastUserText(messages)) });
@@ -333,7 +347,7 @@ export function createEngineHost({
                     reply(requestId, await load(message.profile));
                     break;
                 case 'chat':
-                    reply(requestId, await chat(requestId, message.messages, message.maxTokens));
+                    reply(requestId, await chat(requestId, message.messages, message.maxTokens, message.schema));
                     break;
                 case 'continue':
                     reply(

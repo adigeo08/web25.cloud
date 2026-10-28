@@ -205,10 +205,15 @@ export class WebLLMEngineClient {
     /**
      * @param {{ role: string, content: string }[]} messages
      * @param {(text: string) => void} onDelta
-     * @param {{ maxTokens?: number|null }} [options] a shorter reply limit for this request
+     * @param {{ maxTokens?: number|null, schema?: object|null }} [options] a shorter reply limit for this
+     *   request, and a JSON schema the reply must follow
      */
-    chat(messages, onDelta, { maxTokens = null } = {}) {
-        return this.request('chat', maxTokens ? { messages, maxTokens } : { messages }, onDelta);
+    chat(messages, onDelta, { maxTokens = null, schema = null } = {}) {
+        return this.request(
+            'chat',
+            { messages, ...(maxTokens ? { maxTokens } : {}), ...(schema ? { schema } : {}) },
+            onDelta
+        );
     }
 
     /**

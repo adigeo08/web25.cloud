@@ -21,16 +21,21 @@
  * up on MDN (see mdnLookup.js), and a reply cut at the length limit can be
  * continued in place.
  *
- * Every message is first classified (see webllmThinking.js). An informative
- * one gets a single short answer. A productive one is planned, then written
- * step by step, each step with its own MDN lookup.
+ * How a reply is written is a chat setting (see webllmThinking.js): Short is
+ * one answer in a small token window; Thinking is a plan and then one step at
+ * a time, each with its own MDN lookup, each kept as a thought in the thought
+ * store (webllmThoughtStore.js) from which later steps recall what they need;
+ * Auto lets Llama choose per message. Llama only ever runs on the GPU; the
+ * thought store and its similarity search are plain JavaScript on the CPU.
  *
  * DOM-free: the panel renders `state`, the tests drive it with doubles.
  */
 
 import {
     MDN_CONTEXT_TOKENS,
+    WEBLLM_DEFAULT_REPLY_MODE,
     WEBLLM_DEFAULT_RETENTION,
+    WEBLLM_REPLY_MODES,
     WEBLLM_MESSAGE_FRAMING_TOKENS,
     WEBLLM_MODEL_DOWNLOAD_BYTES,
     WEBLLM_PROFILES,
@@ -50,9 +55,13 @@ import {
 } from './webllmProgress.js';
 import { buildSystemPrompt, isDevelopmentQuestion, lookupMdn } from './mdnLookup.js';
 import {
-    INFORMATIVE_SYSTEM_PROMPT,
-    classifyIntent,
+    MODE_SCHEMA,
+    MODE_SYSTEM_PROMPT,
+    PLAN_SCHEMA,
+    SHORT_SYSTEM_PROMPT,
     formatPlan,
+    formatRecall,
+    parseModeDecision,
     parsePlan,
     planInstruction,
     stepHeading,
@@ -60,7 +69,7 @@ import {
     stepMessage
 } from './webllmThinking.js';
 
-/** Said under a productive reply when one of its steps was cut for repeating itself. */
+/** Said under a Thinking reply when one of its steps was cut for repeating itself. */
 export const STEP_LOOP_NOTICE =
     'A step started repeating itself and was cut short; the remaining steps were still written.';
 
@@ -79,13 +88,16 @@ export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
  *             stopped: boolean, finishReason: FinishReason|null, notice: string|null,
  *             continuable?: boolean, sources?: { title: string, url: string }[], docContext?: string|null,
  *             lookupNote?: string|null, createdAt?: number,
- *             mode?: import('./webllmThinking.js').ConversationMode|null, steps?: number }} ChatMessage
+ *             mode?: import('./webllmThinking.js').ReplyMode|null, autoMode?: boolean, steps?: number,
+ *             sequenceId?: string|null }} ChatMessage
  *   continuable  a reply cut at the length limit that Continue can extend
  *   sources      MDN pages the reply was given (shown as links)
  *   docContext   the documentation excerpt it was given, kept so Continue sees it too
  *   lookupNote   why no documentation was used, when a lookup was tried and failed
- *   mode         how the question was classified: an informative or a productive reply
- *   steps        how many planned steps a productive reply was written in (0: no plan)
+ *   mode         how the reply was written: short, or thinking in steps
+ *   autoMode     whether Llama chose that mode (the Auto setting)
+ *   steps        how many planned steps a thinking reply was written in (0: no plan)
+ *   sequenceId   the thought sequence a thinking reply was kept as
  */
 
 let idCounter = 0;
@@ -111,7 +123,9 @@ function createMessage(role, content) {
         docContext: null,
         lookupNote: null,
         mode: null,
+        autoMode: false,
         steps: 0,
+        sequenceId: null,
         createdAt: Date.now()
     };
 }
@@ -142,13 +156,18 @@ function initialState() {
         activeConversationId: null,
         /** 'off' without a wallet to save under, 'loading', 'ready', or 'unavailable' when IndexedDB failed */
         history: 'off',
-        settings: { retention: WEBLLM_DEFAULT_RETENTION, mdnEnabled: true, engine: null },
+        settings: {
+            retention: WEBLLM_DEFAULT_RETENTION,
+            mdnEnabled: true,
+            engine: null,
+            replyMode: WEBLLM_DEFAULT_REPLY_MODE
+        },
         /** @type {'searching'|null} an MDN lookup in progress */
         lookup: null,
         /**
          * Where the reply being written is in its sequence, for the status line.
-         * @type {{ mode: import('./webllmThinking.js').ConversationMode,
-         *          phase: 'planning'|'lookup'|'writing', step: number, total: number }|null}
+         * @type {{ mode: 'auto'|import('./webllmThinking.js').ReplyMode,
+         *          phase: 'deciding'|'planning'|'lookup'|'recall'|'writing', step: number, total: number }|null}
          */
         thinking: null
     };
@@ -165,6 +184,7 @@ export class WebLLMController {
      *           log?: (message: string) => void,
      *           profile?: import('./webllmConfig.js').WebLLMProfile & { overridden?: boolean },
      *           openHistory?: ((walletAddress: string) => Promise<import('./webllmHistoryStore.js').WebLLMHistoryStore>) | null,
+     *           openThoughts?: ((walletAddress: string) => Promise<import('./webllmThoughtStore.js').WebLLMThoughtStore>) | null,
      *           mdnClient?: any }} deps
      */
     constructor({
@@ -177,10 +197,15 @@ export class WebLLMController {
         log = () => {},
         profile = WEBLLM_PROFILES.desktop,
         openHistory = null,
+        openThoughts = null,
         mdnClient = null
     }) {
         /** Opens one wallet's saved conversations; none means nothing is saved. */
         this.openHistory = openHistory;
+        /** Opens one wallet's thought store; none means thinking replies keep no thoughts. */
+        this.openThoughts = openThoughts;
+        /** @type {import('./webllmThoughtStore.js').WebLLMThoughtStore|null} */
+        this.thoughts = null;
         /** The MDN MCP client; none means no documentation lookups. */
         this.mdnClient = mdnClient;
         /** @type {import('./webllmHistoryStore.js').WebLLMHistoryStore|null} */
@@ -195,7 +220,7 @@ export class WebLLMController {
         this.profile = profile;
         /** Reply limits and step counts for the profile's sequential thinking. */
         this.thinking = WEBLLM_THINKING[profile.id] || WEBLLM_THINKING.desktop;
-        /** Set by Stop; a productive reply checks it between its steps. */
+        /** Set by Stop; a thinking reply checks it between its steps. */
         this.stopRequested = false;
         this.detectWebGPU = detectWebGPU;
         this.swClient = swClient;
@@ -263,6 +288,7 @@ export class WebLLMController {
             }
             this.history = store;
             this.update({ history: 'ready', settings, conversations: conversations.map(summary) });
+            void this.loadThoughts(wallet, epoch);
             if (conversations.length > 0 && !this.state.activeConversationId && this.state.messages.length === 0) {
                 await this.openConversation(conversations[0].id);
             }
@@ -271,6 +297,28 @@ export class WebLLMController {
             store?.close();
             this.log(`WebLLM chat history unavailable: ${error?.message || error}`);
             this.update({ history: 'unavailable' });
+        }
+    }
+
+    /**
+     * Open this wallet's thought store, best-effort: without it, thinking
+     * replies still work, recalling only what the reply itself wrote.
+     * @param {string} wallet
+     * @param {number} epoch
+     */
+    async loadThoughts(wallet, epoch) {
+        if (!this.openThoughts) return;
+        try {
+            const thoughts = await this.openThoughts(wallet);
+            if (epoch !== this.epoch) {
+                thoughts.close();
+                return;
+            }
+            this.thoughts = thoughts;
+            // Thoughts of conversations deleted or expired while away go too.
+            await thoughts.purge({ keepConversationIds: new Set(this.state.conversations.map((entry) => entry.id)) });
+        } catch (error) {
+            this.log(`WebLLM thought store unavailable: ${error?.message || error}`);
         }
     }
 
@@ -288,6 +336,8 @@ export class WebLLMController {
                 Object.assign(patch, { activeConversationId: null, messages: [] });
             }
             this.update(patch, { type: 'messages' });
+            // An expired conversation takes its thoughts with it.
+            await this.thoughts?.purge({ keepConversationIds: new Set(conversations.map((entry) => entry.id)) });
         } catch (error) {
             this.log(`WebLLM chat history could not be read: ${error?.message || error}`);
         }
@@ -331,6 +381,7 @@ export class WebLLMController {
         const epoch = this.epoch;
         try {
             await this.history?.deleteConversation(conversationId);
+            await this.thoughts?.deleteConversation(conversationId);
         } catch (error) {
             this.log(`WebLLM conversation could not be deleted: ${error?.message || error}`);
             return;
@@ -370,6 +421,20 @@ export class WebLLMController {
         void this.history?.setSetting('engine', kind).catch((error) => {
             this.log(`WebLLM engine choice could not be saved: ${error?.message || error}`);
         });
+    }
+
+    /**
+     * How replies are written: 'short', 'thinking', or 'auto' (Llama chooses).
+     * @param {string} mode one of WEBLLM_REPLY_MODES
+     */
+    async setReplyMode(mode) {
+        if (!WEBLLM_REPLY_MODES.includes(mode)) return;
+        this.update({ settings: { ...this.state.settings, replyMode: mode } });
+        try {
+            await this.history?.setSetting('replyMode', mode);
+        } catch (error) {
+            this.log(`WebLLM reply mode could not be saved: ${error?.message || error}`);
+        }
     }
 
     /** @param {boolean} enabled */
@@ -676,7 +741,8 @@ export class WebLLMController {
      * @param {(delta: string) => void} onDelta
      * @param {() => boolean} stale
      * @param {string[]} systems system prompts to try, richest first
-     * @param {{ maxTokens?: number|null }} [options] a shorter reply limit for this request
+     * @param {{ maxTokens?: number|null, schema?: object|null }} [options] a shorter reply limit for this
+     *   request, and a JSON schema the reply must follow
      * @returns {Promise<{ result: any, system: string }>}
      */
     async generate(
@@ -686,7 +752,7 @@ export class WebLLMController {
         onDelta,
         stale,
         systems = [WEBLLM_SYSTEM_PROMPT],
-        { maxTokens = null } = {}
+        { maxTokens = null, schema = null } = {}
     ) {
         let sent = null;
         let lastError = null;
@@ -700,9 +766,13 @@ export class WebLLMController {
             if (sent && plan.messages.length === sent.length) break;
             sent = plan.messages;
             try {
-                const result = maxTokens
-                    ? await engine.chat(sent, onDelta, { maxTokens })
-                    : await engine.chat(sent, onDelta);
+                const result =
+                    maxTokens || schema
+                        ? await engine.chat(sent, onDelta, {
+                              ...(maxTokens ? { maxTokens } : {}),
+                              ...(schema ? { schema } : {})
+                          })
+                        : await engine.chat(sent, onDelta);
                 return { result, system };
             } catch (error) {
                 if (stale() || classifyError(error).kind !== 'context') throw error;
@@ -751,7 +821,7 @@ export class WebLLMController {
      * Look the question up on MDN, if it is a development question and lookups
      * are on. Never throws: no documentation is a normal outcome.
      *
-     * A productive reply looks each step up on its own: `query` is then the
+     * A thinking reply looks each step up on its own: `query` is then the
      * step, `context` the task it belongs to (which decides whether it is a
      * development question at all), and `share` the part of the budget one
      * step's documentation may take, since the step's prompt carries more.
@@ -819,13 +889,16 @@ export class WebLLMController {
         this.activeReply = { conversationId, reply };
 
         try {
-            // Step 1 of the sequence: what kind of conversation is this?
-            const mode = classifyIntent(content);
+            // First, how to write it: the setting, or Llama's own choice.
+            const { mode, auto } = await this.chooseMode(engine, prior, content, stale);
+            if (stale()) return false;
             reply.mode = mode;
-            const result =
-                mode === 'productive'
-                    ? await this.writeProductive(engine, prior, content, reply, stale)
-                    : await this.writeInformative(engine, prior, content, reply, stale);
+            reply.autoMode = auto;
+            const result = this.stopRequested
+                ? { finishReason: 'abort' }
+                : mode === 'thinking'
+                  ? await this.writeThinking(engine, prior, content, reply, stale, conversationId)
+                  : await this.writeShort(engine, prior, content, reply, stale);
             if (stale() || !result) return false;
             this.finishReply(reply, result);
         } catch (error) {
@@ -870,7 +943,44 @@ export class WebLLMController {
     }
 
     /**
-     * An informative answer: one lookup for the facts, one short reply.
+     * The reply mode for this message. Short and Thinking are the user's
+     * choice; on Auto, Llama answers {"mode": …} in a few tokens — on the GPU,
+     * constrained to a JSON schema — and anything else is taken as Short.
+     *
+     * @param {any} engine
+     * @param {ChatMessage[]} prior
+     * @param {string} content
+     * @param {() => boolean} stale
+     * @returns {Promise<{ mode: import('./webllmThinking.js').ReplyMode, auto: boolean }>}
+     */
+    async chooseMode(engine, prior, content, stale) {
+        const setting = this.state.settings.replyMode;
+        if (setting === 'short' || setting === 'thinking') return { mode: setting, auto: false };
+        this.setThinking({ mode: 'auto', phase: 'deciding', step: 0, total: 0 });
+        let answer = '';
+        try {
+            await this.generate(
+                engine,
+                prior,
+                content,
+                (delta) => {
+                    answer += delta;
+                },
+                stale,
+                [MODE_SYSTEM_PROMPT],
+                { maxTokens: this.thinking.decideMaxTokens, schema: MODE_SCHEMA }
+            );
+        } catch (error) {
+            if (stale()) throw error;
+            this.log(`WebLLM could not choose a reply mode: ${error?.message || error}`);
+        }
+        const mode = parseModeDecision(answer) || 'short';
+        this.log(`Reply mode (auto): ${mode}.`);
+        return { mode, auto: true };
+    }
+
+    /**
+     * A short answer: one lookup for the facts, one reply in a small window.
      *
      * @param {any} engine
      * @param {ChatMessage[]} prior
@@ -879,14 +989,14 @@ export class WebLLMController {
      * @param {() => boolean} stale
      * @returns {Promise<any>} how the reply ended; null once stale
      */
-    async writeInformative(engine, prior, content, reply, stale) {
-        this.setThinking({ mode: 'informative', phase: 'lookup', step: 0, total: 0 });
-        const base = INFORMATIVE_SYSTEM_PROMPT;
+    async writeShort(engine, prior, content, reply, stale) {
+        this.setThinking({ mode: 'short', phase: 'lookup', step: 0, total: 0 });
+        const base = SHORT_SYSTEM_PROMPT;
         const lookup = await this.lookupDocumentation(content, reply, stale, { system: base });
         if (stale()) return null;
         // Stop during the lookup: nothing was generated.
         if (reply.stopped || this.stopRequested) return { finishReason: 'abort' };
-        this.setThinking({ mode: 'informative', phase: 'writing', step: 0, total: 0 });
+        this.setThinking({ mode: 'short', phase: 'writing', step: 0, total: 0 });
         const withDocs = buildSystemPrompt(base, lookup);
         const { result, system } = await this.generate(
             engine,
@@ -895,7 +1005,7 @@ export class WebLLMController {
             this.appender(reply, stale),
             stale,
             lookup ? [withDocs, base] : [base],
-            { maxTokens: this.thinking.informativeMaxTokens }
+            { maxTokens: this.thinking.shortMaxTokens }
         );
         if (stale()) return null;
         // Documentation is credited only if it was actually in the prompt.
@@ -907,21 +1017,74 @@ export class WebLLMController {
     }
 
     /**
-     * A productive answer, in sequence: a plan first, then each step in its
-     * own request with its own MDN lookup, building on the steps before it.
-     * Without a usable plan the task is written in one go, still in
-     * productive mode.
+     * Keep a thought, best-effort: a reply never fails because the store did.
+     * @param {import('./webllmThoughtStore.js').AppendThoughtCommand} command
+     */
+    async think(command) {
+        if (!this.thoughts) return null;
+        const result = await this.thoughts.appendThought(command);
+        if (!result.ok) {
+            this.log(`WebLLM thought not kept (${result.error.code}): ${result.error.message}`);
+            return null;
+        }
+        return result.value;
+    }
+
+    /**
+     * What a step is shown of the earlier thinking: the thoughts most like it,
+     * from this sequence first and then this conversation's earlier ones —
+     * or, without a thought store, the end of what this reply has written.
+     *
+     * @param {{ step: string, task: string, conversationId: string|null, sequenceId: string|null,
+     *           planThoughtId: string|null, written: string }} options
+     */
+    async recallFor({ step, task, conversationId, sequenceId, planThoughtId, written }) {
+        const budget = this.thinking.recallTokens;
+        if (this.thoughts && conversationId) {
+            try {
+                const thoughts = await this.thoughts.recall({
+                    query: `${step}\n${task}`,
+                    conversationId,
+                    sequenceId,
+                    limit: this.thinking.recallLimit,
+                    // The plan is in the step's prompt already.
+                    exclude: new Set(planThoughtId ? [planThoughtId] : [])
+                });
+                return formatRecall(
+                    thoughts.map((thought) => ({
+                        label:
+                            thought.sequenceId === sequenceId
+                                ? `Thought ${thought.thoughtNumber}`
+                                : 'From an earlier answer in this conversation',
+                        text: thought.thought
+                    })),
+                    budget
+                );
+            } catch (error) {
+                this.log(`WebLLM thoughts could not be recalled: ${error?.message || error}`);
+            }
+        }
+        return formatRecall(written.trim() ? [{ label: 'Earlier steps', text: written }] : [], budget);
+    }
+
+    /**
+     * A thinking answer, as a sequence of thoughts: the plan (thought 1, a
+     * JSON schema answer), then each step (thoughts 2…N+1) in its own request
+     * with its own MDN lookup and the earlier thoughts recalled for it. Every
+     * thought is kept in the thought store. Without a usable plan the task is
+     * written in one go.
      *
      * @param {any} engine
      * @param {ChatMessage[]} prior
      * @param {string} content
      * @param {ChatMessage} reply
      * @param {() => boolean} stale
+     * @param {string|null} conversationId
      * @returns {Promise<any>} how the last step ended; null once stale
      */
-    async writeProductive(engine, prior, content, reply, stale) {
+    async writeThinking(engine, prior, content, reply, stale, conversationId) {
         const limits = this.thinking;
-        this.setThinking({ mode: 'productive', phase: 'planning', step: 0, total: 0 });
+        this.setThinking({ mode: 'thinking', phase: 'planning', step: 0, total: 0 });
         let planText = '';
         const planSystem = `${WEBLLM_SYSTEM_PROMPT}\n\n${planInstruction(limits.maxSteps)}`;
         const planned = await this.generate(
@@ -933,29 +1096,46 @@ export class WebLLMController {
             },
             stale,
             [planSystem],
-            { maxTokens: limits.planMaxTokens }
+            { maxTokens: limits.planMaxTokens, schema: PLAN_SCHEMA }
         );
         if (stale()) return null;
         if (this.stopRequested || planned.result?.finishReason === 'abort') return { finishReason: 'abort' };
 
         const plan = parsePlan(planText, limits.maxSteps);
         const steps = plan.length > 0 ? plan : [content];
+        const total = steps.length;
         reply.steps = plan.length;
         const append = this.appender(reply, stale);
         if (plan.length > 0) append(formatPlan(plan));
+
+        // Thought 1: the plan.
+        const first = conversationId
+            ? await this.think({
+                  conversationId,
+                  messageId: reply.id,
+                  sequenceTitle: content,
+                  thought: plan.length > 0 ? formatPlan(plan) : `Write the whole task in one step: ${content}`,
+                  thoughtNumber: 1,
+                  totalThoughts: total + 1,
+                  nextThoughtNeeded: true,
+                  clientRequestId: `${reply.id}:1`
+              })
+            : null;
+        if (stale()) return null;
+        const sequenceId = first?.sequenceId ?? null;
+        reply.sequenceId = sequenceId;
 
         /** @type {any} */
         let last = { finishReason: 'stop' };
         let looped = false;
         /** @type {{ title: string, url: string }[]} */
         const sources = [];
-        for (let index = 0; index < steps.length; index += 1) {
-            const total = steps.length;
+        for (let index = 0; index < total; index += 1) {
             // What the earlier steps wrote, without the plan the prompt repeats.
-            const previous = plan.length > 0 ? reply.content.slice(formatPlan(plan).length) : '';
+            const written = plan.length > 0 ? reply.content.slice(formatPlan(plan).length) : '';
             if (plan.length > 0) append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
 
-            this.setThinking({ mode: 'productive', phase: 'lookup', step: index + 1, total });
+            this.setThinking({ mode: 'thinking', phase: 'lookup', step: index + 1, total });
             const base = `${WEBLLM_SYSTEM_PROMPT}\n\n${stepInstruction(index, total)}`;
             // Each step is looked up on its own: its documentation is not carried to the next.
             const lookup = await this.lookupDocumentation(content, reply, stale, {
@@ -966,15 +1146,23 @@ export class WebLLMController {
             if (stale()) return null;
             if (this.stopRequested) return { finishReason: 'abort' };
 
-            this.setThinking({ mode: 'productive', phase: 'writing', step: index + 1, total });
+            this.setThinking({ mode: 'thinking', phase: 'recall', step: index + 1, total });
+            const recalled =
+                plan.length > 0
+                    ? await this.recallFor({
+                          step: steps[index],
+                          task: content,
+                          conversationId,
+                          sequenceId,
+                          planThoughtId: first?.thought.id ?? null,
+                          written
+                      })
+                    : '';
+            if (stale()) return null;
+
+            this.setThinking({ mode: 'thinking', phase: 'writing', step: index + 1, total });
             const withDocs = buildSystemPrompt(base, lookup);
-            const message = stepMessage({
-                task: content,
-                steps,
-                index,
-                previous,
-                previousTokens: limits.previousWorkTokens
-            });
+            const message = stepMessage({ task: content, steps, index, recalled });
             const start = reply.content.length;
             const { result, system } = await this.generate(
                 engine,
@@ -992,17 +1180,30 @@ export class WebLLMController {
                 }
                 reply.sources = [...sources];
             }
-            if (result?.finishReason === 'abort' || this.stopRequested) return { ...result, finishReason: 'abort' };
+            const stopped = result?.finishReason === 'abort' || this.stopRequested;
             if (result?.finishReason === 'loop') {
                 // Keep this step's first pass and go on with the next one.
                 if (typeof result.keepChars === 'number') {
                     reply.content = reply.content.slice(0, start + result.keepChars).trimEnd();
                 }
                 looped = true;
-                last = { ...result, finishReason: 'stop' };
-                continue;
             }
-            last = result;
+
+            // Thought index+2: this step, as written.
+            const text = reply.content.slice(start).trim();
+            if (sequenceId && text) {
+                await this.think({
+                    sequenceId,
+                    thought: plan.length > 0 ? `${steps[index]}\n\n${text}` : text,
+                    thoughtNumber: index + 2,
+                    totalThoughts: total + 1,
+                    nextThoughtNeeded: !stopped && index < total - 1,
+                    clientRequestId: `${reply.id}:${index + 2}`
+                });
+                if (stale()) return null;
+            }
+            if (stopped) return { ...result, finishReason: 'abort' };
+            last = result?.finishReason === 'loop' ? { ...result, finishReason: 'stop' } : result;
         }
         if (looped) reply.notice = STEP_LOOP_NOTICE;
         return last;
@@ -1136,6 +1337,8 @@ export class WebLLMController {
         const history = this.history;
         const active = this.activeReply;
         this.history = null;
+        this.thoughts?.close();
+        this.thoughts = null;
         this.activeReply = null;
         this.walletAddress = null;
         if (history) void saveInterrupted(history, active).finally(() => history.close());
@@ -1161,6 +1364,16 @@ function saveInterrupted(history, active) {
             continuable: false
         })
         .catch(() => {});
+}
+
+/**
+ * A saved reply's mode; the first names of the two modes are read too.
+ * @returns {import('./webllmThinking.js').ReplyMode|null}
+ */
+function replyModeOf(value) {
+    if (value === 'short' || value === 'informative') return 'short';
+    if (value === 'thinking' || value === 'productive') return 'thinking';
+    return null;
 }
 
 /** A CPU-emulated adapter is told apart from no WebGPU at all: the fix differs. */
@@ -1192,8 +1405,10 @@ function restoreMessage(row) {
         sources: Array.isArray(row.sources) ? row.sources : [],
         docContext: row.docContext || null,
         lookupNote: row.lookupNote || null,
-        mode: row.mode === 'informative' || row.mode === 'productive' ? row.mode : null,
+        mode: replyModeOf(row.mode),
+        autoMode: Boolean(row.autoMode),
         steps: Number.isInteger(row.steps) ? row.steps : 0,
+        sequenceId: row.sequenceId || null,
         createdAt: row.createdAt
     };
 }

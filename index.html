@@ -1383,6 +1383,21 @@
                                 </div>
 
                                 <div class="webllm-setting">
+                                    <label for="webllm-reply-mode">How Llama answers</label>
+                                    <select id="webllm-reply-mode" aria-describedby="webllm-reply-mode-hint">
+                                        <option value="auto">Auto — Llama chooses</option>
+                                        <option value="short">Short — a brief answer</option>
+                                        <option value="thinking">Thinking — plan, then step by step</option>
+                                    </select>
+                                    <p id="webllm-reply-mode-hint" class="webllm-setting-hint">
+                                        Short keeps replies to a few sentences in a small token window. Thinking writes a
+                                        plan and then each step on its own, with a much larger window in total, and keeps
+                                        its thoughts in this browser so later steps build on earlier ones. On Auto, Llama
+                                        picks one for each message.
+                                    </p>
+                                </div>
+
+                                <div class="webllm-setting">
                                     <label class="webllm-toggle" for="webllm-mdn-toggle">
                                         <input id="webllm-mdn-toggle" type="checkbox" aria-describedby="webllm-mdn-hint" />
                                         Look up MDN documentation

@@ -1,140 +1,130 @@
 // @ts-check
 /**
- * Sequential thinking for the local chat: decide what kind of conversation
- * this is, then answer it the way that kind needs.
+ * How a reply is written: short, or thinking in steps.
  *
- *   1. Classify. An informative message asks to be told something ("what is a
- *      closure?", "de ce nu merge flexbox aici?"). A productive one asks for
- *      something to be made ("write a debounce function", "creează un
- *      formular de login cu validare").
- *   2. Informative → one short answer. MDN may still be looked up once for the
- *      facts, but the reply is held to a few sentences and a small snippet.
- *   3. Productive → plan, then steps. The model first lists a few concrete
- *      steps; each step is then written in its own request, with its own MDN
- *      lookup made for that step alone, and with the work of earlier steps
- *      handed forward so the code builds up rather than restarting.
+ * The mode is a chat setting (see WEBLLM_REPLY_MODES): the user picks Short
+ * or Thinking, or leaves it on Auto and Llama picks per message. Nothing here
+ * guesses from keywords. Where Llama decides, it answers in a JSON schema, so
+ * the answer is read with `JSON.parse` rather than parsed out of prose:
  *
- * The classification is deterministic, like the MDN lookup: a 1B model is a
- * poor judge of its own task, and the user should be able to predict what
- * they get. Pure functions; the controller runs the flow.
+ *   Auto      {"mode": "short"|"thinking"}  — a few tokens, before the reply
+ *   Thinking  {"steps": ["…", "…"]}          — the plan
+ *
+ *   Short     one answer in a small token window. MDN may be looked up once.
+ *   Thinking  a sequence of thoughts: the plan is thought 1, each step is the
+ *             next thought, written in its own request with its own MDN
+ *             lookup and the earlier thoughts it needs recalled from the
+ *             thought store (see webllmThoughtStore.js). The token window is
+ *             large in total, but each step stays inside the context window.
+ *
+ * Pure functions; the controller runs the flow.
  */
 
 import { WEBLLM_SYSTEM_PROMPT } from './webllmConfig.js';
 import { estimateTokens } from './webllmProgress.js';
-import { isDevelopmentQuestion } from './mdnLookup.js';
 
-/** @typedef {'informative'|'productive'} ConversationMode */
+/** @typedef {'short'|'thinking'} ReplyMode */
 
-// Word ends are checked with a Unicode lookahead, not `\b`: `\b` only knows
-// ASCII letters, so it never matches after "ă" or "ț".
-
-/** Polite or indirect openers stripped before the first verb is read. */
-const OPENER =
-    /^(?:(?:please|pls|hey|hi|ok(?:ay)?|so|now|also|and|then|can you|could you|would you|will you|i need you to|i want you to|i'd like you to|help me|let's|te rog(?: să| sa)?|poți să|poti sa|poţi să|vreau să|vreau sa|aș vrea să|as vrea sa|ajută-mă să|ajuta-ma sa|acum|și|si|apoi)[\s,:!]+)+/i;
-
-/** Verbs that ask for something to be made or changed. */
-const MAKE_VERB =
-    /^(?:write|create|build|implement|generate|make|code|develop|refactor|convert|port|rewrite|add|fix|debug|scaffold|set up|setup|design|optimi[sz]e|extend|update|modify|translate|scrie(?:-mi|ți|ti)?|creea?ză|creaz[ăa]|construie[șşs]te|implementeaz[ăa]|genereaz[ăa]|f[ăa](?:-mi)?|adaug[ăa]|repar[ăa]|refactorizeaz[ăa]|rescrie|converte[șşs]te|dezvolt[ăa]|modific[ăa]|optimizeaz[ăa]|actualizeaz[ăa])(?![\p{L}\p{N}_])/iu;
-
-const MAKE_ANYWHERE =
-    /\b(?:write|create|build|implement|generate|refactor|rewrite|scaffold|scrie|creea?z[ăa]|construie[șşs]te|implementeaz[ăa]|genereaz[ăa]|refactorizeaz[ăa]|rescrie)(?![\p{L}\p{N}_])/iu;
-
-/** Things that get made. */
-const ARTIFACT =
-    /\b(?:function|component|script|page|form|app|application|class|module|snippet|code|program|api|endpoint|layout|widget|hook|service|worker|plugin|library|website|site|landing|navbar|modal|table|game|test|tests|cli|server|funcți[ea]|functi[ea]|component[ăa]|cod(?:ul)?|pagin[ăa]|formular|aplicați[ea]|aplicati[ea]|clas[ăa]|modul|joc|teste?|tabel)(?![\p{L}\p{N}_])/iu;
-
-/** Signs of a multi-part request. */
-const MULTIPART =
-    /\b(?:with|that|which|including|and then|step by step|full|complete|end-to-end|from scratch|cu|care|inclusiv|complet[ăa]?|pas cu pas|de la zero)(?![\p{L}\p{N}_])/iu;
-
-/** Questions that ask to be told, not given. */
-const ASKS =
-    /^(?:what|why|when|where|which|who|whose|is|are|was|were|does|do|did|should|explain|define|describe|tell me|difference|compare|ce|de ce|când|cand|unde|care|cine|este|e|sunt|explic[ăa]|define[șşs]te|descrie|spune-mi|diferen[țţt]a|compar[ăa])(?![\p{L}\p{N}_])/iu;
-
-/**
- * Informative or productive?
- *
- * Scored, so no single word decides: an imperative "make" verb counts most, a
- * thing to make and signs of a multi-part request add to it, code pasted in
- * adds to it, and a message that opens as a question takes away. "How do I
- * create an array?" stays informative; "Create a login form with validation"
- * does not. Productive means code: "write an essay" is not, however it scores.
- *
- * @param {string} text
- * @returns {ConversationMode}
- */
-export function classifyIntent(text) {
-    const value = `${text || ''}`.trim();
-    if (value.length < 6) return 'informative';
-    const lead = value.replace(OPENER, '');
-    let score = 0;
-    if (MAKE_VERB.test(lead)) score += 2;
-    if (MAKE_ANYWHERE.test(value)) score += 1;
-    if (ARTIFACT.test(value)) score += 1;
-    if (MULTIPART.test(value)) score += 1;
-    if (/```/.test(value)) score += 1;
-    if (ASKS.test(lead) || /^how (?:does|do|is|are|can|would|should)\b/i.test(lead) || /^cum\b/i.test(lead)) score -= 2;
-    const aboutCode = ARTIFACT.test(value) || /```/.test(value) || isDevelopmentQuestion(value);
-    return score >= 3 && aboutCode ? 'productive' : 'informative';
-}
-
-/** Added to the system prompt for an informative answer. */
-export const INFORMATIVE_INSTRUCTION =
-    'Mode: informative. Answer briefly: at most three short sentences or a few bullet points. ' +
+/** Added to the system prompt for a short answer. */
+export const SHORT_INSTRUCTION =
+    'Mode: short. Answer briefly: at most three short sentences or a few bullet points. ' +
     'Include a code snippet only if it is essential, at most six lines, in a fenced block labelled with its language. ' +
     'No introduction and no summary.';
 
-/** The system prompt an informative answer is written under. */
-export const INFORMATIVE_SYSTEM_PROMPT = `${WEBLLM_SYSTEM_PROMPT}\n\n${INFORMATIVE_INSTRUCTION}`;
+/** The system prompt a short answer is written under. */
+export const SHORT_SYSTEM_PROMPT = `${WEBLLM_SYSTEM_PROMPT}\n\n${SHORT_INSTRUCTION}`;
+
+/** Auto: the shape of Llama's decision. */
+export const MODE_SCHEMA = Object.freeze({
+    type: 'object',
+    properties: { mode: { type: 'string', enum: ['short', 'thinking'] } },
+    required: ['mode'],
+    additionalProperties: false
+});
+
+/** Auto: the system prompt for the decision. */
+export const MODE_SYSTEM_PROMPT =
+    'You decide how an assistant should answer the last user message. ' +
+    'Choose "thinking" when the user wants code or something built, fixed, refactored or changed, ' +
+    'work that takes several parts. Choose "short" for questions, explanations, definitions and conversation. ' +
+    'Reply with JSON only.';
+
+/** The plan's shape. */
+export const PLAN_SCHEMA = Object.freeze({
+    type: 'object',
+    properties: { steps: { type: 'array', items: { type: 'string' } } },
+    required: ['steps'],
+    additionalProperties: false
+});
 
 /** @param {number} maxSteps */
 export function planInstruction(maxSteps) {
     return (
         `Mode: planning. Break the user's task into 2 to ${maxSteps} concrete implementation steps, in order. ` +
-        'Reply with only a numbered list, one short line per step (under 15 words). No code and no explanations.'
-    );
-}
-
-/** @param {number} index zero-based @param {number} total */
-export function stepInstruction(index, total) {
-    if (total <= 1) {
-        return (
-            'Mode: productive. Complete the task. Write complete, working code in fenced blocks labelled with the ' +
-            'language (for example ```js). Keep the prose short: one or two sentences around each block.'
-        );
-    }
-    return (
-        `Mode: productive, step ${index + 1} of ${total}. You are writing one step of a larger task. ` +
-        'Do only this step and build on the work already done; do not repeat it. ' +
-        'Write complete, working code in fenced blocks labelled with the language (for example ```js). ' +
-        'Keep the prose to one or two sentences.'
+        'Each step is one short line (under 15 words). No code. Reply with JSON only.'
     );
 }
 
 /**
- * The steps out of the model's numbered list. Anything that is not a list
- * item is ignored; fewer than two steps is no plan.
+ * Read a JSON answer; null when it is not JSON or not an object.
+ * @param {string} text
+ */
+function readJson(text) {
+    try {
+        const value = JSON.parse(`${text || ''}`.trim());
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Auto's decision, or null when the answer is not one.
+ * @param {string} text
+ * @returns {ReplyMode|null}
+ */
+export function parseModeDecision(text) {
+    const mode = readJson(text)?.mode;
+    return mode === 'short' || mode === 'thinking' ? mode : null;
+}
+
+/**
+ * The plan's steps: strings only, trimmed, distinct, at most `maxSteps`.
+ * Fewer than two is no plan.
  *
  * @param {string} text
  * @param {number} maxSteps
  * @returns {string[]}
  */
 export function parsePlan(text, maxSteps) {
+    const raw = readJson(text)?.steps;
+    if (!Array.isArray(raw)) return [];
+    /** @type {string[]} */
     const steps = [];
-    for (const line of `${text || ''}`.split('\n')) {
-        const match = line.match(/^\s*(?:(?:step\s*)?\d{1,2}\s*[.):-]|[-*•])\s+(.+)$/i);
-        if (!match) continue;
-        const step = match[1]
-            .replace(/\*\*|__|`/g, '')
-            .replace(/^step\s*\d+\s*[:.-]\s*/i, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 140);
+    for (const entry of raw) {
+        if (typeof entry !== 'string') continue;
+        const step = entry.split('\n').join(' ').trim().slice(0, 140);
         if (step.length < 3 || steps.some((existing) => existing.toLowerCase() === step.toLowerCase())) continue;
         steps.push(step);
         if (steps.length >= maxSteps) break;
     }
     return steps.length >= 2 ? steps : [];
+}
+
+/** @param {number} index zero-based @param {number} total */
+export function stepInstruction(index, total) {
+    if (total <= 1) {
+        return (
+            'Mode: thinking. Complete the task. Write complete, working code in fenced blocks labelled with the ' +
+            'language (for example ```js). Keep the prose short: one or two sentences around each block.'
+        );
+    }
+    return (
+        `Mode: thinking, step ${index + 1} of ${total}. You are writing one step of a larger task. ` +
+        'Do only this step and build on the earlier thoughts; do not repeat them. ' +
+        'Write complete, working code in fenced blocks labelled with the language (for example ```js). ' +
+        'Keep the prose to one or two sentences.'
+    );
 }
 
 /** The plan as it opens the reply. @param {string[]} steps */
@@ -171,23 +161,38 @@ export function tailTokens(text, maxTokens) {
     if (newline >= 0 && newline - start < 200) start = newline + 1;
     let tail = value.slice(start);
     // An odd number of fences means the tail starts inside a block: reopen it.
-    if ((tail.match(/```/g) || []).length % 2 === 1) tail = `\`\`\`\n${tail}`;
+    if (tail.split('```').length % 2 === 0) tail = `\`\`\`\n${tail}`;
     return `…\n${tail}`;
 }
 
 /**
- * The user message for one step: the task, the plan, what earlier steps
- * wrote (its end, within `previousTokens`), and which step to do now.
+ * Earlier thoughts as one block, within `maxTokens`: in the order they were
+ * thought, each labelled, and each cut to its end if they do not all fit.
  *
- * @param {{ task: string, steps: string[], index: number, previous: string, previousTokens: number }} options
+ * @param {{ label: string, text: string }[]} thoughts
+ * @param {number} maxTokens
  */
-export function stepMessage({ task, steps, index, previous, previousTokens }) {
+export function formatRecall(thoughts, maxTokens) {
+    if (thoughts.length === 0 || maxTokens <= 0) return '';
+    const share = Math.floor(maxTokens / thoughts.length) - 8;
+    return thoughts
+        .map(({ label, text }) => `${label}:\n${tailTokens(text, share)}`)
+        .filter((entry) => !entry.endsWith(':\n'))
+        .join('\n\n');
+}
+
+/**
+ * The user message for one step: the task, the plan, the earlier thoughts
+ * recalled for it, and which step to do now.
+ *
+ * @param {{ task: string, steps: string[], index: number, recalled: string }} options
+ */
+export function stepMessage({ task, steps, index, recalled }) {
     if (steps.length <= 1) return task;
     const plan = steps.map((step, i) => `${i + 1}. ${step}`).join('\n');
-    const done = tailTokens(previous, previousTokens);
     return (
         `Task: ${task}\n\nPlan:\n${plan}\n\n` +
-        (done ? `Work already done in earlier steps:\n"""\n${done.replace(/"{3,}/g, '"')}\n"""\n\n` : '') +
+        (recalled ? `Earlier thoughts:\n"""\n${recalled.split('"""').join('"')}\n"""\n\n` : '') +
         `Now do step ${index + 1} only: ${steps[index]}`
     );
 }

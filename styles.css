@@ -7245,7 +7245,7 @@ select,
     font-size: 1.05em;
 }
 
-/* How the question was taken: informative or productive. */
+/* How the reply was written: short or thinking. */
 .webllm-mode {
     margin-top: 0.35rem;
     color: var(--muted);
@@ -7253,6 +7253,6 @@ select,
     letter-spacing: 0.02em;
 }
 
-.webllm-mode[data-mode='productive'] {
+.webllm-mode[data-mode='thinking'] {
     color: var(--accent-hi);
 }

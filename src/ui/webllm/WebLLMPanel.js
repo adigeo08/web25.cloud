@@ -119,7 +119,7 @@ function updateBubble(item, message, context) {
         renderReply(body, message.content);
     }
 
-    // How the question was taken: a short answer, or a plan written in steps.
+    // How the reply was written: a short answer, or a plan written in steps.
     const mode = message.role === 'assistant' && !message.error ? modeLabel(message) : '';
     const modeEl = slot(item, 'webllm-mode', Boolean(mode));
     if (modeEl) {
@@ -164,9 +164,10 @@ function updateBubble(item, message, context) {
 
 /** @param {import('../../webllm/WebLLMController.js').ChatMessage} message */
 function modeLabel(message) {
-    if (message.mode === 'informative') return 'Informative · short answer';
-    if (message.mode === 'productive') {
-        return message.steps > 1 ? `Productive · ${message.steps} steps` : 'Productive';
+    const chosen = message.autoMode ? ' · chosen by Llama' : '';
+    if (message.mode === 'short') return `Short${chosen}`;
+    if (message.mode === 'thinking') {
+        return `${message.steps > 1 ? `Thinking · ${message.steps} steps` : 'Thinking'}${chosen}`;
     }
     return '';
 }
@@ -179,10 +180,13 @@ export function thinkingLabel(state) {
     const thinking = state.thinking;
     const lookup = state.lookup === 'searching';
     if (!thinking) return lookup ? 'Checking MDN…' : 'Generating…';
-    if (thinking.mode === 'informative') return lookup ? 'Short answer · checking MDN…' : 'Short answer · writing…';
-    if (thinking.phase === 'planning') return 'Planning the steps…';
-    const step = thinking.total > 1 ? `Step ${thinking.step}/${thinking.total}` : 'Writing code';
-    return lookup ? `${step} · checking MDN…` : `${step} · writing…`;
+    if (thinking.mode === 'auto') return 'Choosing how to answer…';
+    if (thinking.mode === 'short') return lookup ? 'Short · checking MDN…' : 'Short · writing…';
+    if (thinking.phase === 'planning') return 'Thinking · planning the steps…';
+    const step = thinking.total > 1 ? `Step ${thinking.step}/${thinking.total}` : 'Thinking';
+    if (lookup) return `${step} · checking MDN…`;
+    if (thinking.phase === 'recall') return `${step} · recalling earlier thoughts…`;
+    return `${step} · writing…`;
 }
 
 /** Only links to MDN docs pages are ever rendered. */
@@ -296,12 +300,14 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     const settings = /** @type {any} */ (byId('webllm-settings'));
     const retention = /** @type {any} */ (byId('webllm-retention'));
     const mdnToggle = /** @type {any} */ (byId('webllm-mdn-toggle'));
+    const replyMode = /** @type {any} */ (byId('webllm-reply-mode'));
     byId('webllm-settings-btn')?.addEventListener('click', () => {
         if (typeof settings?.showModal === 'function') settings.showModal();
         else settings?.setAttribute('open', '');
     });
     retention?.addEventListener('change', () => void controller.setRetention(retention.value));
     mdnToggle?.addEventListener('change', () => void controller.setMdnEnabled(mdnToggle.checked));
+    replyMode?.addEventListener('change', () => void controller.setReplyMode(replyMode.value));
 
     messages?.addEventListener('scroll', () => setHidden(scrollBtn, isNearBottom(messages)));
     scrollBtn?.addEventListener('click', () => {
@@ -496,6 +502,7 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     function renderSettings(state) {
         if (retention) retention.value = state.settings.retention;
         if (mdnToggle) mdnToggle.checked = Boolean(state.settings.mdnEnabled);
+        if (replyMode) replyMode.value = state.settings.replyMode || 'auto';
     }
 
     function renderMessages(state) {
