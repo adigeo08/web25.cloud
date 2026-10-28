@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 
 import { WebLLMController, WEBLLM_INSTALL_LOCK } from '../src/webllm/WebLLMController.js';
 import { WEBLLM_SYSTEM_PROMPT } from '../src/webllm/webllmConfig.js';
+import { INFORMATIVE_SYSTEM_PROMPT } from '../src/webllm/webllmThinking.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -327,7 +328,7 @@ test('replies stream into the assistant bubble as they arrive', async () => {
     // The model is given the developer system prompt and the user's turn.
     const sent = engine.chats[0];
     assert.deepEqual(sent, [
-        { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
+        { role: 'system', content: INFORMATIVE_SYSTEM_PROMPT },
         { role: 'user', content: 'Hi Llama' }
     ]);
 

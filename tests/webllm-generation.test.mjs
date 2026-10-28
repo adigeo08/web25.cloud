@@ -22,8 +22,10 @@ import {
     WEBLLM_MODEL_ID,
     WEBLLM_PROFILES,
     WEBLLM_PROMPT_TOKEN_BUDGET,
-    WEBLLM_SYSTEM_PROMPT
+    WEBLLM_SYSTEM_PROMPT,
+    WEBLLM_THINKING
 } from '../src/webllm/webllmConfig.js';
+import { INFORMATIVE_SYSTEM_PROMPT } from '../src/webllm/webllmThinking.js';
 import {
     CONTINUE_EXHAUSTED_NOTICE,
     LOOP_NOTICE,
@@ -174,11 +176,13 @@ test('a request carries the developer system prompt, the messages and the stream
     const [request] = llm.state.requests;
     assert.deepEqual(request, {
         messages: [
-            { role: 'system', content: WEBLLM_SYSTEM_PROMPT },
+            { role: 'system', content: INFORMATIVE_SYSTEM_PROMPT },
             { role: 'user', content: 'hey' }
         ],
         stream: true,
-        stream_options: { include_usage: true }
+        stream_options: { include_usage: true },
+        // An informative answer is held short.
+        max_tokens: WEBLLM_THINKING.desktop.informativeMaxTokens
     });
 });
 
@@ -211,7 +215,7 @@ test('multi-turn: each request carries the recent exchanges, in order', async ()
     await controller.send('What is a prime number?');
     await controller.send('And what is my name?');
 
-    assert.equal(llm.state.requests.at(-1).messages[0].content, WEBLLM_SYSTEM_PROMPT);
+    assert.equal(llm.state.requests.at(-1).messages[0].content, INFORMATIVE_SYSTEM_PROMPT);
     assert.deepEqual(
         turns(llm.state.requests.at(-1).messages).map((message) => [message.role, message.content]),
         [
@@ -328,7 +332,7 @@ test('New chat during a reply stops it and starts clean', async () => {
     await controller.send('second');
     assert.deepEqual(
         llm.state.requests.at(-1).messages.map((message) => message.content),
-        [WEBLLM_SYSTEM_PROMPT, 'second']
+        [INFORMATIVE_SYSTEM_PROMPT, 'second']
     );
     assert.equal(lastReply(controller).content, 'Fresh start.');
 });
@@ -464,20 +468,21 @@ test('mobile: the engine is initialised with a 2048-token context, sampling unch
     assert.equal(record.model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC', 'same model');
 });
 
-test('mobile: every request carries max_tokens 256, and a reply that reaches it can be continued', async () => {
+test('mobile: an informative request carries the shorter of its own limit and 256, and a reply that reaches it can be continued', async () => {
     const long = filler('w', 5 * 400); // 400 pieces: more than the limit
     const { controller, llm } = await session(() => ({ text: long }), { profile: MOBILE });
     await controller.send('Write a long essay about the ocean');
 
+    const cap = Math.min(256, WEBLLM_THINKING.mobile.informativeMaxTokens);
     const [request] = llm.state.requests;
-    assert.equal(request.max_tokens, 256);
+    assert.equal(request.max_tokens, cap);
     assert.deepEqual(Object.keys(request).sort(), ['max_tokens', 'messages', 'stream', 'stream_options']);
     const reply = lastReply(controller);
     assert.equal(reply.finishReason, 'length');
     assert.equal(reply.continuable, true);
     assert.equal(reply.notice, null);
-    assert.equal(reply.content, long.slice(0, 256 * 5), 'every streamed token is kept, up to the limit');
-    assert.equal(llm.state.emitted, 256);
+    assert.equal(reply.content, long.slice(0, cap * 5), 'every streamed token is kept, up to the limit');
+    assert.equal(llm.state.emitted, cap);
 });
 
 test('mobile: a short reply is untouched by the limit', async () => {
@@ -487,18 +492,18 @@ test('mobile: a short reply is untouched by the limit', async () => {
     assert.equal(lastReply(controller).notice, null);
 });
 
-test('desktop is unchanged: 4096 context at reload, no max_tokens', async () => {
+test('desktop: 4096 context at reload, and only the informative limit on a reply', async () => {
     const { controller, llm } = await session(() => ({ text: 'cut', finish: 'length' }), { profile: DESKTOP });
     await controller.send('hi');
     assert.deepEqual(llm.state.reloads[0].chatOpts, { ...WEBLLM_CHAT_OPTIONS });
-    assert.equal('max_tokens' in llm.state.requests[0], false);
+    assert.equal(llm.state.requests[0].max_tokens, WEBLLM_THINKING.desktop.informativeMaxTokens);
     assert.equal(lastReply(controller).continuable, true);
 
     // No profile given is the desktop one.
     const plain = await session(() => ({ text: 'ok' }));
     await plain.controller.send('hi');
     assert.equal(plain.controller.profile.id, 'desktop');
-    assert.equal('max_tokens' in plain.llm.state.requests[0], false);
+    assert.equal(plain.llm.state.requests[0].max_tokens, WEBLLM_THINKING.desktop.informativeMaxTokens);
 });
 
 test('mobile: a reply cut short of the limit by a full context can still be continued while there is room', async () => {
@@ -760,7 +765,7 @@ test('when MDN is unreachable, Llama answers on its own and does not claim to ha
     assert.equal(reply.finishReason, 'stop');
     assert.deepEqual(reply.sources, []);
     assert.equal(reply.lookupNote, MDN_UNAVAILABLE_NOTE);
-    assert.equal(llm.state.requests[0].messages[0].content, WEBLLM_SYSTEM_PROMPT, 'no documentation is claimed');
+    assert.equal(llm.state.requests[0].messages[0].content, INFORMATIVE_SYSTEM_PROMPT, 'no documentation is claimed');
 });
 
 test('on a phone the documentation fits the 1664-token budget with the question and the 256-token reply', async () => {
@@ -775,7 +780,7 @@ test('on a phone the documentation fits the 1664-token budget with the question 
     const tokens = messages.reduce((sum, message) => sum + estimateTokens(message.content) + 5, 24);
     assert.ok(tokens <= MOBILE.promptTokenBudget, `${tokens} > ${MOBILE.promptTokenBudget}`);
     assert.match(messages[0].content, /MDN documentation retrieved/);
-    assert.equal(llm.state.requests[0].max_tokens, 256);
+    assert.equal(llm.state.requests[0].max_tokens, Math.min(256, WEBLLM_THINKING.mobile.informativeMaxTokens));
 });
 
 test('Stop during the MDN lookup ends the turn without generating', async () => {
@@ -808,4 +813,89 @@ test('Continue keeps the documentation the reply was written from', async () => 
     await controller.continueReply(lastReply(controller).id);
     assert.match(llm.state.completions[0].prompt, /lets you read and write the system clipboard/);
     assert.equal(mdn.calls.length, 2, 'no second lookup for a continuation');
+});
+
+// ── sequential thinking: informative or productive ──────────────────────────
+
+test('a productive request is planned, then each step is written with its own MDN lookup', async () => {
+    const mdn = fakeMdn();
+    const { controller, llm } = await session(
+        (messages, call) =>
+            // Calls count from 1: the plan, then one per step.
+            call === 1
+                ? { text: 'Plan:\n1. Build the HTML form\n2. Copy the result with the Clipboard API' }
+                : { text: `\`\`\`js\nstep${call - 1}();\n\`\`\`` },
+        { mdnClient: mdn }
+    );
+    await controller.send('Create a form that copies its value with navigator.clipboard');
+
+    const reply = lastReply(controller);
+    assert.equal(reply.mode, 'productive');
+    assert.equal(reply.steps, 2);
+    assert.equal(reply.finishReason, 'stop');
+    assert.equal(
+        reply.content,
+        '**Plan**\n1. Build the HTML form\n2. Copy the result with the Clipboard API' +
+            '\n\n### Step 1/2: Build the HTML form\n\n```js\nstep1();\n```' +
+            '\n\n### Step 2/2: Copy the result with the Clipboard API\n\n```js\nstep2();\n```'
+    );
+
+    // Plan, step 1, step 2 — each a request of its own.
+    assert.equal(llm.state.requests.length, 3);
+    const [plan, first, second] = llm.state.requests;
+    assert.match(plan.messages[0].content, /Mode: planning/);
+    assert.equal(plan.max_tokens, WEBLLM_THINKING.desktop.planMaxTokens);
+    assert.equal(first.max_tokens, WEBLLM_THINKING.desktop.stepMaxTokens);
+    assert.match(first.messages[0].content, /step 1 of 2/);
+    assert.match(first.messages.at(-1).content, /Now do step 1 only: Build the HTML form/);
+    // The second step is shown what the first one wrote.
+    assert.match(second.messages.at(-1).content, /Work already done in earlier steps:[\s\S]*step1\(\);/);
+
+    // The lookups are per step: searched with each step's own words, not the whole question.
+    const searches = mdn.calls.filter(([name]) => name === 'search').map(([, query]) => query);
+    assert.equal(searches.length, 2);
+    assert.match(searches[0], /Build|HTML|form/);
+    assert.match(searches[1], /Clipboard/);
+    assert.deepEqual(reply.sources, [
+        { title: 'Clipboard API', url: 'https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API' }
+    ]);
+    assert.equal(reply.docContext, null, 'a step’s documentation is not carried past it');
+});
+
+test('without a usable plan, a productive request is written in one go', async () => {
+    const { controller, llm } = await session((messages, call) => ({
+        text: call === 1 ? 'Sure, I can do that.' : 'function debounce() {}'
+    }));
+    await controller.send('Write a debounce function in JavaScript');
+    const reply = lastReply(controller);
+    assert.equal(reply.mode, 'productive');
+    assert.equal(reply.steps, 0);
+    assert.equal(reply.content, 'function debounce() {}');
+    assert.equal(llm.state.requests.length, 2);
+    assert.equal(llm.state.requests[1].messages.at(-1).content, 'Write a debounce function in JavaScript');
+    assert.match(llm.state.requests[1].messages[0].content, /Mode: productive\. Complete the task/);
+});
+
+test('Stop during a productive reply ends it before the next step', async () => {
+    let controllerRef = null;
+    const { controller, llm } = await session((messages, call) => {
+        // Stop is pressed as the first step starts.
+        if (call === 2) controllerRef.stop();
+        return { text: call === 1 ? '1. First part\n2. Second part' : 'partial' };
+    });
+    controllerRef = controller;
+    await controller.send('Build a todo app component with filters');
+    const reply = lastReply(controller);
+    assert.equal(reply.stopped, true);
+    assert.equal(reply.finishReason, 'abort');
+    assert.equal(llm.state.requests.length, 2, 'the second step was never asked for');
+});
+
+test('an informative question gets one short request', async () => {
+    const { controller, llm } = await session(() => ({ text: 'A closure keeps its scope.' }));
+    await controller.send('What is a closure in JavaScript?');
+    assert.equal(lastReply(controller).mode, 'informative');
+    assert.equal(llm.state.requests.length, 1);
+    assert.equal(llm.state.requests[0].max_tokens, WEBLLM_THINKING.desktop.informativeMaxTokens);
+    assert.match(llm.state.requests[0].messages[0].content, /Mode: informative/);
 });

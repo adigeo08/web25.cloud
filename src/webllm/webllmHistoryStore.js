@@ -100,6 +100,8 @@ function storedMessage(conversationId, seq, message, now) {
         sources: Array.isArray(message.sources) ? message.sources.map(({ title, url }) => ({ title, url })) : [],
         docContext: message.docContext || null,
         lookupNote: message.lookupNote || null,
+        mode: message.mode === 'informative' || message.mode === 'productive' ? message.mode : null,
+        steps: Number.isInteger(message.steps) ? message.steps : 0,
         createdAt: message.createdAt || now
     };
 }
@@ -141,16 +143,19 @@ export class WebLLMHistoryStore {
         const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
         return {
             retention: isRetention(values.retention) ? values.retention : WEBLLM_DEFAULT_RETENTION,
-            mdnEnabled: values.mdnEnabled !== false
+            mdnEnabled: values.mdnEnabled !== false,
+            // Where the engine runs on this device, once the worker has said.
+            engine: values.engine === 'worker' || values.engine === 'page' ? values.engine : null
         };
     }
 
     /**
-     * @param {'retention'|'mdnEnabled'} key
+     * @param {'retention'|'mdnEnabled'|'engine'} key
      * @param {any} value
      */
     async setSetting(key, value) {
         if (key === 'retention' && !isRetention(value)) throw new Error(`Unknown retention: ${value}`);
+        if (key === 'engine' && value !== 'worker' && value !== 'page') throw new Error(`Unknown engine: ${value}`);
         if (key === 'mdnEnabled') value = Boolean(value);
         await this.run(['meta'], 'readwrite', (tx) => promisify(tx.objectStore('meta').put({ key, value })));
         if (key === 'retention') await this.purgeExpired();

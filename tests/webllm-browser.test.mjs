@@ -381,11 +381,19 @@ for (const [name, viewport] of [
             );
 
             const bubbles = await page.$$eval('#webllm-messages .webllm-message', (items) =>
-                items.map((item) => ({ own: item.classList.contains('is-own'), text: item.textContent }))
+                items.map((item) => ({
+                    own: item.classList.contains('is-own'),
+                    text: item.querySelector('.channels-message-body').textContent,
+                    mode: item.querySelector('.webllm-mode')?.textContent ?? null
+                }))
             );
             assert.deepEqual(bubbles, [
-                { own: true, text: 'Hi there' },
-                { own: false, text: 'Hello <img src=x onerror="window.__pwned=1"> from Llama.' }
+                { own: true, text: 'Hi there', mode: null },
+                {
+                    own: false,
+                    text: 'Hello <img src=x onerror="window.__pwned=1"> from Llama.',
+                    mode: 'Informative · short answer'
+                }
             ]);
             assert.equal(await page.$('#webllm-messages img'), null, 'model output is never markup');
             assert.equal(await page.evaluate(() => window.__pwned), undefined);
@@ -828,6 +836,66 @@ test('on a phone the conversation list is a drawer, and nothing overflows', { sk
     }
 });
 
+test('code in a reply is drawn as a code block with a Copy button, never as markup', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: DESKTOP });
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, [
+            'Use **`debounce`**:\n\n```js\nconst',
+            ' run = debounce(() => {}, 200);\n',
+            '// <script>window.__pwned = 1</script>\n```\nDone.'
+        ]);
+        await ask(page, 'What is debounce?');
+        const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
+            lang: item.querySelector('.webllm-code-lang')?.textContent,
+            code: item.querySelector('.webllm-code pre code')?.textContent,
+            codeClass: item.querySelector('.webllm-code pre code')?.className,
+            inline: item.querySelector('strong .webllm-inline-code')?.textContent,
+            copy: item.querySelector('[data-copy-code]')?.textContent,
+            fences: item.querySelector('.channels-message-body').textContent.includes('```'),
+            scripts: item.querySelectorAll('script').length
+        }));
+        assert.deepEqual(reply, {
+            lang: 'js',
+            code: 'const run = debounce(() => {}, 200);\n// <script>window.__pwned = 1</script>',
+            codeClass: 'language-js',
+            inline: 'debounce',
+            copy: 'Copy',
+            fences: false,
+            scripts: 0
+        });
+        assert.equal(await page.evaluate(() => window.__pwned), undefined);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test('a productive request is planned, then written step by step under headings', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: DESKTOP });
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, ['1. Write the HTML form\n2. Add the validation script']);
+        await ask(page, 'Create a login form with validation');
+        const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
+            headings: [...item.querySelectorAll('.webllm-md-heading')].map((el) => el.textContent),
+            mode: item.querySelector('.webllm-mode')?.textContent
+        }));
+        assert.deepEqual(reply, {
+            headings: ['Step 1/2: Write the HTML form', 'Step 2/2: Add the validation script'],
+            mode: 'Productive · 2 steps'
+        });
+        // One request for the plan, then one per step, each naming its step.
+        const sent = await page.evaluate(() => window.__sent.map((entry) => entry.messages.at(-1).content));
+        assert.equal(sent.length, 3);
+        assert.match(sent[1], /Now do step 1 only: Write the HTML form/);
+        assert.match(sent[2], /Now do step 2 only: Add the validation script/);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
 test('the settings dialog keeps the retention period and the MDN switch', { skip: SKIP }, async () => {
     const { page, context, problems } = await openApp();
     try {
@@ -865,7 +933,8 @@ test('the settings dialog keeps the retention period and the MDN switch', { skip
             store.close();
             return settings;
         });
-        assert.deepEqual(saved, { retention: '30d', mdnEnabled: false });
+        // So is where the engine ran: the scripted engine is a worker.
+        assert.deepEqual(saved, { retention: '30d', mdnEnabled: false, engine: 'worker' });
         assert.deepEqual(problems, []);
     } finally {
         await context.close();

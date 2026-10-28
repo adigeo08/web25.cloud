@@ -278,3 +278,33 @@ export const MDN_ORIGIN = 'https://developer.mozilla.org';
  * fit each profile's prompt budget.
  */
 export const MDN_CONTEXT_TOKENS = Object.freeze({ desktop: 900, mobile: 420 });
+
+/**
+ * Sequential thinking (see webllmThinking.js), per memory profile.
+ *
+ *   informativeMaxTokens  the reply limit for an informative answer: short on
+ *                         purpose; Continue is offered if it is cut
+ *   planMaxTokens         the numbered plan a productive answer starts with
+ *   stepMaxTokens         each step of a productive answer
+ *   maxSteps              the most steps a plan may have
+ *   previousWorkTokens    how much of the earlier steps' text a step is shown
+ *   stepDocShare          the part of the profile's MDN budget one step's lookup may use
+ */
+export const WEBLLM_THINKING = Object.freeze({
+    desktop: Object.freeze({
+        informativeMaxTokens: 360,
+        planMaxTokens: 160,
+        stepMaxTokens: 900,
+        maxSteps: 4,
+        previousWorkTokens: 900,
+        stepDocShare: 0.6
+    }),
+    mobile: Object.freeze({
+        informativeMaxTokens: 200,
+        planMaxTokens: 120,
+        stepMaxTokens: 256,
+        maxSteps: 3,
+        previousWorkTokens: 300,
+        stepDocShare: 0.6
+    })
+});

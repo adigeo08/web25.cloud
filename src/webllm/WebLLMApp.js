@@ -23,7 +23,8 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
     const controller = new WebLLMController({
         detectWebGPU: () => detectWebGPU(),
         swClient: createWebLLMServiceWorkerClient({ log }),
-        createEngine: () => createEngineClient(),
+        // In the worker where it has the GPU, on the page where it does not; remembered.
+        createEngine: (options) => createEngineClient(options),
         storage: nav.storage || null,
         locks: nav.locks || null,
         onChange: (state, change) => render(state, change),

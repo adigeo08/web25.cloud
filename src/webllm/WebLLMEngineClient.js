@@ -6,6 +6,13 @@
  * WebGPU to workers. Where it does not, the very same engine host runs on the
  * page behind the same messages: slower to keep the page responsive, but the
  * chat still works. The controller only ever sees this client.
+ *
+ * Which of the two is used is decided once and remembered by the controller
+ * (with the chat's settings): a worker that reported no real GPU (none at all,
+ * or only CPU emulation) is not tried again on the next load, so the engine
+ * does not alternate between a worker that got the CPU and a page that got
+ * the GPU. Only a worker that answered — never one that was merely slow —
+ * decides that.
  */
 
 import { createEngineHost } from './webllmEngineHost.js';
@@ -21,14 +28,18 @@ const WORKER_HELLO_TIMEOUT_MS = 10000;
  */
 
 /**
- * Start the dedicated worker and wait for it to say whether it can see WebGPU.
- * Resolves null when there is no worker to be had.
+ * Start the dedicated worker and wait for it to say whether it has a real GPU.
+ * Resolves null when there is no worker to be had; `onNoGpu` is called when
+ * the worker answered and said so (as opposed to not answering in time).
  *
  * @param {() => Worker} [factory]
+ * @param {{ onNoGpu?: () => void }} [options]
  * @returns {Promise<EngineTransport|null>}
  */
 export function createWorkerTransport(
-    factory = () => new Worker(new URL('./webllm-worker.js', import.meta.url), { type: 'module', name: 'web25-webllm' })
+    factory = () =>
+        new Worker(new URL('./webllm-worker.js', import.meta.url), { type: 'module', name: 'web25-webllm' }),
+    { onNoGpu = () => {} } = {}
 ) {
     /** @type {Worker} */
     let worker;
@@ -59,9 +70,12 @@ export function createWorkerTransport(
             const message = event.data;
             if (!settled) {
                 if (message?.type !== 'hello') return;
-                // A worker without WebGPU is no use for inference; the page
-                // may still have it, and the caller falls back to that.
-                if (!message.webgpu) return settle(null);
+                // A worker without a real GPU is no use for inference; the page
+                // may still have one, and the caller falls back to that.
+                if (!message.webgpu || message.adapter === false || message.fallbackAdapter) {
+                    onNoGpu();
+                    return settle(null);
+                }
                 return settle({
                     kind: 'worker',
                     post: (outbound) => worker.postMessage(outbound),
@@ -131,6 +145,8 @@ export class WebLLMEngineClient {
         /** @type {((report: any) => void)|null} */
         this.onProgress = null;
         this.disposed = false;
+        /** Set by `createEngineClient` when the worker answered without a real GPU. */
+        this.workerHasNoGpu = false;
 
         transport.onMessage((message) => this.receive(message));
         transport.onCrash((error) => this.rejectAll(error));
@@ -189,9 +205,10 @@ export class WebLLMEngineClient {
     /**
      * @param {{ role: string, content: string }[]} messages
      * @param {(text: string) => void} onDelta
+     * @param {{ maxTokens?: number|null }} [options] a shorter reply limit for this request
      */
-    chat(messages, onDelta) {
-        return this.request('chat', { messages }, onDelta);
+    chat(messages, onDelta, { maxTokens = null } = {}) {
+        return this.request('chat', maxTokens ? { messages, maxTokens } : { messages }, onDelta);
     }
 
     /**
@@ -199,9 +216,10 @@ export class WebLLMEngineClient {
      * @param {{ role: string, content: string }[]} messages system first, ending on the question
      * @param {string} partial the reply so far
      * @param {(text: string) => void} onDelta
+     * @param {{ maxTokens?: number|null }} [options]
      */
-    continue(messages, partial, onDelta) {
-        return this.request('continue', { messages, partial }, onDelta);
+    continue(messages, partial, onDelta, { maxTokens = null } = {}) {
+        return this.request('continue', maxTokens ? { messages, partial, maxTokens } : { messages, partial }, onDelta);
     }
 
     interrupt() {
@@ -223,13 +241,30 @@ export class WebLLMEngineClient {
 }
 
 /**
- * A client on the dedicated worker where possible, on the page otherwise.
- * @param {{ workerTransport?: () => Promise<EngineTransport|null>, pageTransport?: () => EngineTransport }} [factories]
+ * A client on the dedicated worker where possible, on the page otherwise —
+ * and on the page straight away where the worker already said it has no GPU.
+ * The client's `workerHasNoGpu` says whether that was found out just now, so
+ * the caller can remember it.
+ *
+ * @param {{ workerTransport?: (options: { onNoGpu: () => void }) => Promise<EngineTransport|null>,
+ *           pageTransport?: () => EngineTransport,
+ *           preferred?: 'worker'|'page'|null }} [factories]
  */
 export async function createEngineClient({
-    workerTransport = () => createWorkerTransport(),
-    pageTransport = () => createPageTransport()
+    workerTransport = (options) => createWorkerTransport(undefined, options),
+    pageTransport = () => createPageTransport(),
+    preferred = null
 } = {}) {
-    const transport = (await workerTransport()) || pageTransport();
-    return new WebLLMEngineClient(transport);
+    let transport = null;
+    let workerHasNoGpu = false;
+    if (preferred !== 'page') {
+        transport = await workerTransport({
+            onNoGpu: () => {
+                workerHasNoGpu = true;
+            }
+        });
+    }
+    const client = new WebLLMEngineClient(transport || pageTransport());
+    client.workerHasNoGpu = workerHasNoGpu;
+    return client;
 }

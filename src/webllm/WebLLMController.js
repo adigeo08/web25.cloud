@@ -21,6 +21,10 @@
  * up on MDN (see mdnLookup.js), and a reply cut at the length limit can be
  * continued in place.
  *
+ * Every message is first classified (see webllmThinking.js). An informative
+ * one gets a single short answer. A productive one is planned, then written
+ * step by step, each step with its own MDN lookup.
+ *
  * DOM-free: the panel renders `state`, the tests drive it with doubles.
  */
 
@@ -30,7 +34,8 @@ import {
     WEBLLM_MESSAGE_FRAMING_TOKENS,
     WEBLLM_MODEL_DOWNLOAD_BYTES,
     WEBLLM_PROFILES,
-    WEBLLM_SYSTEM_PROMPT
+    WEBLLM_SYSTEM_PROMPT,
+    WEBLLM_THINKING
 } from './webllmConfig.js';
 import {
     CONTINUE_EXHAUSTED_NOTICE,
@@ -44,6 +49,20 @@ import {
     trimHistory
 } from './webllmProgress.js';
 import { buildSystemPrompt, isDevelopmentQuestion, lookupMdn } from './mdnLookup.js';
+import {
+    INFORMATIVE_SYSTEM_PROMPT,
+    classifyIntent,
+    formatPlan,
+    parsePlan,
+    planInstruction,
+    stepHeading,
+    stepInstruction,
+    stepMessage
+} from './webllmThinking.js';
+
+/** Said under a productive reply when one of its steps was cut for repeating itself. */
+export const STEP_LOOP_NOTICE =
+    'A step started repeating itself and was cut short; the remaining steps were still written.';
 
 /** One download per browser, however many WEB25 tabs are open. */
 export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
@@ -59,11 +78,14 @@ export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
  * @typedef {{ id: string, role: 'user'|'assistant', content: string, pending: boolean, error: string|null,
  *             stopped: boolean, finishReason: FinishReason|null, notice: string|null,
  *             continuable?: boolean, sources?: { title: string, url: string }[], docContext?: string|null,
- *             lookupNote?: string|null, createdAt?: number }} ChatMessage
+ *             lookupNote?: string|null, createdAt?: number,
+ *             mode?: import('./webllmThinking.js').ConversationMode|null, steps?: number }} ChatMessage
  *   continuable  a reply cut at the length limit that Continue can extend
  *   sources      MDN pages the reply was given (shown as links)
  *   docContext   the documentation excerpt it was given, kept so Continue sees it too
  *   lookupNote   why no documentation was used, when a lookup was tried and failed
+ *   mode         how the question was classified: an informative or a productive reply
+ *   steps        how many planned steps a productive reply was written in (0: no plan)
  */
 
 let idCounter = 0;
@@ -88,6 +110,8 @@ function createMessage(role, content) {
         sources: [],
         docContext: null,
         lookupNote: null,
+        mode: null,
+        steps: 0,
         createdAt: Date.now()
     };
 }
@@ -118,9 +142,15 @@ function initialState() {
         activeConversationId: null,
         /** 'off' without a wallet to save under, 'loading', 'ready', or 'unavailable' when IndexedDB failed */
         history: 'off',
-        settings: { retention: WEBLLM_DEFAULT_RETENTION, mdnEnabled: true },
+        settings: { retention: WEBLLM_DEFAULT_RETENTION, mdnEnabled: true, engine: null },
         /** @type {'searching'|null} an MDN lookup in progress */
-        lookup: null
+        lookup: null,
+        /**
+         * Where the reply being written is in its sequence, for the status line.
+         * @type {{ mode: import('./webllmThinking.js').ConversationMode,
+         *          phase: 'planning'|'lookup'|'writing', step: number, total: number }|null}
+         */
+        thinking: null
     };
 }
 
@@ -128,7 +158,7 @@ export class WebLLMController {
     /**
      * @param {{ detectWebGPU: () => Promise<import('./webgpuSupport.js').WebGPUSupport>,
      *           swClient: { status: () => Promise<any>, prepareLibrary: () => Promise<any>, clearModel: () => Promise<any> },
-     *           createEngine: () => Promise<any>,
+     *           createEngine: (options?: { preferred: 'worker'|'page'|null }) => Promise<any>,
      *           storage?: { estimate?: () => Promise<{ usage?: number, quota?: number }>, persist?: () => Promise<boolean> } | null,
      *           locks?: { request: Function } | null,
      *           onChange?: (state: any, change: { type: string, messageId?: number }) => void,
@@ -163,6 +193,10 @@ export class WebLLMController {
         this.lookupAbort = null;
         /** Memory profile: context window, reply limit and prompt budget. Fixed for the page's lifetime. */
         this.profile = profile;
+        /** Reply limits and step counts for the profile's sequential thinking. */
+        this.thinking = WEBLLM_THINKING[profile.id] || WEBLLM_THINKING.desktop;
+        /** Set by Stop; a productive reply checks it between its steps. */
+        this.stopRequested = false;
         this.detectWebGPU = detectWebGPU;
         this.swClient = swClient;
         this.createEngine = createEngine;
@@ -324,6 +358,20 @@ export class WebLLMController {
         await this.refreshConversations();
     }
 
+    /**
+     * Keep where the engine runs, so the next load goes straight there. Only a
+     * worker that answered without a GPU makes it the page for good.
+     * @param {any} engine
+     */
+    rememberEngine(engine) {
+        const kind = engine?.workerHasNoGpu ? 'page' : engine?.kind === 'worker' ? 'worker' : null;
+        if (!kind || kind === this.state.settings.engine) return;
+        this.update({ settings: { ...this.state.settings, engine: kind } });
+        void this.history?.setSetting('engine', kind).catch((error) => {
+            this.log(`WebLLM engine choice could not be saved: ${error?.message || error}`);
+        });
+    }
+
     /** @param {boolean} enabled */
     async setMdnEnabled(enabled) {
         this.update({ settings: { ...this.state.settings, mdnEnabled: Boolean(enabled) } });
@@ -390,7 +438,7 @@ export class WebLLMController {
                 this.update({
                     status: 'unsupported',
                     gpu,
-                    error: { ...classifyError({ name: 'WebGPUNotAvailableError', message: gpu.reason || '' }) }
+                    error: { ...classifyError({ name: gpuErrorName(gpu), message: gpu.reason || '' }) }
                 });
                 return;
             }
@@ -468,7 +516,7 @@ export class WebLLMController {
                 this.update({
                     status: 'unsupported',
                     gpu,
-                    error: classifyError({ name: 'WebGPUNotAvailableError', message: gpu.reason || '' })
+                    error: classifyError({ name: gpuErrorName(gpu), message: gpu.reason || '' })
                 });
                 return;
             }
@@ -492,13 +540,16 @@ export class WebLLMController {
                 }
                 if (stale()) return;
 
-                const engine = await this.createEngine();
+                // Where the engine ran before decides where it runs now: the
+                // worker is not retried once it said it only had the CPU.
+                const engine = await this.createEngine({ preferred: this.state.settings.engine ?? null });
                 if (stale()) {
                     engine.dispose();
                     return;
                 }
                 this.engine = engine;
                 this.update({ engineKind: engine.kind || null });
+                this.rememberEngine(engine);
 
                 await engine.load((report) => {
                     if (stale()) return;
@@ -625,9 +676,18 @@ export class WebLLMController {
      * @param {(delta: string) => void} onDelta
      * @param {() => boolean} stale
      * @param {string[]} systems system prompts to try, richest first
+     * @param {{ maxTokens?: number|null }} [options] a shorter reply limit for this request
      * @returns {Promise<{ result: any, system: string }>}
      */
-    async generate(engine, prior, content, onDelta, stale, systems = [WEBLLM_SYSTEM_PROMPT]) {
+    async generate(
+        engine,
+        prior,
+        content,
+        onDelta,
+        stale,
+        systems = [WEBLLM_SYSTEM_PROMPT],
+        { maxTokens = null } = {}
+    ) {
         let sent = null;
         let lastError = null;
         const full = this.profile.promptTokenBudget;
@@ -640,7 +700,10 @@ export class WebLLMController {
             if (sent && plan.messages.length === sent.length) break;
             sent = plan.messages;
             try {
-                return { result: await engine.chat(sent, onDelta), system };
+                const result = maxTokens
+                    ? await engine.chat(sent, onDelta, { maxTokens })
+                    : await engine.chat(sent, onDelta);
+                return { result, system };
             } catch (error) {
                 if (stale() || classifyError(error).kind !== 'context') throw error;
                 lastError = error;
@@ -688,28 +751,41 @@ export class WebLLMController {
      * Look the question up on MDN, if it is a development question and lookups
      * are on. Never throws: no documentation is a normal outcome.
      *
+     * A productive reply looks each step up on its own: `query` is then the
+     * step, `context` the task it belongs to (which decides whether it is a
+     * development question at all), and `share` the part of the budget one
+     * step's documentation may take, since the step's prompt carries more.
+     *
      * @param {string} content
      * @param {ChatMessage} reply
      * @param {() => boolean} stale
+     * @param {{ query?: string, system?: string, share?: number }} [options]
      * @returns {Promise<import('./mdnLookup.js').MdnLookup|null>}
      */
-    async lookupDocumentation(content, reply, stale) {
-        if (!this.mdnClient || !this.state.settings.mdnEnabled || !isDevelopmentQuestion(content)) return null;
+    async lookupDocumentation(
+        content,
+        reply,
+        stale,
+        { query = content, system = WEBLLM_SYSTEM_PROMPT, share = 1 } = {}
+    ) {
+        if (!this.mdnClient || !this.state.settings.mdnEnabled) return null;
+        if (!isDevelopmentQuestion(query) && !isDevelopmentQuestion(content)) return null;
         // Leave the documentation no more than the budget can spare after the
         // system prompt and the question itself.
         const room =
             this.profile.promptTokenBudget -
-            estimateTokens(WEBLLM_SYSTEM_PROMPT) -
+            estimateTokens(system) -
             estimateTokens(content) -
             4 * WEBLLM_MESSAGE_FRAMING_TOKENS -
             96;
-        const maxTokens = Math.min(MDN_CONTEXT_TOKENS[this.profile.id] ?? MDN_CONTEXT_TOKENS.desktop, room);
+        const cap = MDN_CONTEXT_TOKENS[this.profile.id] ?? MDN_CONTEXT_TOKENS.desktop;
+        const maxTokens = Math.min(Math.floor(cap * share), room);
         if (maxTokens < 80) return null;
 
         this.lookupAbort = new AbortController();
         this.update({ lookup: 'searching' });
         try {
-            return await lookupMdn(this.mdnClient, content, { maxTokens, signal: this.lookupAbort.signal });
+            return await lookupMdn(this.mdnClient, query, { maxTokens, signal: this.lookupAbort.signal });
         } catch (error) {
             if (!stale() && error?.kind !== 'aborted') {
                 reply.lookupNote = MDN_UNAVAILABLE_NOTE;
@@ -730,6 +806,7 @@ export class WebLLMController {
         const engine = this.engine;
         const stale = () => epoch !== this.epoch;
 
+        this.stopRequested = false;
         const user = createMessage('user', content);
         user.pending = false;
         const reply = createMessage('assistant', '');
@@ -742,32 +819,14 @@ export class WebLLMController {
         this.activeReply = { conversationId, reply };
 
         try {
-            const lookup = await this.lookupDocumentation(content, reply, stale);
-            if (stale()) return false;
-            if (reply.stopped) {
-                // Stop during the lookup: nothing was generated.
-                this.finishReply(reply, { finishReason: 'abort' });
-                return true;
-            }
-            const withDocs = buildSystemPrompt(WEBLLM_SYSTEM_PROMPT, lookup);
-            const { result, system } = await this.generate(
-                engine,
-                prior,
-                content,
-                (delta) => {
-                    if (stale()) return;
-                    reply.content += delta;
-                    this.onChange(this.state, { type: 'delta', messageId: reply.id });
-                },
-                stale,
-                lookup ? [withDocs, WEBLLM_SYSTEM_PROMPT] : [WEBLLM_SYSTEM_PROMPT]
-            );
-            if (stale()) return false;
-            // Documentation is credited only if it was actually in the prompt.
-            if (lookup && system === withDocs) {
-                reply.sources = lookup.sources;
-                reply.docContext = lookup.context;
-            }
+            // Step 1 of the sequence: what kind of conversation is this?
+            const mode = classifyIntent(content);
+            reply.mode = mode;
+            const result =
+                mode === 'productive'
+                    ? await this.writeProductive(engine, prior, content, reply, stale)
+                    : await this.writeInformative(engine, prior, content, reply, stale);
+            if (stale() || !result) return false;
             this.finishReply(reply, result);
         } catch (error) {
             if (stale()) return false;
@@ -786,10 +845,167 @@ export class WebLLMController {
                 this.activeReply = null;
                 void this.persist(conversationId, reply);
                 if (conversationId) this.touchConversation(conversationId);
-                this.update({ generating: false }, { type: 'messages' });
+                this.update({ generating: false, thinking: null }, { type: 'messages' });
             }
         }
         return true;
+    }
+
+    /** @param {ReturnType<typeof initialState>['thinking']} thinking */
+    setThinking(thinking) {
+        this.update({ thinking });
+    }
+
+    /**
+     * Append text to the reply being written and redraw it.
+     * @param {ChatMessage} reply
+     * @param {() => boolean} stale
+     */
+    appender(reply, stale) {
+        return (/** @type {string} */ delta) => {
+            if (stale()) return;
+            reply.content += delta;
+            this.onChange(this.state, { type: 'delta', messageId: reply.id });
+        };
+    }
+
+    /**
+     * An informative answer: one lookup for the facts, one short reply.
+     *
+     * @param {any} engine
+     * @param {ChatMessage[]} prior
+     * @param {string} content
+     * @param {ChatMessage} reply
+     * @param {() => boolean} stale
+     * @returns {Promise<any>} how the reply ended; null once stale
+     */
+    async writeInformative(engine, prior, content, reply, stale) {
+        this.setThinking({ mode: 'informative', phase: 'lookup', step: 0, total: 0 });
+        const base = INFORMATIVE_SYSTEM_PROMPT;
+        const lookup = await this.lookupDocumentation(content, reply, stale, { system: base });
+        if (stale()) return null;
+        // Stop during the lookup: nothing was generated.
+        if (reply.stopped || this.stopRequested) return { finishReason: 'abort' };
+        this.setThinking({ mode: 'informative', phase: 'writing', step: 0, total: 0 });
+        const withDocs = buildSystemPrompt(base, lookup);
+        const { result, system } = await this.generate(
+            engine,
+            prior,
+            content,
+            this.appender(reply, stale),
+            stale,
+            lookup ? [withDocs, base] : [base],
+            { maxTokens: this.thinking.informativeMaxTokens }
+        );
+        if (stale()) return null;
+        // Documentation is credited only if it was actually in the prompt.
+        if (lookup && system === withDocs) {
+            reply.sources = lookup.sources;
+            reply.docContext = lookup.context;
+        }
+        return result;
+    }
+
+    /**
+     * A productive answer, in sequence: a plan first, then each step in its
+     * own request with its own MDN lookup, building on the steps before it.
+     * Without a usable plan the task is written in one go, still in
+     * productive mode.
+     *
+     * @param {any} engine
+     * @param {ChatMessage[]} prior
+     * @param {string} content
+     * @param {ChatMessage} reply
+     * @param {() => boolean} stale
+     * @returns {Promise<any>} how the last step ended; null once stale
+     */
+    async writeProductive(engine, prior, content, reply, stale) {
+        const limits = this.thinking;
+        this.setThinking({ mode: 'productive', phase: 'planning', step: 0, total: 0 });
+        let planText = '';
+        const planSystem = `${WEBLLM_SYSTEM_PROMPT}\n\n${planInstruction(limits.maxSteps)}`;
+        const planned = await this.generate(
+            engine,
+            prior,
+            content,
+            (delta) => {
+                planText += delta;
+            },
+            stale,
+            [planSystem],
+            { maxTokens: limits.planMaxTokens }
+        );
+        if (stale()) return null;
+        if (this.stopRequested || planned.result?.finishReason === 'abort') return { finishReason: 'abort' };
+
+        const plan = parsePlan(planText, limits.maxSteps);
+        const steps = plan.length > 0 ? plan : [content];
+        reply.steps = plan.length;
+        const append = this.appender(reply, stale);
+        if (plan.length > 0) append(formatPlan(plan));
+
+        /** @type {any} */
+        let last = { finishReason: 'stop' };
+        let looped = false;
+        /** @type {{ title: string, url: string }[]} */
+        const sources = [];
+        for (let index = 0; index < steps.length; index += 1) {
+            const total = steps.length;
+            // What the earlier steps wrote, without the plan the prompt repeats.
+            const previous = plan.length > 0 ? reply.content.slice(formatPlan(plan).length) : '';
+            if (plan.length > 0) append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
+
+            this.setThinking({ mode: 'productive', phase: 'lookup', step: index + 1, total });
+            const base = `${WEBLLM_SYSTEM_PROMPT}\n\n${stepInstruction(index, total)}`;
+            // Each step is looked up on its own: its documentation is not carried to the next.
+            const lookup = await this.lookupDocumentation(content, reply, stale, {
+                query: plan.length > 0 ? steps[index] : content,
+                system: base,
+                share: plan.length > 0 ? limits.stepDocShare : 1
+            });
+            if (stale()) return null;
+            if (this.stopRequested) return { finishReason: 'abort' };
+
+            this.setThinking({ mode: 'productive', phase: 'writing', step: index + 1, total });
+            const withDocs = buildSystemPrompt(base, lookup);
+            const message = stepMessage({
+                task: content,
+                steps,
+                index,
+                previous,
+                previousTokens: limits.previousWorkTokens
+            });
+            const start = reply.content.length;
+            const { result, system } = await this.generate(
+                engine,
+                prior,
+                message,
+                append,
+                stale,
+                lookup ? [withDocs, base] : [base],
+                { maxTokens: limits.stepMaxTokens }
+            );
+            if (stale()) return null;
+            if (lookup && system === withDocs) {
+                for (const source of lookup.sources) {
+                    if (!sources.some((entry) => entry.url === source.url)) sources.push(source);
+                }
+                reply.sources = [...sources];
+            }
+            if (result?.finishReason === 'abort' || this.stopRequested) return { ...result, finishReason: 'abort' };
+            if (result?.finishReason === 'loop') {
+                // Keep this step's first pass and go on with the next one.
+                if (typeof result.keepChars === 'number') {
+                    reply.content = reply.content.slice(0, start + result.keepChars).trimEnd();
+                }
+                looped = true;
+                last = { ...result, finishReason: 'stop' };
+                continue;
+            }
+            last = result;
+        }
+        if (looped) reply.notice = STEP_LOOP_NOTICE;
+        return last;
     }
 
     /**
@@ -827,6 +1043,7 @@ export class WebLLMController {
      */
     async continueReply(messageId) {
         if (this.state.status !== 'ready' || this.state.generating || !this.engine) return false;
+        this.stopRequested = false;
         const messages = this.state.messages;
         const reply = messages[messages.length - 1];
         if (!reply || reply.id !== messageId || reply.role !== 'assistant' || !reply.continuable) return false;
@@ -877,6 +1094,7 @@ export class WebLLMController {
 
     stop() {
         if (!this.state.generating) return;
+        this.stopRequested = true;
         // During a lookup there is no generation yet: cancel the lookup.
         if (this.lookupAbort) {
             if (this.activeReply) this.activeReply.reply.stopped = true;
@@ -945,6 +1163,11 @@ function saveInterrupted(history, active) {
         .catch(() => {});
 }
 
+/** A CPU-emulated adapter is told apart from no WebGPU at all: the fix differs. */
+function gpuErrorName(gpu) {
+    return gpu?.fallbackAdapter ? 'WebGPUFallbackAdapterError' : 'WebGPUNotAvailableError';
+}
+
 /** A conversation as the list shows it. */
 function summary(conversation) {
     return { id: conversation.id, title: conversation.title, updatedAt: conversation.updatedAt };
@@ -969,6 +1192,8 @@ function restoreMessage(row) {
         sources: Array.isArray(row.sources) ? row.sources : [],
         docContext: row.docContext || null,
         lookupNote: row.lookupNote || null,
+        mode: row.mode === 'informative' || row.mode === 'productive' ? row.mode : null,
+        steps: Number.isInteger(row.steps) ? row.steps : 0,
         createdAt: row.createdAt
     };
 }

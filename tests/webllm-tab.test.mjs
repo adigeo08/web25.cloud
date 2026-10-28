@@ -113,7 +113,9 @@ test('the WebLLM code talks to no other WEB25 service', () => {
         'src/webllm/webllmPromptFormat.js',
         'src/webllm/mdnMcpClient.js',
         'src/webllm/mdnLookup.js',
+        'src/webllm/webllmThinking.js',
         'src/ui/webllm/WebLLMPanel.js',
+        'src/ui/webllm/replyFormat.js',
         'webllm-sw.js'
     ];
     // Code only: the comments explain what is avoided, by name.
@@ -147,6 +149,7 @@ test('the WebLLM code talks to no other WEB25 service', () => {
     assert.match(code('src/webllm/webllmConfig.js'), /MDN_MCP_ENDPOINT = 'https:\/\/mcp\.mdn\.mozilla\.net\/'/);
     // Model output is only ever text.
     assert.doesNotMatch(read('src/ui/webllm/WebLLMPanel.js'), /innerHTML|insertAdjacentHTML/);
+    assert.doesNotMatch(read('src/ui/webllm/replyFormat.js'), /innerHTML|insertAdjacentHTML|outerHTML|DOMParser/);
 });
 
 // ── auth gating through the real setupAuthAwareUi ───────────────────────────
