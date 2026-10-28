@@ -2,9 +2,10 @@
 /**
  * The small part of Markdown a chat reply needs, drawn as DOM.
  *
- *   ```lang … ```   a code block with its language and a Copy button; a block
- *                   still being streamed (no closing fence yet) is drawn as
- *                   code up to the end of the text
+ *   ```lang … ```   a code block with its language and a Copy button, also in
+ *                   the looser forms a small model writes (see splitReply); a
+ *                   block still being streamed (no closing fence yet) is drawn
+ *                   as code up to the end of the text
  *   `code`          inline code
  *   **bold**        bold
  *   # / ## / ###    a heading line
@@ -23,9 +24,6 @@
  *           { type: 'code', lang: string, code: string, closed: boolean }} ReplyBlock
  */
 
-/** A fence line: three or more backticks, then an optional language. */
-const FENCE = /^[ \t]{0,3}(`{3,})[ \t]*([^\s`]*)[^\n`]*$/;
-
 /** @param {string} lang */
 export function safeLanguage(lang) {
     return `${lang || ''}`
@@ -35,42 +33,135 @@ export function safeLanguage(lang) {
 }
 
 /**
+ * Where the first run of three or more backticks starts in `line`, and how
+ * long it is; null when there is none.
+ * @param {string} line
+ * @param {number} [from]
+ * @returns {{ index: number, length: number }|null}
+ */
+function findFence(line, from = 0) {
+    const index = line.indexOf('```', from);
+    if (index < 0) return null;
+    let end = index;
+    while (line[end] === '`') end += 1;
+    return { index, length: end - index };
+}
+
+/**
  * Split a reply into text and fenced code blocks.
+ *
+ * Standard fences, and the ways a small model actually writes them:
+ *
+ *   Here is the code: ```js      a fence opening at the end of a line of text
+ *   ```js const x = 1;           code on the fence line itself
+ *     ```html … ```              a fence indented inside a list (the indent is
+ *                                taken off the code lines)
+ *   }```                         the closing fence glued to the last line
+ *   ``` That is all.             text after the closing fence
+ *   Run ```npm install``` now.   a whole block on one line
+ *
+ * A block still being streamed (no closing fence yet) is code up to the end.
+ *
  * @param {string} content
  * @returns {ReplyBlock[]}
  */
 export function splitReply(content) {
     /** @type {ReplyBlock[]} */
     const blocks = [];
-    const lines = `${content || ''}`.split('\n');
     /** @type {string[]} */
     let text = [];
-    /** @type {{ fence: string, lang: string, lines: string[] }|null} */
+    /** @type {{ fence: number, lang: string, indent: string, lines: string[] }|null} */
     let code = null;
 
     const flushText = () => {
         if (text.length > 0) blocks.push({ type: 'text', text: text.join('\n') });
         text = [];
     };
+    const closeCode = () => {
+        if (!code) return;
+        blocks.push({ type: 'code', lang: code.lang, code: code.lines.join('\n'), closed: true });
+        code = null;
+    };
 
-    for (const line of lines) {
-        const fence = line.match(FENCE);
-        if (code) {
-            // A closing fence is at least as long as the opening one, with nothing after it.
-            if (fence && fence[1].length >= code.fence.length && !fence[2]) {
-                blocks.push({ type: 'code', lang: code.lang, code: code.lines.join('\n'), closed: true });
-                code = null;
-            } else {
-                code.lines.push(line);
+    /** A line outside a code block. @param {string} line */
+    const readText = (line) => {
+        const fence = findFence(line);
+        if (!fence) {
+            text.push(line);
+            return;
+        }
+        const before = line.slice(0, fence.index);
+        const rest = line.slice(fence.index + fence.length);
+
+        // A whole block on one line: ```npm install```.
+        const closing = findFence(rest);
+        if (closing && closing.length >= fence.length) {
+            const inner = rest.slice(0, closing.index).trim();
+            const after = rest.slice(closing.index + closing.length).trim();
+            if (before.trim()) text.push(before.trimEnd());
+            if (inner) {
+                flushText();
+                blocks.push({ type: 'code', lang: '', code: inner, closed: true });
             }
-            continue;
+            if (after) readText(after);
+            return;
         }
-        if (fence) {
-            flushText();
-            code = { fence: fence[1], lang: safeLanguage(fence[2]), lines: [] };
-            continue;
+
+        // An opening fence. A word right after it is the language; anything
+        // else on the line is the first line of code.
+        if (before.trim()) text.push(before.trimEnd());
+        flushText();
+        const adjacent = rest.length > 0 && rest[0] !== ' ' && rest[0] !== '\t';
+        const trimmed = rest.trim();
+        const space = trimmed.search(/\s/);
+        const word = space < 0 ? trimmed : trimmed.slice(0, space);
+        const remainder = space < 0 ? '' : trimmed.slice(space).trim();
+        // "``` js" names a language too; "``` const x = 1" is code.
+        const named = adjacent || !remainder;
+        code = {
+            fence: fence.length,
+            lang: named ? safeLanguage(word) : '',
+            indent: before.trim() ? '' : before,
+            lines: []
+        };
+        const first = named ? remainder : trimmed;
+        if (first) code.lines.push(first);
+    };
+
+    /** A line inside a code block. @param {string} raw */
+    const readCode = (raw) => {
+        if (!code) return;
+        const line = code.indent && raw.startsWith(code.indent) ? raw.slice(code.indent.length) : raw;
+        const trimmed = line.trim();
+        const fence = findFence(trimmed);
+        if (fence && fence.length >= code.fence) {
+            const before = trimmed.slice(0, fence.index);
+            const after = trimmed.slice(fence.index + fence.length);
+            // ``` on its own: the block ends.
+            if (!before && !after.trim()) {
+                closeCode();
+                return;
+            }
+            // }``` — the last line of code, then the fence.
+            if (before && !after.trim()) {
+                code.lines.push(line.trimEnd().slice(0, -fence.length).trimEnd());
+                closeCode();
+                return;
+            }
+            // ``` That is all. — the block ends and the text goes on.
+            if (!before && /^\s/.test(after)) {
+                closeCode();
+                readText(after.trim());
+                return;
+            }
         }
-        text.push(line);
+        // Anything else, "```js" included, is a line of code.
+        code.lines.push(line);
+    };
+
+    for (const line of `${content || ''}`.split('\n')) {
+        if (code) readCode(line);
+        else readText(line);
     }
     if (code) blocks.push({ type: 'code', lang: code.lang, code: code.lines.join('\n'), closed: false });
     flushText();

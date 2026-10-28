@@ -28,7 +28,8 @@ import { estimateTokens } from './webllmProgress.js';
 /** Added to the system prompt for a short answer. */
 export const SHORT_INSTRUCTION =
     'Mode: short. Answer briefly: at most three short sentences or a few bullet points. ' +
-    'Include a code snippet only if it is essential, at most six lines, in a fenced block labelled with its language. ' +
+    'When the question is about code or asks for it, include one short example (about ten lines at most) ' +
+    'in a fenced block labelled with its language, for example ```js, ```html or ```css. ' +
     'No introduction and no summary.';
 
 /** The system prompt a short answer is written under. */
