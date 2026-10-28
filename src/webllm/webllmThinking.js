@@ -22,14 +22,14 @@
 
 import { WEBLLM_SYSTEM_PROMPT } from './webllmConfig.js';
 import { estimateTokens } from './webllmProgress.js';
+import { splitReply } from '../ui/webllm/replyFormat.js';
 
 /** @typedef {'short'|'thinking'} ReplyMode */
 
 /** Added to the system prompt for a short answer. */
 export const SHORT_INSTRUCTION =
     'Mode: short. Answer briefly: at most three short sentences or a few bullet points. ' +
-    'When the question is about code or asks for it, include one short example (about ten lines at most) ' +
-    'in a fenced block labelled with its language, for example ```js, ```html or ```css. ' +
+    'Include a code snippet only if it is essential, at most six lines, in a fenced block labelled with its language. ' +
     'No introduction and no summary.';
 
 /** The system prompt a short answer is written under. */
@@ -104,7 +104,8 @@ export function parsePlan(text, maxSteps) {
     const steps = [];
     for (const entry of raw) {
         if (typeof entry !== 'string') continue;
-        const step = entry.split('\n').join(' ').trim().slice(0, 140);
+        // A fence in a step would open a code block in the plan and the heading.
+        const step = entry.split('\n').join(' ').split('```').join('').trim().slice(0, 140);
         if (step.length < 3 || steps.some((existing) => existing.toLowerCase() === step.toLowerCase())) continue;
         steps.push(step);
         if (steps.length >= maxSteps) break;
@@ -126,6 +127,19 @@ export function stepInstruction(index, total) {
         'Write complete, working code in fenced blocks labelled with the language (for example ```js). ' +
         'Keep the prose to one or two sentences.'
     );
+}
+
+/**
+ * A step's text with its last code block closed, if the step ended inside one
+ * — cut at the step's token limit, by the loop guard, or by Stop. Left open,
+ * that block would take in the next step's heading and code, and every
+ * snippet after it would be drawn as one broken block.
+ * @param {string} text
+ */
+export function closeOpenFence(text) {
+    const blocks = splitReply(text);
+    const last = blocks[blocks.length - 1];
+    return last?.type === 'code' && !last.closed ? `${text.trimEnd()}\n\`\`\`` : text;
 }
 
 /** The plan as it opens the reply. @param {string[]} steps */
