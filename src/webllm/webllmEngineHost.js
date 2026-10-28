@@ -10,9 +10,13 @@
  * Inbound (all carry a `requestId` the reply echoes):
  *   { type: 'load', profile? }           download if needed, then initialise with
  *                                        the profile's context window and reply limit
- *   { type: 'chat', messages }           one streamed chat completion
- *   { type: 'continue', messages, partial }  more of a reply cut at the length
- *                                        limit, appended to it
+ *   { type: 'chat', messages, maxTokens?, schema? }   one streamed chat completion;
+ *                                        with a JSON schema, constrained to it
+ *   { type: 'continue', messages, partial, maxTokens? }  more of a reply cut at
+ *                                        the length limit, appended to it
+ *
+ * A request's `maxTokens` can only shorten a reply: the profile's own limit,
+ * when it has one, still applies.
  *   { type: 'interrupt' }                stop the current generation
  *   { type: 'unload' }                   release the GPU; the cache stays
  *
@@ -132,6 +136,31 @@ export function sanitizeProfile(profile) {
 }
 
 /**
+ * The reply limit for one request: the shorter of the profile's and the
+ * request's, either of which may be absent.
+ * @param {number|null} profileLimit
+ * @param {any} requested
+ * @returns {number|null}
+ */
+export function replyLimit(profileLimit, requested) {
+    const asked = Number(requested);
+    const valid = Number.isInteger(asked) && asked > 0 ? asked : null;
+    if (profileLimit && valid) return Math.min(profileLimit, valid);
+    return profileLimit || valid;
+}
+
+/**
+ * WebLLM's `response_format` for a JSON schema: the schema as a string, which
+ * is how its grammar compiler takes it. Anything that is not a plain object is
+ * no schema.
+ * @param {any} schema
+ */
+export function jsonResponseFormat(schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+    return { type: 'json_object', schema: JSON.stringify(schema) };
+}
+
+/**
  * @param {{ post: (message: any) => void,
  *           loadLibrary?: () => Promise<any>,
  *           modelId?: string,
@@ -154,6 +183,13 @@ export function createEngineHost({
     /** @type {Promise<void>|null} */
     let loading = null;
     let generating = false;
+    /**
+     * Stop was asked for during this generation. WebLLM clears its own
+     * interrupt flag when a stream starts, so an interrupt that lands while
+     * `create()` is still setting up would be lost; this one is re-applied
+     * on every chunk until the stream ends.
+     */
+    let interruptRequested = false;
 
     const reply = (requestId, value) => post({ type: 'result', requestId, ok: true, value });
     const fail = (requestId, error) => post({ type: 'result', requestId, ok: false, error: serializeError(error) });
@@ -215,6 +251,7 @@ export function createEngineHost({
         /** @type {import('./webllmLoopGuard.js').LoopVerdict|null} */
         let loop = null;
         for await (const chunk of stream) {
+            if (interruptRequested) void engine.interruptGenerate();
             const choice = chunk?.choices?.[0];
             // Chat chunks carry `delta.content`; text-completion chunks carry `text`.
             const text = choice?.delta?.content ?? choice?.text;
@@ -245,23 +282,30 @@ export function createEngineHost({
     /** @param {{ role: string, content: string }[]} messages */
     const lastUserText = (messages) => [...messages].reverse().find((message) => message.role === 'user')?.content;
 
-    async function chat(requestId, messages) {
+    async function chat(requestId, messages, requestedMax, schema) {
         if (!engine) throw new Error('The model is not loaded.');
         if (generating) throw new Error('A reply is already being generated.');
         generating = true;
+        interruptRequested = false;
         try {
             // What the official client sends — the messages and a stream —
             // with sampling from the chat config set at reload. The mobile
             // profile caps the reply; desktop leaves it to the end-of-turn
-            // token.
+            // token — unless the request itself asks for a short reply.
+            const maxTokens = replyLimit(limits.maxTokens, requestedMax);
+            const responseFormat = jsonResponseFormat(schema);
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
                 stream_options: { include_usage: true },
-                ...(limits.maxTokens ? { max_tokens: limits.maxTokens } : {})
+                ...(maxTokens ? { max_tokens: maxTokens } : {}),
+                ...(responseFormat ? { response_format: responseFormat } : {})
             });
-            // Somebody asking for the same line five times is not a loop.
-            return await streamReply(requestId, stream, { allowRepeats: asksForRepetition(lastUserText(messages)) });
+            // Somebody asking for the same line five times is not a loop; nor
+            // is a grammar-constrained answer, which is short and structured.
+            return await streamReply(requestId, stream, {
+                allowRepeats: Boolean(responseFormat) || asksForRepetition(lastUserText(messages))
+            });
         } finally {
             generating = false;
         }
@@ -275,18 +319,21 @@ export function createEngineHost({
      * @param {number} requestId
      * @param {{ role: string, content: string }[]} messages system first, ending on the question
      * @param {string} partial
+     * @param {any} [requestedMax]
      */
-    async function continueReply(requestId, messages, partial) {
+    async function continueReply(requestId, messages, partial, requestedMax) {
         if (!engine) throw new Error('The model is not loaded.');
         if (generating) throw new Error('A reply is already being generated.');
         if (typeof partial !== 'string' || !partial) throw new Error('There is no reply to continue.');
         generating = true;
+        interruptRequested = false;
         try {
+            const maxTokens = replyLimit(limits.maxTokens, requestedMax);
             const stream = await engine.completions.create({
                 prompt: formatContinuationPrompt(messages, partial),
                 stream: true,
                 stream_options: { include_usage: true },
-                ...(limits.maxTokens ? { max_tokens: limits.maxTokens } : {})
+                ...(maxTokens ? { max_tokens: maxTokens } : {})
             });
             return await streamReply(requestId, stream, {
                 allowRepeats: asksForRepetition(lastUserText(messages)),
@@ -313,12 +360,16 @@ export function createEngineHost({
                     reply(requestId, await load(message.profile));
                     break;
                 case 'chat':
-                    reply(requestId, await chat(requestId, message.messages));
+                    reply(requestId, await chat(requestId, message.messages, message.maxTokens, message.schema));
                     break;
                 case 'continue':
-                    reply(requestId, await continueReply(requestId, message.messages, message.partial));
+                    reply(
+                        requestId,
+                        await continueReply(requestId, message.messages, message.partial, message.maxTokens)
+                    );
                     break;
                 case 'interrupt':
+                    if (generating) interruptRequested = true;
                     engine?.interruptGenerate();
                     if (requestId !== undefined) reply(requestId, { interrupted: generating });
                     break;

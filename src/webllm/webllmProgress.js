@@ -166,6 +166,16 @@ export function classifyError(error) {
     const detail = `${error?.message || error || ''}`;
     const text = `${name} ${detail}`;
 
+    // Checked first: the message names WebGPU, and the generic advice is wrong here.
+    if (/WebGPUFallbackAdapter/.test(name)) {
+        return {
+            kind: 'unsupported',
+            retryable: false,
+            message:
+                'This browser only offers WebGPU emulated on the CPU, which is far too slow for Llama. Turn on hardware acceleration in the browser settings (or update the GPU driver) and reload the page.',
+            detail
+        };
+    }
     if (
         /WebGPUNotAvailable|WebGPUNotFound|WebGPU is not supported|Cannot find WebGPU|requestAdapter|no (gpu|webgpu) adapter/i.test(
             text

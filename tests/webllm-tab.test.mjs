@@ -113,7 +113,12 @@ test('the WebLLM code talks to no other WEB25 service', () => {
         'src/webllm/webllmPromptFormat.js',
         'src/webllm/mdnMcpClient.js',
         'src/webllm/mdnLookup.js',
+        'src/webllm/webllmThinking.js',
+        'src/webllm/webllmThoughtStore.js',
+        'src/webllm/thoughtEmbedding.js',
+        'src/webllm/idbVectorLoader.js',
         'src/ui/webllm/WebLLMPanel.js',
+        'src/ui/webllm/replyFormat.js',
         'webllm-sw.js'
     ];
     // Code only: the comments explain what is avoided, by name.
@@ -130,7 +135,9 @@ test('the WebLLM code talks to no other WEB25 service', () => {
         );
         assert.doesNotMatch(source, /RTCPeerConnection|WebSocket|serviceWorker\.controller|localStorage/, file);
         // Saved chats are the one database, and it is WebLLM's own.
-        if (file !== 'src/webllm/webllmHistoryStore.js') assert.doesNotMatch(source, /indexedDB\.open/, file);
+        if (file !== 'src/webllm/webllmHistoryStore.js' && file !== 'src/webllm/webllmThoughtStore.js') {
+            assert.doesNotMatch(source, /indexedDB\.open/, file);
+        }
     }
     assert.match(code('src/webllm/webllmHistoryStore.js'), /WEBLLM_HISTORY_DB_PREFIX = 'web25-webllm-history-'/);
     // Besides downloading WebLLM and the model, the only request the chat makes
@@ -145,8 +152,18 @@ test('the WebLLM code talks to no other WEB25 service', () => {
     }
     assert.match(code('src/webllm/mdnMcpClient.js'), /credentials: 'omit'/);
     assert.match(code('src/webllm/webllmConfig.js'), /MDN_MCP_ENDPOINT = 'https:\/\/mcp\.mdn\.mozilla\.net\/'/);
+    // Llama alone uses the GPU: the thought store, its embedding and idb-vector never touch it.
+    for (const file of [
+        'src/webllm/webllmThoughtStore.js',
+        'src/webllm/thoughtEmbedding.js',
+        'src/webllm/idbVectorLoader.js',
+        'src/webllm/webllmThinking.js'
+    ]) {
+        assert.doesNotMatch(code(file), /navigator\.gpu|requestAdapter|webgpu|GPUDevice/i, file);
+    }
     // Model output is only ever text.
     assert.doesNotMatch(read('src/ui/webllm/WebLLMPanel.js'), /innerHTML|insertAdjacentHTML/);
+    assert.doesNotMatch(read('src/ui/webllm/replyFormat.js'), /innerHTML|insertAdjacentHTML|outerHTML|DOMParser/);
 });
 
 // ── auth gating through the real setupAuthAwareUi ───────────────────────────

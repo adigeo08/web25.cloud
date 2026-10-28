@@ -157,7 +157,14 @@ async function startScriptedChat(
     page,
     chunks,
     result = { finishReason: 'stop' },
-    { wallet = null, continueChunks = [' and so it ends.'], continueResult = { finishReason: 'stop' }, mdn = null } = {}
+    {
+        wallet = null,
+        continueChunks = [' and so it ends.'],
+        continueResult = { finishReason: 'stop' },
+        mdn = null,
+        decision = 'short',
+        plan = null
+    } = {}
 ) {
     await page.evaluate(
         async ({
@@ -166,10 +173,13 @@ async function startScriptedChat(
             wallet: address,
             continueChunks: more,
             continueResult: moreResult,
-            mdn: mdnMode
+            mdn: mdnMode,
+            decision: autoMode,
+            plan: planSteps
         }) => {
             const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
             const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
+            const { openWebLLMThoughts } = await import('/src/webllm/webllmThoughtStore.js');
             const { openWebLLMHistory } = await import('/src/webllm/webllmHistoryStore.js');
             const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
             const play = async (parts, onDelta, outcome) => {
@@ -189,7 +199,15 @@ async function startScriptedChat(
                     await tick();
                     return { alreadyLoaded: false };
                 },
-                chat(messages, onDelta) {
+                async chat(messages, onDelta, options = {}) {
+                    // Structured answers: Auto's decision and the plan.
+                    if (options.schema) {
+                        const deciding = Boolean(options.schema.properties?.mode);
+                        window.__sent.push({ kind: deciding ? 'decide' : 'plan', messages, schema: options.schema });
+                        await tick();
+                        onDelta(JSON.stringify(deciding ? { mode: autoMode } : { steps: planSteps || [] }));
+                        return { finishReason: 'stop' };
+                    }
                     window.__sent.push({ kind: 'chat', messages });
                     return play(replyChunks, onDelta, replyResult);
                 },
@@ -235,6 +253,8 @@ async function startScriptedChat(
                 },
                 createEngine: async () => engine,
                 openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
+                // The real thought store, in this browser; no CDN here, so recall runs without idb-vector.
+                openThoughts: (walletAddress) => openWebLLMThoughts({ walletAddress }),
                 mdnClient,
                 onChange: (state, change) => render(state, change)
             });
@@ -243,7 +263,7 @@ async function startScriptedChat(
             controller.setAllowed(true, { walletAddress: address });
             await controller.activate();
         },
-        { chunks, result, wallet, continueChunks, continueResult, mdn }
+        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan }
     );
 }
 
@@ -381,11 +401,19 @@ for (const [name, viewport] of [
             );
 
             const bubbles = await page.$$eval('#webllm-messages .webllm-message', (items) =>
-                items.map((item) => ({ own: item.classList.contains('is-own'), text: item.textContent }))
+                items.map((item) => ({
+                    own: item.classList.contains('is-own'),
+                    text: item.querySelector('.channels-message-body').textContent,
+                    mode: item.querySelector('.webllm-mode')?.textContent ?? null
+                }))
             );
             assert.deepEqual(bubbles, [
-                { own: true, text: 'Hi there' },
-                { own: false, text: 'Hello <img src=x onerror="window.__pwned=1"> from Llama.' }
+                { own: true, text: 'Hi there', mode: null },
+                {
+                    own: false,
+                    text: 'Hello <img src=x onerror="window.__pwned=1"> from Llama.',
+                    mode: 'Short · chosen by Llama'
+                }
             ]);
             assert.equal(await page.$('#webllm-messages img'), null, 'model output is never markup');
             assert.equal(await page.evaluate(() => window.__pwned), undefined);
@@ -487,7 +515,9 @@ test(
                     own: item.classList.contains('is-own'),
                     text: item.querySelector('.channels-message-body').textContent
                 })),
-                sent: window.__sent.map(({ kind, partial }) => ({ kind, partial: partial ?? null }))
+                sent: window.__sent
+                    .filter(({ kind }) => kind !== 'decide')
+                    .map(({ kind, partial }) => ({ kind, partial: partial ?? null }))
             }));
             assert.equal(after.bubbles.length, 2, 'no new message, user or assistant');
             assert.equal(after.bubbles[0].text, 'Explain closures');
@@ -828,7 +858,97 @@ test('on a phone the conversation list is a drawer, and nothing overflows', { sk
     }
 });
 
-test('the settings dialog keeps the retention period and the MDN switch', { skip: SKIP }, async () => {
+test('code in a reply is drawn as a code block with a Copy button, never as markup', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: DESKTOP });
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(page, [
+            'Use **`debounce`**:\n\n```js\nconst',
+            ' run = debounce(() => {}, 200);\n',
+            '// <script>window.__pwned = 1</script>\n```\nDone.'
+        ]);
+        await ask(page, 'What is debounce?');
+        const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
+            lang: item.querySelector('.webllm-code-lang')?.textContent,
+            code: item.querySelector('.webllm-code pre code')?.textContent,
+            codeClass: item.querySelector('.webllm-code pre code')?.className,
+            inline: item.querySelector('strong .webllm-inline-code')?.textContent,
+            copy: item.querySelector('[data-copy-code]')?.textContent,
+            fences: item.querySelector('.channels-message-body').textContent.includes('```'),
+            scripts: item.querySelectorAll('script').length
+        }));
+        assert.deepEqual(reply, {
+            lang: 'js',
+            code: 'const run = debounce(() => {}, 200);\n// <script>window.__pwned = 1</script>',
+            codeClass: 'language-js',
+            inline: 'debounce',
+            copy: 'Copy',
+            fences: false,
+            scripts: 0
+        });
+        assert.equal(await page.evaluate(() => window.__pwned), undefined);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test(
+    'Auto: Llama chooses Thinking, plans in JSON, and writes each step from its recalled thoughts',
+    { skip: SKIP },
+    async () => {
+        const { page, context, problems } = await openApp({ viewport: DESKTOP });
+        try {
+            await openWebLLMTab(page, DESKTOP, { scripted: true });
+            await startScriptedChat(page, ['```html\n<form id="login"></form>\n```'], undefined, {
+                wallet: '0xabab',
+                decision: 'thinking',
+                plan: ['Write the login form markup', 'Add the login form validation script']
+            });
+            await page.waitForFunction(() => window.__controller.state.history === 'ready');
+            await ask(page, 'Create a login form with validation');
+            const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
+                headings: [...item.querySelectorAll('.webllm-md-heading')].map((el) => el.textContent),
+                code: [...item.querySelectorAll('.webllm-code pre code')].map((el) => el.textContent),
+                mode: item.querySelector('.webllm-mode')?.textContent
+            }));
+            assert.deepEqual(reply, {
+                headings: ['Step 1/2: Write the login form markup', 'Step 2/2: Add the login form validation script'],
+                code: ['<form id="login"></form>', '<form id="login"></form>'],
+                mode: 'Thinking · 2 steps · chosen by Llama'
+            });
+            // Decide, plan, then one request per step, each naming its step; the
+            // second step is given the first one back, recalled from the thought store.
+            const sent = await page.evaluate(() =>
+                window.__sent.map((entry) => ({ kind: entry.kind, last: entry.messages.at(-1).content }))
+            );
+            assert.deepEqual(
+                sent.map((entry) => entry.kind),
+                ['decide', 'plan', 'chat', 'chat']
+            );
+            assert.match(sent[2].last, /Now do step 1 only: Write the login form markup/);
+            assert.match(sent[3].last, /Earlier thoughts:[\s\S]*Thought 2:[\s\S]*<form id="login"><\/form>/);
+            assert.match(sent[3].last, /Now do step 2 only: Add the login form validation script/);
+
+            // The thoughts were kept: plan and two steps, one completed sequence.
+            const stored = await page.evaluate(async () => {
+                const { sequenceId } = window.__controller.state.messages.at(-1);
+                const history = await window.__controller.thoughts.getHistory({ sequenceId, limit: 10 });
+                const state = await window.__controller.thoughts.getSequenceState(sequenceId);
+                return {
+                    numbers: history.value.thoughts.map((t) => t.thoughtNumber),
+                    completed: state.value.completed
+                };
+            });
+            assert.deepEqual(stored, { numbers: [1, 2, 3], completed: true });
+            assert.deepEqual(problems, []);
+        } finally {
+            await context.close();
+        }
+    }
+);
+
+test('the settings dialog keeps the retention period, the reply mode and the MDN switch', { skip: SKIP }, async () => {
     const { page, context, problems } = await openApp();
     try {
         await openWebLLMTab(page, DESKTOP, { scripted: true });
@@ -846,8 +966,15 @@ test('the settings dialog keeps the retention period and the MDN switch', { skip
         );
         assert.equal(await page.isChecked('#webllm-mdn-toggle'), true);
         assert.match(await page.textContent('#webllm-settings'), /mcp\.mdn\.mozilla\.net/);
+        assert.equal(await page.inputValue('#webllm-reply-mode'), 'auto', 'Llama chooses by default');
+        assert.deepEqual(await page.$$eval('#webllm-reply-mode option', (items) => items.map((item) => item.value)), [
+            'auto',
+            'short',
+            'thinking'
+        ]);
 
         await page.selectOption('#webllm-retention', '30d');
+        await page.selectOption('#webllm-reply-mode', 'short');
         await page.uncheck('#webllm-mdn-toggle');
         await page.keyboard.press('Escape');
         await page.waitForSelector('#webllm-settings:not([open])', { state: 'attached' });
@@ -865,7 +992,8 @@ test('the settings dialog keeps the retention period and the MDN switch', { skip
             store.close();
             return settings;
         });
-        assert.deepEqual(saved, { retention: '30d', mdnEnabled: false });
+        // So is where the engine ran: the scripted engine is a worker.
+        assert.deepEqual(saved, { retention: '30d', mdnEnabled: false, engine: 'worker', replyMode: 'short' });
         assert.deepEqual(problems, []);
     } finally {
         await context.close();
@@ -903,7 +1031,9 @@ test(
                     ['search', 'copy text Clipboard'],
                     'only the search terms leave the browser'
                 );
-                const system = await page.evaluate(() => window.__sent[0].messages[0].content);
+                const system = await page.evaluate(
+                    () => window.__sent.find((entry) => entry.kind === 'chat').messages[0].content
+                );
                 if (mode === 'ok') {
                     assert.deepEqual(reply.links, [
                         {
@@ -1007,3 +1137,67 @@ test('the MCP client passes a browser’s CORS preflight against MDN’s policy'
         await context.close();
     }
 });
+
+test(
+    'idb-vector loads verified from its pinned jsDelivr files and recalls thoughts in a real browser',
+    { skip: SKIP },
+    async () => {
+        const { page, context, problems, external } = await openApp({ viewport: DESKTOP });
+        try {
+            // jsDelivr serves npm files verbatim: answer with the package's own bytes.
+            const served = [];
+            await context.route('https://cdn.jsdelivr.net/npm/idb-vector@0.2.0/**', async (pending) => {
+                const file = new URL(pending.request().url()).pathname.replace('/npm/idb-vector@0.2.0/', '');
+                served.push(file);
+                await pending.fulfill({
+                    status: 200,
+                    contentType: 'text/javascript',
+                    headers: { 'access-control-allow-origin': '*' },
+                    body: await readFile(new URL(`../node_modules/idb-vector/${file}`, import.meta.url))
+                });
+            });
+            const result = await page.evaluate(async () => {
+                const { loadIdbVector } = await import('/src/webllm/idbVectorLoader.js');
+                const { openWebLLMThoughts } = await import('/src/webllm/webllmThoughtStore.js');
+                const VectorDB = await loadIdbVector();
+                const store = await openWebLLMThoughts({
+                    walletAddress: '0xcdcd',
+                    vectors: async (dbName) => new VectorDB({ dbName, objectStore: 'vectors', vectorPath: 'embedding' })
+                });
+                await store.vectorsReady;
+                const add = (sequenceId, thoughtNumber, thought) =>
+                    store.appendThought({
+                        conversationId: 'c1',
+                        sequenceId,
+                        thought,
+                        thoughtNumber,
+                        totalThoughts: 3,
+                        nextThoughtNeeded: true
+                    });
+                const first = await add(null, 1, 'Draw a bar chart on a canvas');
+                await add(first.value.sequenceId, 2, 'The login form with an email input and a submit button');
+                const third = await add(first.value.sequenceId, 3, 'Header and footer styles');
+                const recalled = await store.recall({
+                    query: 'Validate the email input of the login form',
+                    conversationId: 'c1',
+                    limit: 1
+                });
+                return {
+                    indexed: third.value.thought.vectorKey !== null,
+                    recalled: recalled.map((thought) => thought.thought),
+                    databases: (await indexedDB.databases()).map((db) => db.name).sort()
+                };
+            });
+            assert.deepEqual(served.sort(), ['index.js', 'utils/sortedarray.js']);
+            assert.equal(result.indexed, true, 'thoughts are indexed in idb-vector');
+            assert.deepEqual(result.recalled, ['The login form with an email input and a submit button']);
+            assert.equal(result.databases.length, 2);
+            assert.ok(result.databases.some((name) => name.startsWith('web25-webllm-thoughts-')));
+            assert.ok(result.databases.some((name) => name.startsWith('web25-webllm-thought-vectors-')));
+            assert.deepEqual(problems, []);
+            assert.deepEqual(external, [], 'nothing else left the page');
+        } finally {
+            await context.close();
+        }
+    }
+);

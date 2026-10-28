@@ -278,3 +278,68 @@ export const MDN_ORIGIN = 'https://developer.mozilla.org';
  * fit each profile's prompt budget.
  */
 export const MDN_CONTEXT_TOKENS = Object.freeze({ desktop: 900, mobile: 420 });
+
+/**
+ * How a reply is written (see webllmThinking.js), chosen in the chat settings:
+ *
+ *   auto      Llama decides, per message, with a one-word structured answer
+ *   short     one short answer: a small reply window
+ *   thinking  a plan, then one step at a time: a large reply window in total
+ */
+export const WEBLLM_REPLY_MODES = Object.freeze(['auto', 'short', 'thinking']);
+export const WEBLLM_DEFAULT_REPLY_MODE = 'auto';
+
+/**
+ * The token windows of each mode, per memory profile.
+ *
+ *   decideMaxTokens   Auto's structured decision ({"mode": …}): a few tokens
+ *   shortMaxTokens    a short answer; Continue is offered if it is cut
+ *   planMaxTokens     the structured plan a thinking answer starts with
+ *   stepMaxTokens     each step of a thinking answer
+ *   maxSteps          the most steps a plan may have
+ *   recallTokens      how much of the earlier thoughts a step is shown
+ *   recallLimit       how many earlier thoughts are recalled for a step
+ *   stepDocShare      the part of the profile's MDN budget one step's lookup may use
+ */
+export const WEBLLM_THINKING = Object.freeze({
+    desktop: Object.freeze({
+        decideMaxTokens: 16,
+        shortMaxTokens: 360,
+        planMaxTokens: 200,
+        stepMaxTokens: 900,
+        maxSteps: 4,
+        recallTokens: 900,
+        recallLimit: 4,
+        stepDocShare: 0.6
+    }),
+    mobile: Object.freeze({
+        decideMaxTokens: 16,
+        shortMaxTokens: 200,
+        planMaxTokens: 140,
+        stepMaxTokens: 256,
+        maxSteps: 3,
+        recallTokens: 300,
+        recallLimit: 2,
+        stepDocShare: 0.6
+    })
+});
+
+/**
+ * idb-vector (Paul Kinlan, Apache-2.0): a small vector store over IndexedDB,
+ * used to recall earlier thoughts by similarity. Two files, both pinned: the
+ * page fetches them from jsDelivr, checks each against its hash, and only then
+ * imports them — the same rule as the WebLLM library.
+ */
+export const IDB_VECTOR_VERSION = '0.2.0';
+export const IDB_VECTOR_FILES = Object.freeze({
+    index: Object.freeze({
+        url: `https://cdn.jsdelivr.net/npm/idb-vector@${IDB_VECTOR_VERSION}/index.js`,
+        integrity: 'sha384-SPRCEZwWvCOk1re2an6bhn5nbB3vZY1PXR1wSgBQ6kgHXrB0IDFbbgHkAvOOXHD5'
+    }),
+    sortedArray: Object.freeze({
+        url: `https://cdn.jsdelivr.net/npm/idb-vector@${IDB_VECTOR_VERSION}/utils/sortedarray.js`,
+        integrity: 'sha384-s83t0Zg9cAfA7GV1T5qGHpAByciLc4I9MnPAoOkMWhaot7HW2fr3Om6+bdyHlBhh',
+        /** How index.js imports it, verbatim. */
+        specifier: './utils/sortedarray.js'
+    })
+});

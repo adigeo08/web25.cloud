@@ -218,7 +218,12 @@ function fakeEngine(reply = 'Here you go.') {
         async load() {
             return {};
         },
-        async chat(messages, onDelta) {
+        async chat(messages, onDelta, options = {}) {
+            // Auto's decision (a JSON schema request): a short reply.
+            if (options.schema) {
+                onDelta('{"mode":"short"}');
+                return { finishReason: 'stop' };
+            }
             engine.chats.push(messages);
             for (const piece of reply.match(/.{1,4}/g)) {
                 await flush();

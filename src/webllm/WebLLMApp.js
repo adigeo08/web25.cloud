@@ -11,6 +11,8 @@ import { createWebLLMServiceWorkerClient } from './WebLLMServiceWorkerClient.js'
 import { detectWebGPU } from './webgpuSupport.js';
 import { resolveWebLLMProfile } from './webllmConfig.js';
 import { openWebLLMHistory } from './webllmHistoryStore.js';
+import { openWebLLMThoughts } from './webllmThoughtStore.js';
+import { loadIdbVector } from './idbVectorLoader.js';
 import { createMcpClient } from './mdnMcpClient.js';
 import { bindWebLLMPanel } from '../ui/webllm/WebLLMPanel.js';
 
@@ -23,7 +25,8 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
     const controller = new WebLLMController({
         detectWebGPU: () => detectWebGPU(),
         swClient: createWebLLMServiceWorkerClient({ log }),
-        createEngine: () => createEngineClient(),
+        // In the worker where it has the GPU, on the page where it does not; remembered.
+        createEngine: (options) => createEngineClient(options),
         storage: nav.storage || null,
         locks: nav.locks || null,
         onChange: (state, change) => render(state, change),
@@ -32,6 +35,21 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
         profile: resolveWebLLMProfile(),
         // Conversations, saved per wallet in this browser.
         openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
+        // The sequence thinker's thoughts, per wallet, recalled by similarity
+        // through idb-vector (verified from jsDelivr). All on the CPU.
+        openThoughts: (walletAddress) =>
+            openWebLLMThoughts({
+                walletAddress,
+                vectors: async (dbName) => {
+                    try {
+                        const VectorDB = await loadIdbVector();
+                        return new VectorDB({ dbName, objectStore: 'vectors', vectorPath: 'embedding' });
+                    } catch (error) {
+                        log(`Thought recall by similarity unavailable: ${error?.message || error}`);
+                        return null;
+                    }
+                }
+            }),
         // MDN's public MCP server, contacted only for development questions.
         mdnClient: createMcpClient()
     });

@@ -7,10 +7,13 @@
  * bubbles and composer classes; none of its code runs here.
  *
  * Model output is untrusted text: it is always written with `textContent` and
- * never interpreted as markup.
+ * never interpreted as markup. Code fences, inline code, bold and headings are
+ * drawn as elements by replyFormat.js, which builds them from text alone.
  */
 
 import { describeProgress } from '../../webllm/webllmProgress.js';
+import { copyToClipboard } from '../ClipboardButton.js';
+import { codeForCopyButton, renderReply } from './replyFormat.js';
 import { createStreamBatcher } from './streamBatcher.js';
 
 const STEP_ORDER = ['download', 'cache', 'shaders'];
@@ -114,7 +117,15 @@ function updateBubble(item, message, context) {
             body.appendChild(label);
         }
     } else {
-        body.textContent = message.content;
+        renderReply(body, message.content);
+    }
+
+    // How the reply was written: a short answer, or a plan written in steps.
+    const mode = message.role === 'assistant' && !message.error ? modeLabel(message) : '';
+    const modeEl = slot(item, 'webllm-mode', Boolean(mode));
+    if (modeEl) {
+        modeEl.dataset.mode = `${message.mode}`;
+        modeEl.textContent = mode;
     }
 
     // Where the documentation came from: MDN pages only, opened outside the app.
@@ -150,6 +161,33 @@ function updateBubble(item, message, context) {
         button.disabled = context.generating;
         continueEl.appendChild(button);
     }
+}
+
+/** @param {import('../../webllm/WebLLMController.js').ChatMessage} message */
+function modeLabel(message) {
+    const chosen = message.autoMode ? ' · chosen by Llama' : '';
+    if (message.mode === 'short') return `Short${chosen}`;
+    if (message.mode === 'thinking') {
+        return `${message.steps > 1 ? `Thinking · ${message.steps} steps` : 'Thinking'}${chosen}`;
+    }
+    return '';
+}
+
+/**
+ * The status line while a reply is written: which step of the sequence.
+ * @param {any} state
+ */
+export function thinkingLabel(state) {
+    const thinking = state.thinking;
+    const lookup = state.lookup === 'searching';
+    if (!thinking) return lookup ? 'Checking MDN…' : 'Generating…';
+    if (thinking.mode === 'auto') return 'Choosing how to answer…';
+    if (thinking.mode === 'short') return lookup ? 'Short · checking MDN…' : 'Short · writing…';
+    if (thinking.phase === 'planning') return 'Thinking · planning the steps…';
+    const step = thinking.total > 1 ? `Step ${thinking.step}/${thinking.total}` : 'Thinking';
+    if (lookup) return `${step} · checking MDN…`;
+    if (thinking.phase === 'recall') return `${step} · recalling earlier thoughts…`;
+    return `${step} · writing…`;
 }
 
 /** Only links to MDN docs pages are ever rendered. */
@@ -250,6 +288,11 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     });
 
     messages?.addEventListener('click', (event) => {
+        const copy = /** @type {any} */ (event.target)?.closest?.('[data-copy-code]');
+        if (copy) {
+            void copyCode(copy);
+            return;
+        }
         const button = /** @type {any} */ (event.target)?.closest?.('[data-continue]');
         if (!button || button.disabled) return;
         void controller.continueReply(button.dataset.continue);
@@ -258,12 +301,14 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     const settings = /** @type {any} */ (byId('webllm-settings'));
     const retention = /** @type {any} */ (byId('webllm-retention'));
     const mdnToggle = /** @type {any} */ (byId('webllm-mdn-toggle'));
+    const replyMode = /** @type {any} */ (byId('webllm-reply-mode'));
     byId('webllm-settings-btn')?.addEventListener('click', () => {
         if (typeof settings?.showModal === 'function') settings.showModal();
         else settings?.setAttribute('open', '');
     });
     retention?.addEventListener('change', () => void controller.setRetention(retention.value));
     mdnToggle?.addEventListener('change', () => void controller.setMdnEnabled(mdnToggle.checked));
+    replyMode?.addEventListener('change', () => void controller.setReplyMode(replyMode.value));
 
     messages?.addEventListener('scroll', () => setHidden(scrollBtn, isNearBottom(messages)));
     scrollBtn?.addEventListener('click', () => {
@@ -342,13 +387,11 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
             // Only when the dev-only profile override is in use: which one.
             const profile = controller.profile?.overridden ? ` · ${controller.profile.id} profile (dev)` : '';
             chip.textContent =
-                (state.lookup === 'searching'
-                    ? 'Checking MDN…'
-                    : state.generating
-                      ? 'Generating…'
-                      : state.engineKind === 'page'
-                        ? 'Running on this device · main thread'
-                        : 'Running on this device') + profile;
+                (state.generating || state.lookup === 'searching'
+                    ? thinkingLabel(state)
+                    : state.engineKind === 'page'
+                      ? 'Running on this device · main thread'
+                      : 'Running on this device') + profile;
             chip.className = `status-chip ${state.generating ? 'status-pending' : 'status-success'}`;
         }
     }
@@ -413,10 +456,10 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     }
 
     /**
-     * Where streamed text goes: the reply's text node and how much of the reply
-     * it already shows, so a flush appends only what is new. Reset whenever the
+     * Where streamed text goes: the reply's bubble and the text it already
+     * shows, so a flush with nothing new does nothing. Reset whenever the
      * thread is rebuilt.
-     * @type {{ id: string, item: any, text: Text|null, shown: string } | null}
+     * @type {{ id: string, item: any, shown: string } | null}
      */
     let stream = null;
 
@@ -460,6 +503,7 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     function renderSettings(state) {
         if (retention) retention.value = state.settings.retention;
         if (mdnToggle) mdnToggle.checked = Boolean(state.settings.mdnEnabled);
+        if (replyMode) replyMode.value = state.settings.replyMode || 'auto';
     }
 
     function renderMessages(state) {
@@ -486,8 +530,8 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     }
 
     /**
-     * Draw the latest text of a streaming reply: one layout read, one text
-     * write — appending only what is new — and one scroll.
+     * Draw the latest text of a streaming reply: one layout read, one redraw
+     * of the reply's body, and one scroll.
      */
     function renderDelta(state, messageId) {
         if (!messages) return;
@@ -502,21 +546,16 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         if (stream?.id !== messageId) {
             const item = messages.querySelector(`[data-message-id="${messageId}"]`);
             if (!item) return renderMessages(state);
-            stream = { id: messageId, item, text: null, shown: '' };
+            stream = { id: messageId, item, shown: '' };
         }
         const content = message.content;
         if (content === stream.shown) return;
 
         const follow = isNearBottom(messages);
         const body = stream.item.firstElementChild;
-        if (!stream.text) {
-            // The first text replaces the typing dots.
-            body.textContent = '';
-            stream.text = document.createTextNode('');
-            body.appendChild(stream.text);
-        }
-        if (content.startsWith(stream.shown)) stream.text.appendData(content.slice(stream.shown.length));
-        else stream.text.data = content;
+        // Redrawn whole, so a code fence that has just opened or closed is
+        // drawn as one; the batcher keeps this to one redraw per frame.
+        renderReply(body, content);
         stream.shown = content;
 
         if (follow) scrollToBottom(messages);
@@ -542,6 +581,25 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     }
 
     return render;
+}
+
+/**
+ * Copy a code block's text, and say so on the button for a moment. The shared
+ * helper falls back to `execCommand` where the Clipboard API is missing.
+ * @param {any} button
+ */
+async function copyCode(button) {
+    let copied = false;
+    try {
+        await copyToClipboard(codeForCopyButton(button));
+        copied = true;
+    } catch (_) {
+        copied = false;
+    }
+    button.textContent = copied ? 'Copied' : 'Copy failed';
+    setTimeout(() => {
+        button.textContent = 'Copy';
+    }, 1500);
 }
 
 /** Grow the textarea with its content, up to the CSS max-height. */
