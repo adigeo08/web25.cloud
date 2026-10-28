@@ -26,6 +26,7 @@ import {
     WEBLLM_THINKING
 } from '../src/webllm/webllmConfig.js';
 import { MODE_SCHEMA, PLAN_SCHEMA, SHORT_SYSTEM_PROMPT } from '../src/webllm/webllmThinking.js';
+import { splitReply } from '../src/ui/webllm/replyFormat.js';
 import { openWebLLMHistory } from '../src/webllm/webllmHistoryStore.js';
 import { openWebLLMThoughts } from '../src/webllm/webllmThoughtStore.js';
 import { installFakeIndexedDb } from './helpers/fake-indexeddb.mjs';
@@ -881,6 +882,31 @@ test('Thinking: a JSON-schema plan, then each step with its own MDN lookup', asy
         { title: 'Clipboard API', url: 'https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API' }
     ]);
     assert.equal(reply.docContext, null, 'a step’s documentation is not carried past it');
+});
+
+test('Thinking: a step cut inside its code block closes it, so the next step’s snippet stays its own', async () => {
+    const { controller } = await session(
+        (messages, call, request) => {
+            if (request.response_format)
+                return { text: '{"steps": ["Write the ```html``` markup", "Add the script"]}' };
+            // Step 1 runs out of tokens inside its code block; step 2 is whole.
+            return call === 2
+                ? { text: '```html\n<form id="login">\n  <input type="email">', finish: 'length' }
+                : { text: '```js\nconst form = document.querySelector("#login");\n```' };
+        },
+        { replyMode: 'thinking' }
+    );
+    await controller.send('Make a login form');
+    const reply = lastReply(controller);
+    assert.deepEqual(splitReply(reply.content), [
+        {
+            type: 'text',
+            text: '**Plan**\n1. Write the html markup\n2. Add the script\n\n### Step 1/2: Write the html markup'
+        },
+        { type: 'code', lang: 'html', code: '<form id="login">\n  <input type="email">', closed: true },
+        { type: 'text', text: '### Step 2/2: Add the script' },
+        { type: 'code', lang: 'js', code: 'const form = document.querySelector("#login");', closed: true }
+    ]);
 });
 
 test('Thinking without a usable plan writes the task in one go', async () => {

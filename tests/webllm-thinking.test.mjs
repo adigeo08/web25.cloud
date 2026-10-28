@@ -356,6 +356,36 @@ test('a reply splits into text and fenced code, an unfinished fence included', (
     ]);
     assert.equal(safeLanguage('js" onload="x'), 'jsonloadx');
 });
+test('code blocks are found in the looser forms a small model writes them', () => {
+    const code = (lang, text, closed = true) => ({ type: 'code', lang, code: text, closed });
+    const text = (value) => ({ type: 'text', text: value });
+    const cases = [
+        // A fence opening at the end of a line of text.
+        [
+            'Here is the code: ```javascript\nfunction f() {}\n```\nDone.',
+            [text('Here is the code:'), code('javascript', 'function f() {}'), text('Done.')]
+        ],
+        // Code on the fence line itself.
+        ['```js const x = 1;\nconsole.log(x);\n```', [code('js', 'const x = 1;\nconsole.log(x);')]],
+        // A spaced language, and code after a spaced fence.
+        ['``` html\n<p>hi</p>\n```', [code('html', '<p>hi</p>')]],
+        ['``` const y = 2;\n```', [code('', 'const y = 2;')]],
+        // A fence indented inside a list: the indent comes off the code.
+        [
+            '1. Markup:\n    ```html\n    <form>\n      <input>\n    </form>\n    ```\n2. Next',
+            [text('1. Markup:'), code('html', '<form>\n  <input>\n</form>'), text('2. Next')]
+        ],
+        // The closing fence glued to the last line, and text after a fence.
+        ['```css\n.a { color: red; }```\nThat is all.', [code('css', '.a { color: red; }'), text('That is all.')]],
+        ['```py\nprint(1)\n``` That prints one.', [code('py', 'print(1)'), text('That prints one.')]],
+        // A whole block on one line.
+        ['Run ```npm install``` first.', [text('Run'), code('', 'npm install'), text('first.')]],
+        // Still streaming: code up to the end.
+        ['Start:\n```js\nlet a', [text('Start:'), code('js', 'let a', false)]]
+    ];
+    for (const [input, expected] of cases) assert.deepEqual(splitReply(input), expected, input);
+});
+
 test('a request can only shorten the profile’s reply limit', () => {
     assert.equal(replyLimit(null, 360), 360);
     assert.equal(replyLimit(256, 360), 256);

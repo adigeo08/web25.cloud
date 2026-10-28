@@ -59,6 +59,7 @@ import {
     MODE_SYSTEM_PROMPT,
     PLAN_SCHEMA,
     SHORT_SYSTEM_PROMPT,
+    closeOpenFence,
     formatPlan,
     formatRecall,
     parseModeDecision,
@@ -1219,6 +1220,14 @@ export class WebLLMController {
                     reply.content = reply.content.slice(0, start + result.keepChars).trimEnd();
                 }
                 looped = true;
+            }
+            // A step that ended inside a code block closes it, so the next
+            // step's heading and snippets are not drawn inside it.
+            const stepText = reply.content.slice(start);
+            const closed = closeOpenFence(stepText);
+            if (closed !== stepText) {
+                reply.content = reply.content.slice(0, start) + closed;
+                this.onChange(this.state, { type: 'delta', messageId: reply.id });
             }
 
             // Thought index+2: this step, as written.
