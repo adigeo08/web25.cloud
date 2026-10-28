@@ -909,21 +909,68 @@ test('Thinking: a step cut inside its code block closes it, so the next step’s
     ]);
 });
 
-test('Thinking without a usable plan writes the task in one go', async () => {
+test('Thinking always splits into steps locally, even without a usable plan from Llama', async () => {
+    // Each case: what Llama answered to the plan request, the request, and the steps found.
+    const cases = [
+        // A one-step plan: the request's own sentences become the steps.
+        [
+            '{"steps": ["only one"]}',
+            'Make a login form. Validate the email field.',
+            ['Make a login form.', 'Validate the email field.']
+        ],
+        // A list written as prose instead of JSON: its lines.
+        ['Plan:\n1. Write the markup\n2. Add the script', 'Build a page', ['Write the markup', 'Add the script']],
+        // Nothing usable at all: two general steps.
+        [
+            'not a plan',
+            'Write a debounce function in JavaScript',
+            [
+                'Write the main code for: Write a debounce function in JavaScript',
+                'Complete the remaining parts and show how to use it'
+            ]
+        ]
+    ];
+    for (const [answer, task, expected] of cases) {
+        const { controller, llm } = await session(
+            (messages, call, request) => ({ text: schemaOf(request) ? answer : `step${call - 1}` }),
+            { replyMode: 'thinking' }
+        );
+        await controller.send(task);
+        const reply = lastReply(controller);
+        assert.equal(reply.mode, 'thinking', task);
+        assert.equal(reply.steps, expected.length, task);
+        assert.ok(
+            reply.content.startsWith(`**Plan**\n${expected.map((step, i) => `${i + 1}. ${step}`).join('\n')}`),
+            task
+        );
+        // The plan request, then one request per step, each naming its step.
+        assert.equal(llm.state.requests.length, 1 + expected.length, task);
+        expected.forEach((step, index) => {
+            assert.ok(
+                llm.state.requests[index + 1].messages.at(-1).content.endsWith(`Now do step ${index + 1} only: ${step}`)
+            );
+        });
+    }
+});
+
+test('Thinking still writes its steps when the plan request itself fails', async () => {
     const { controller, llm } = await session(
-        (messages, call, request) => ({
-            text: schemaOf(request) ? '{"steps": ["only one"]}' : 'function debounce() {}'
-        }),
+        (messages, call, request) => {
+            if (schemaOf(request)) throw new Error('The grammar could not be compiled.');
+            return { text: `step${call - 1}` };
+        },
         { replyMode: 'thinking' }
     );
-    await controller.send('Write a debounce function in JavaScript');
+    await controller.send('Make a login form. Validate the email field.');
     const reply = lastReply(controller);
-    assert.equal(reply.mode, 'thinking');
-    assert.equal(reply.steps, 0);
-    assert.equal(reply.content, 'function debounce() {}');
-    assert.equal(llm.state.requests.length, 2);
-    assert.equal(llm.state.requests[1].messages.at(-1).content, 'Write a debounce function in JavaScript');
-    assert.match(llm.state.requests[1].messages[0].content, /Mode: thinking\. Complete the task/);
+    assert.equal(reply.error, null);
+    assert.equal(reply.finishReason, 'stop');
+    assert.equal(reply.steps, 2);
+    assert.match(
+        reply.content,
+        /### Step 1\/2: Make a login form\.[\s\S]*step1[\s\S]*### Step 2\/2: Validate the email field\.[\s\S]*step2/
+    );
+    assert.equal(llm.state.requests.length, 3);
 });
 
 test('Stop during a thinking reply ends it before the next step', async () => {

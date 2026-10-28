@@ -887,7 +887,10 @@ the public endpoint and the model itself could not be reached from the test envi
   guessed from keywords: on Auto, Llama answers `{"mode": "short"|"thinking"}` and the plan is
   `{"steps": [...]}`, both constrained to a JSON schema with WebLLM's `response_format` and read
   with `JSON.parse` (`src/webllm/webllmThinking.js`). An answer that is not a valid decision is
-  taken as Short; a plan with fewer than two steps means the task is written in one go.
+  taken as Short. The steps are always found locally by `splitIntoSteps`, on every Thinking reply:
+  Llama's JSON plan when it has two steps or more, else the list it wrote instead, else the
+  sentences of the request, else two general steps — so a Thinking reply is always written in
+  steps, even when the plan request fails.
 - **The sequence thinker** (`src/webllm/webllmThoughtStore.js`) keeps each Thinking reply as a
   sequence of thoughts in IndexedDB, per wallet (`web25-webllm-thoughts-<id>`). It is modelled on
   [durable-thinking](https://github.com/linxule/durable-thinking)'s `ThoughtStore`: numbered

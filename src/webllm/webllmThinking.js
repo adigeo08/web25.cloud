@@ -16,6 +16,9 @@
  *             lookup and the earlier thoughts it needs recalled from the
  *             thought store (see webllmThoughtStore.js). The token window is
  *             large in total, but each step stays inside the context window.
+ *             The steps are always found locally by `splitIntoSteps`, from
+ *             Llama's plan when it is usable and from the request otherwise,
+ *             so a Thinking reply is always written in steps.
  *
  * Pure functions; the controller runs the flow.
  */
@@ -90,8 +93,36 @@ export function parseModeDecision(text) {
 }
 
 /**
- * The plan's steps: strings only, trimmed, distinct, at most `maxSteps`.
- * Fewer than two is no plan.
+ * One step as it goes into the plan, the heading and the prompt: one line,
+ * at most 140 characters, without a fence (which would open a code block in
+ * the plan and the heading). Empty when there is nothing left of it.
+ * @param {any} value
+ */
+function cleanStep(value) {
+    if (typeof value !== 'string') return '';
+    return value.split('\n').join(' ').split('```').join('').trim().slice(0, 140);
+}
+
+/**
+ * Distinct, non-trivial steps, at most `maxSteps`.
+ * @param {any[]} candidates
+ * @param {number} maxSteps
+ */
+function distinctSteps(candidates, maxSteps) {
+    /** @type {string[]} */
+    const steps = [];
+    for (const candidate of candidates) {
+        const step = cleanStep(candidate);
+        if (step.length < 3 || steps.some((existing) => existing.toLowerCase() === step.toLowerCase())) continue;
+        steps.push(step);
+        if (steps.length >= maxSteps) break;
+    }
+    return steps;
+}
+
+/**
+ * The plan's steps from Llama's JSON answer: strings only, trimmed,
+ * distinct, at most `maxSteps`. Fewer than two is no plan.
  *
  * @param {string} text
  * @param {number} maxSteps
@@ -100,17 +131,84 @@ export function parseModeDecision(text) {
 export function parsePlan(text, maxSteps) {
     const raw = readJson(text)?.steps;
     if (!Array.isArray(raw)) return [];
-    /** @type {string[]} */
-    const steps = [];
-    for (const entry of raw) {
-        if (typeof entry !== 'string') continue;
-        // A fence in a step would open a code block in the plan and the heading.
-        const step = entry.split('\n').join(' ').split('```').join('').trim().slice(0, 140);
-        if (step.length < 3 || steps.some((existing) => existing.toLowerCase() === step.toLowerCase())) continue;
-        steps.push(step);
-        if (steps.length >= maxSteps) break;
-    }
+    const steps = distinctSteps(raw, maxSteps);
     return steps.length >= 2 ? steps : [];
+}
+
+/** A list marker at the start of a line: "1.", "2)", "-", "*", "•". */
+const LIST_MARKER = /^\s*(?:\d{1,2}[.)]|[-*•])\s+/;
+
+/**
+ * The lines of a plan Llama wrote as prose instead of JSON, without their
+ * list markers. Fewer than two is no plan.
+ * @param {string} text
+ * @param {number} maxSteps
+ */
+export function planLines(text, maxSteps) {
+    const lines = `${text || ''}`
+        .split('\n')
+        .filter((line) => LIST_MARKER.test(line))
+        .map((line) => line.replace(LIST_MARKER, ''));
+    const steps = distinctSteps(lines, maxSteps);
+    return steps.length >= 2 ? steps : [];
+}
+
+/**
+ * The parts of the user's own request: its lines, and its sentences. A
+ * request longer than `maxSteps` parts keeps the rest in its last step.
+ * @param {string} task
+ * @param {number} maxSteps
+ */
+export function taskParts(task, maxSteps) {
+    /** @type {string[]} */
+    const parts = [];
+    for (const line of `${task || ''}`.split('\n')) {
+        let current = '';
+        for (let i = 0; i < line.length; i += 1) {
+            current += line[i];
+            // A sentence ends at . ? ! or ; followed by a space.
+            if ('.?!;'.includes(line[i]) && (line[i + 1] === ' ' || line[i + 1] === '\t')) {
+                parts.push(current);
+                current = '';
+            }
+        }
+        parts.push(current);
+    }
+    const pieces = parts.map((part) => part.trim()).filter((part) => part.length >= 3);
+    if (pieces.length > maxSteps) pieces.splice(maxSteps - 1, pieces.length, pieces.slice(maxSteps - 1).join(' '));
+    const steps = distinctSteps(pieces, maxSteps);
+    return steps.length >= 2 ? steps : [];
+}
+
+/**
+ * Two steps any task can be written in, when nothing better is known.
+ * @param {string} task
+ */
+export function defaultSteps(task) {
+    const subject = cleanStep(task).slice(0, 80) || 'the task';
+    return [`Write the main code for: ${subject}`, 'Complete the remaining parts and show how to use it'];
+}
+
+/**
+ * The steps of a Thinking reply, found locally, on the CPU, every time:
+ *
+ *   plan     Llama's JSON plan, when it has two steps or more
+ *   lines    the list Llama wrote instead, when it did not answer in JSON
+ *   task     the lines and sentences of the user's own request
+ *   default  two general steps, so a Thinking reply always has steps
+ *
+ * @param {{ answer: string, task: string, maxSteps: number }} options
+ * @returns {{ steps: string[], source: 'plan'|'lines'|'task'|'default' }}
+ */
+export function splitIntoSteps({ answer, task, maxSteps }) {
+    const limit = Math.max(2, maxSteps);
+    const plan = parsePlan(answer, limit);
+    if (plan.length > 0) return { steps: plan, source: 'plan' };
+    const lines = planLines(answer, limit);
+    if (lines.length > 0) return { steps: lines, source: 'lines' };
+    const parts = taskParts(task, limit);
+    if (parts.length > 0) return { steps: parts, source: 'task' };
+    return { steps: defaultSteps(task), source: 'default' };
 }
 
 /** @param {number} index zero-based @param {number} total */
