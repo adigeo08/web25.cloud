@@ -63,8 +63,8 @@ import {
     formatPlan,
     formatRecall,
     parseModeDecision,
+    parsePlan,
     planInstruction,
-    splitIntoSteps,
     stepHeading,
     stepInstruction,
     stepMessage
@@ -1093,13 +1093,11 @@ export class WebLLMController {
     }
 
     /**
-     * A thinking answer, as a sequence of thoughts: the plan (thought 1), then
-     * each step (thoughts 2…N+1) in its own request with its own MDN lookup
-     * and the earlier thoughts recalled for it. Every thought is kept in the
-     * thought store. Llama is asked for the plan as a JSON schema answer, but
-     * the steps are always found locally by `splitIntoSteps` — from that plan
-     * when it is usable, from the request when it is not, or when the plan
-     * request failed — so a Thinking reply is always written in steps.
+     * A thinking answer, as a sequence of thoughts: the plan (thought 1, a
+     * JSON schema answer), then each step (thoughts 2…N+1) in its own request
+     * with its own MDN lookup and the earlier thoughts recalled for it. Every
+     * thought is kept in the thought store. Without a usable plan the task is
+     * written in one go.
      *
      * @param {any} engine
      * @param {ChatMessage[]} prior
@@ -1114,38 +1112,26 @@ export class WebLLMController {
         this.setThinking({ mode: 'thinking', phase: 'planning', step: 0, total: 0 });
         let planText = '';
         const planSystem = `${WEBLLM_SYSTEM_PROMPT}\n\n${planInstruction(limits.maxSteps)}`;
-        try {
-            const planned = await this.generate(
-                engine,
-                prior,
-                content,
-                (delta) => {
-                    planText += delta;
-                },
-                stale,
-                [planSystem],
-                { maxTokens: limits.planMaxTokens, schema: PLAN_SCHEMA }
-            );
-            if (planned.result?.finishReason === 'abort') return stale() ? null : { finishReason: 'abort' };
-        } catch (error) {
-            // A plan that could not be asked for is found locally instead —
-            // unless the engine itself is gone.
-            const kind = classifyError(error).kind;
-            if (stale() || kind === 'resources' || error?.name === 'WorkerCrashed') throw error;
-            this.log(`WebLLM plan request failed, splitting locally: ${error?.message || error}`);
-            planText = '';
-        }
+        const planned = await this.generate(
+            engine,
+            prior,
+            content,
+            (delta) => {
+                planText += delta;
+            },
+            stale,
+            [planSystem],
+            { maxTokens: limits.planMaxTokens, schema: PLAN_SCHEMA }
+        );
         if (stale()) return null;
-        if (this.stopRequested) return { finishReason: 'abort' };
+        if (this.stopRequested || planned.result?.finishReason === 'abort') return { finishReason: 'abort' };
 
-        // The steps are always found here, locally: from Llama's plan when it
-        // is usable, from the request itself when it is not.
-        const { steps, source } = splitIntoSteps({ answer: planText, task: content, maxSteps: limits.maxSteps });
-        this.log(`Thinking in ${steps.length} steps (from ${source === 'plan' ? "Llama's plan" : `the ${source}`}).`);
+        const plan = parsePlan(planText, limits.maxSteps);
+        const steps = plan.length > 0 ? plan : [content];
         const total = steps.length;
-        reply.steps = total;
+        reply.steps = plan.length;
         const append = this.appender(reply, stale);
-        append(formatPlan(steps));
+        if (plan.length > 0) append(formatPlan(plan));
 
         // Thought 1: the plan.
         const first = conversationId
@@ -1153,7 +1139,7 @@ export class WebLLMController {
                   conversationId,
                   messageId: reply.id,
                   sequenceTitle: content,
-                  thought: formatPlan(steps),
+                  thought: plan.length > 0 ? formatPlan(plan) : `Write the whole task in one step: ${content}`,
                   thoughtNumber: 1,
                   totalThoughts: total + 1,
                   nextThoughtNeeded: true,
@@ -1174,35 +1160,38 @@ export class WebLLMController {
             // Stop while the previous step was being saved.
             if (this.stopRequested) return { finishReason: 'abort' };
             // What the earlier steps wrote, without the plan the prompt repeats.
-            const written = reply.content.slice(formatPlan(steps).length);
+            const written = plan.length > 0 ? reply.content.slice(formatPlan(plan).length) : '';
 
             this.setThinking({ mode: 'thinking', phase: 'lookup', step: index + 1, total });
             const base = `${WEBLLM_SYSTEM_PROMPT}\n\n${stepInstruction(index, total)}`;
             // Each step is looked up on its own: its documentation is not carried to the next.
             const lookup = await this.lookupDocumentation(content, reply, stale, {
-                query: steps[index],
+                query: plan.length > 0 ? steps[index] : content,
                 system: base,
-                share: limits.stepDocShare
+                share: plan.length > 0 ? limits.stepDocShare : 1
             });
             if (stale()) return null;
             if (this.stopRequested) return { finishReason: 'abort' };
 
             this.setThinking({ mode: 'thinking', phase: 'recall', step: index + 1, total });
-            const recalled = await this.recallFor({
-                step: steps[index],
-                task: content,
-                conversationId,
-                sequenceId,
-                planThoughtId: first?.thought.id ?? null,
-                written
-            });
+            const recalled =
+                plan.length > 0
+                    ? await this.recallFor({
+                          step: steps[index],
+                          task: content,
+                          conversationId,
+                          sequenceId,
+                          planThoughtId: first?.thought.id ?? null,
+                          written
+                      })
+                    : '';
             if (stale()) return null;
             // Stop during the recall: the interrupt it sent had no generation to stop.
             if (this.stopRequested) return { finishReason: 'abort' };
 
             // The heading goes in only now, so a step stopped before it was
             // written leaves no empty heading behind.
-            append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
+            if (plan.length > 0) append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
             this.setThinking({ mode: 'thinking', phase: 'writing', step: index + 1, total });
             const withDocs = buildSystemPrompt(base, lookup);
             const message = stepMessage({ task: content, steps, index, recalled });
@@ -1246,7 +1235,7 @@ export class WebLLMController {
             if (sequenceId && text) {
                 await this.think({
                     sequenceId,
-                    thought: `${steps[index]}\n\n${text}`,
+                    thought: plan.length > 0 ? `${steps[index]}\n\n${text}` : text,
                     thoughtNumber: index + 2,
                     totalThoughts: total + 1,
                     nextThoughtNeeded: !stopped && index < total - 1,

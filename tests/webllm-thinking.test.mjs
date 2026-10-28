@@ -15,17 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
-import {
-    defaultSteps,
-    formatRecall,
-    parseModeDecision,
-    parsePlan,
-    planLines,
-    splitIntoSteps,
-    stepMessage,
-    tailTokens,
-    taskParts
-} from '../src/webllm/webllmThinking.js';
+import { formatRecall, parseModeDecision, parsePlan, stepMessage, tailTokens } from '../src/webllm/webllmThinking.js';
 import { estimateTokens, classifyError } from '../src/webllm/webllmProgress.js';
 import { safeLanguage, splitReply } from '../src/ui/webllm/replyFormat.js';
 import { jsonResponseFormat, replyLimit } from '../src/webllm/webllmEngineHost.js';
@@ -55,30 +45,6 @@ test('Llama’s structured answers are read as JSON, and anything else is no ans
     assert.deepEqual(jsonResponseFormat({ type: 'object' }), { type: 'json_object', schema: '{"type":"object"}' });
     assert.equal(jsonResponseFormat(null), null);
     assert.equal(jsonResponseFormat('{"type":"object"}'), null);
-});
-
-test('the steps of a Thinking reply are always found locally, with or without a plan', () => {
-    const split = (answer, task, maxSteps = 4) => splitIntoSteps({ answer, task, maxSteps });
-    assert.deepEqual(split('{"steps":["Markup","Script"]}', 'x'), { steps: ['Markup', 'Script'], source: 'plan' });
-    assert.deepEqual(split('Steps:\n1. Markup\n2) Script\n- Styles', 'x'), {
-        steps: ['Markup', 'Script', 'Styles'],
-        source: 'lines'
-    });
-    assert.deepEqual(split('{"steps":["one"]}', 'Make a form.\nValidate it; then style it.'), {
-        steps: ['Make a form.', 'Validate it;', 'then style it.'],
-        source: 'task'
-    });
-    assert.deepEqual(split('', 'Write a debounce function'), {
-        steps: defaultSteps('Write a debounce function'),
-        source: 'default'
-    });
-    // Always at least two steps, never more than allowed; a long request keeps its tail in the last step.
-    assert.deepEqual(taskParts('One. Two. Three. Four.', 3), ['One.', 'Two.', 'Three. Four.']);
-    assert.deepEqual(taskParts('Just one request', 4), []);
-    assert.deepEqual(planLines('Not a list\nat all', 4), []);
-    assert.equal(split('', 'x', 1).steps.length, 2);
-    // No fence survives into a step, whatever its source.
-    assert.ok(split('', 'Fix ```js``` code').steps.every((step) => !step.includes('```')));
 });
 
 test('a step sees the task, the plan and the earlier thoughts recalled for it', () => {
