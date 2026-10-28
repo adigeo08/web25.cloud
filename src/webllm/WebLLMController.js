@@ -316,10 +316,22 @@ export class WebLLMController {
             }
             this.thoughts = thoughts;
             // Thoughts of conversations deleted or expired while away go too.
-            await thoughts.purge({ keepConversationIds: new Set(this.state.conversations.map((entry) => entry.id)) });
+            await thoughts.purge({ keepConversationIds: this.conversationsInUse(this.state.conversations) });
         } catch (error) {
             this.log(`WebLLM thought store unavailable: ${error?.message || error}`);
         }
+    }
+
+    /**
+     * Conversations whose thoughts must stay: the listed ones, the open one,
+     * and the one a reply is being written in.
+     * @param {{ id: string }[]} listed
+     */
+    conversationsInUse(listed) {
+        const ids = new Set(listed.map((entry) => entry.id));
+        if (this.state.activeConversationId) ids.add(this.state.activeConversationId);
+        if (this.activeReply?.conversationId) ids.add(this.activeReply.conversationId);
+        return ids;
     }
 
     /** Re-read the list, which also drops conversations past retention. */
@@ -336,8 +348,9 @@ export class WebLLMController {
                 Object.assign(patch, { activeConversationId: null, messages: [] });
             }
             this.update(patch, { type: 'messages' });
-            // An expired conversation takes its thoughts with it.
-            await this.thoughts?.purge({ keepConversationIds: new Set(conversations.map((entry) => entry.id)) });
+            // An expired conversation takes its thoughts with it — never the
+            // one being written to, which this list may predate.
+            await this.thoughts?.purge({ keepConversationIds: this.conversationsInUse(conversations) });
         } catch (error) {
             this.log(`WebLLM chat history could not be read: ${error?.message || error}`);
         }
@@ -381,12 +394,13 @@ export class WebLLMController {
         const epoch = this.epoch;
         try {
             await this.history?.deleteConversation(conversationId);
-            await this.thoughts?.deleteConversation(conversationId);
         } catch (error) {
             this.log(`WebLLM conversation could not be deleted: ${error?.message || error}`);
             return;
         }
         if (epoch !== this.epoch) return;
+        // Its thoughts go too, best-effort: the conversation is gone either way.
+        void this.thoughts?.deleteConversation(conversationId)?.catch?.(() => {});
         const conversations = this.state.conversations.filter((entry) => entry.id !== conversationId);
         if (isActive) {
             this.update({ conversations, activeConversationId: null, messages: [] }, { type: 'messages' });
@@ -735,6 +749,11 @@ export class WebLLMController {
      * big it is left out; if the engine says the prompt does not fit (the
      * estimate is only an estimate), it is asked once more with less history.
      *
+     * Nothing is asked once Stop was pressed. Stop interrupts the engine, but
+     * an interrupt sent while nothing was generating — during a lookup, a
+     * recall or a save between two requests — has nothing to stop, so every
+     * request checks for it first and ends as stopped instead.
+     *
      * @param {any} engine
      * @param {ChatMessage[]} prior
      * @param {string} content
@@ -765,6 +784,7 @@ export class WebLLMController {
             // Nothing more to drop: a second attempt would be the same request.
             if (sent && plan.messages.length === sent.length) break;
             sent = plan.messages;
+            if (this.stopRequested) return { result: { finishReason: 'abort' }, system };
             try {
                 const result =
                     maxTokens || schema
@@ -838,7 +858,7 @@ export class WebLLMController {
         stale,
         { query = content, system = WEBLLM_SYSTEM_PROMPT, share = 1 } = {}
     ) {
-        if (!this.mdnClient || !this.state.settings.mdnEnabled) return null;
+        if (!this.mdnClient || !this.state.settings.mdnEnabled || this.stopRequested) return null;
         if (!isDevelopmentQuestion(query) && !isDevelopmentQuestion(content)) return null;
         // Leave the documentation no more than the budget can spare after the
         // system prompt and the question itself.
@@ -892,13 +912,17 @@ export class WebLLMController {
             // First, how to write it: the setting, or Llama's own choice.
             const { mode, auto } = await this.chooseMode(engine, prior, content, stale);
             if (stale()) return false;
-            reply.mode = mode;
-            reply.autoMode = auto;
-            const result = this.stopRequested
-                ? { finishReason: 'abort' }
-                : mode === 'thinking'
-                  ? await this.writeThinking(engine, prior, content, reply, stale, conversationId)
-                  : await this.writeShort(engine, prior, content, reply, stale);
+            /** @type {any} */
+            let result = { finishReason: 'abort' };
+            // Stopped before a word was written: no mode to show for it.
+            if (!this.stopRequested) {
+                reply.mode = mode;
+                reply.autoMode = auto;
+                result =
+                    mode === 'thinking'
+                        ? await this.writeThinking(engine, prior, content, reply, stale, conversationId)
+                        : await this.writeShort(engine, prior, content, reply, stale);
+            }
             if (stale() || !result) return false;
             this.finishReply(reply, result);
         } catch (error) {
@@ -975,7 +999,7 @@ export class WebLLMController {
             this.log(`WebLLM could not choose a reply mode: ${error?.message || error}`);
         }
         const mode = parseModeDecision(answer) || 'short';
-        this.log(`Reply mode (auto): ${mode}.`);
+        if (!this.stopRequested) this.log(`Reply mode (auto): ${mode}.`);
         return { mode, auto: true };
     }
 
@@ -1124,6 +1148,7 @@ export class WebLLMController {
         if (stale()) return null;
         const sequenceId = first?.sequenceId ?? null;
         reply.sequenceId = sequenceId;
+        if (this.stopRequested) return { finishReason: 'abort' };
 
         /** @type {any} */
         let last = { finishReason: 'stop' };
@@ -1131,9 +1156,10 @@ export class WebLLMController {
         /** @type {{ title: string, url: string }[]} */
         const sources = [];
         for (let index = 0; index < total; index += 1) {
+            // Stop while the previous step was being saved.
+            if (this.stopRequested) return { finishReason: 'abort' };
             // What the earlier steps wrote, without the plan the prompt repeats.
             const written = plan.length > 0 ? reply.content.slice(formatPlan(plan).length) : '';
-            if (plan.length > 0) append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
 
             this.setThinking({ mode: 'thinking', phase: 'lookup', step: index + 1, total });
             const base = `${WEBLLM_SYSTEM_PROMPT}\n\n${stepInstruction(index, total)}`;
@@ -1159,10 +1185,16 @@ export class WebLLMController {
                       })
                     : '';
             if (stale()) return null;
+            // Stop during the recall: the interrupt it sent had no generation to stop.
+            if (this.stopRequested) return { finishReason: 'abort' };
 
+            // The heading goes in only now, so a step stopped before it was
+            // written leaves no empty heading behind.
+            if (plan.length > 0) append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
             this.setThinking({ mode: 'thinking', phase: 'writing', step: index + 1, total });
             const withDocs = buildSystemPrompt(base, lookup);
             const message = stepMessage({ task: content, steps, index, recalled });
+            // The step's own text starts after its heading.
             const start = reply.content.length;
             const { result, system } = await this.generate(
                 engine,

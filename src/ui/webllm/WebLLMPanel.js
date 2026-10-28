@@ -12,6 +12,7 @@
  */
 
 import { describeProgress } from '../../webllm/webllmProgress.js';
+import { copyToClipboard } from '../ClipboardButton.js';
 import { codeForCopyButton, renderReply } from './replyFormat.js';
 import { createStreamBatcher } from './streamBatcher.js';
 
@@ -583,14 +584,14 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
 }
 
 /**
- * Copy a code block's text, and say so on the button for a moment.
+ * Copy a code block's text, and say so on the button for a moment. The shared
+ * helper falls back to `execCommand` where the Clipboard API is missing.
  * @param {any} button
  */
 async function copyCode(button) {
-    const text = codeForCopyButton(button);
     let copied = false;
     try {
-        await navigator.clipboard.writeText(text);
+        await copyToClipboard(codeForCopyButton(button));
         copied = true;
     } catch (_) {
         copied = false;

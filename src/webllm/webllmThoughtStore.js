@@ -300,8 +300,20 @@ export class WebLLMThoughtStore {
     constructor(db, { now = () => Date.now(), vectors = null, embed = embedText } = {}) {
         this.db = db;
         this.now = now;
-        /** idb-vector, once (and if) it loads. */
-        this.vectors = Promise.resolve(vectors).catch(() => null);
+        /**
+         * idb-vector, once (and if) it has loaded. Nothing waits for it: it
+         * comes from a CDN, and a slow or blocked download must not hold up a
+         * reply. Until it is here, thoughts are compared on the CPU directly.
+         * @type {VectorIndex|null}
+         */
+        this.vectors = null;
+        /** Settles when the vector store has loaded, or failed to. */
+        this.vectorsReady = Promise.resolve(vectors)
+            .then((loaded) => {
+                this.vectors = loaded || null;
+                return this.vectors;
+            })
+            .catch(() => null);
         this.embed = embed;
         /** Ordinals keep the order thoughts were written in, across sequences and sessions. */
         this.ordinal = 0;
@@ -478,7 +490,7 @@ export class WebLLMThoughtStore {
 
     /** Put a thought's vector in idb-vector. @param {ThoughtRecord} thought */
     async index(thought) {
-        const vectors = await this.vectors;
+        const vectors = this.vectors;
         if (!vectors) return null;
         try {
             return await vectors.insert({
@@ -643,7 +655,7 @@ export class WebLLMThoughtStore {
 
     /** @param {ThoughtRecord[]} thoughts */
     async unindex(thoughts) {
-        const vectors = await this.vectors;
+        const vectors = this.vectors;
         if (!vectors) return;
         for (const thought of thoughts) {
             if (thought.vectorKey === null || thought.vectorKey === undefined) continue;
@@ -669,7 +681,7 @@ export class WebLLMThoughtStore {
         const pool = candidates.filter((t) => t.conversationId === conversationId && !exclude.has(t.id));
         if (pool.length === 0) return [];
 
-        const vectors = await this.vectors;
+        const vectors = this.vectors;
         /** @type {Map<string, number>} */
         const scores = new Map();
         if (vectors) {

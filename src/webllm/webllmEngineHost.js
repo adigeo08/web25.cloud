@@ -183,6 +183,13 @@ export function createEngineHost({
     /** @type {Promise<void>|null} */
     let loading = null;
     let generating = false;
+    /**
+     * Stop was asked for during this generation. WebLLM clears its own
+     * interrupt flag when a stream starts, so an interrupt that lands while
+     * `create()` is still setting up would be lost; this one is re-applied
+     * on every chunk until the stream ends.
+     */
+    let interruptRequested = false;
 
     const reply = (requestId, value) => post({ type: 'result', requestId, ok: true, value });
     const fail = (requestId, error) => post({ type: 'result', requestId, ok: false, error: serializeError(error) });
@@ -244,6 +251,7 @@ export function createEngineHost({
         /** @type {import('./webllmLoopGuard.js').LoopVerdict|null} */
         let loop = null;
         for await (const chunk of stream) {
+            if (interruptRequested) void engine.interruptGenerate();
             const choice = chunk?.choices?.[0];
             // Chat chunks carry `delta.content`; text-completion chunks carry `text`.
             const text = choice?.delta?.content ?? choice?.text;
@@ -278,6 +286,7 @@ export function createEngineHost({
         if (!engine) throw new Error('The model is not loaded.');
         if (generating) throw new Error('A reply is already being generated.');
         generating = true;
+        interruptRequested = false;
         try {
             // What the official client sends — the messages and a stream —
             // with sampling from the chat config set at reload. The mobile
@@ -292,8 +301,11 @@ export function createEngineHost({
                 ...(maxTokens ? { max_tokens: maxTokens } : {}),
                 ...(responseFormat ? { response_format: responseFormat } : {})
             });
-            // Somebody asking for the same line five times is not a loop.
-            return await streamReply(requestId, stream, { allowRepeats: asksForRepetition(lastUserText(messages)) });
+            // Somebody asking for the same line five times is not a loop; nor
+            // is a grammar-constrained answer, which is short and structured.
+            return await streamReply(requestId, stream, {
+                allowRepeats: Boolean(responseFormat) || asksForRepetition(lastUserText(messages))
+            });
         } finally {
             generating = false;
         }
@@ -314,6 +326,7 @@ export function createEngineHost({
         if (generating) throw new Error('A reply is already being generated.');
         if (typeof partial !== 'string' || !partial) throw new Error('There is no reply to continue.');
         generating = true;
+        interruptRequested = false;
         try {
             const maxTokens = replyLimit(limits.maxTokens, requestedMax);
             const stream = await engine.completions.create({
@@ -356,6 +369,7 @@ export function createEngineHost({
                     );
                     break;
                 case 'interrupt':
+                    if (generating) interruptRequested = true;
                     engine?.interruptGenerate();
                     if (requestId !== undefined) reply(requestId, { interrupted: generating });
                     break;

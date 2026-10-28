@@ -26,6 +26,9 @@ import {
     WEBLLM_THINKING
 } from '../src/webllm/webllmConfig.js';
 import { MODE_SCHEMA, PLAN_SCHEMA, SHORT_SYSTEM_PROMPT } from '../src/webllm/webllmThinking.js';
+import { openWebLLMHistory } from '../src/webllm/webllmHistoryStore.js';
+import { openWebLLMThoughts } from '../src/webllm/webllmThoughtStore.js';
+import { installFakeIndexedDb } from './helpers/fake-indexeddb.mjs';
 import {
     CONTINUE_EXHAUSTED_NOTICE,
     LOOP_NOTICE,
@@ -116,11 +119,18 @@ function scriptedWebLLM(respond) {
 const turns = (messages) => messages.filter((message) => message.role !== 'system');
 
 /** The controller, wired to the scripted model through the real host and client. */
-async function session(respond, { profile, mdnClient, replyMode = 'short' } = {}) {
+async function session(respond, { profile, mdnClient, replyMode = 'short', wallet = null } = {}) {
     const llm = scriptedWebLLM(respond);
     const controller = new WebLLMController({
         ...(profile ? { profile } : {}),
         ...(mdnClient ? { mdnClient } : {}),
+        // With a wallet: the real history and thought stores, on the in-memory IndexedDB.
+        ...(wallet
+            ? {
+                  openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
+                  openThoughts: (walletAddress) => openWebLLMThoughts({ walletAddress })
+              }
+            : {}),
         detectWebGPU: async () => ({ supported: true, reason: null, vendor: 'test', description: 'gpu' }),
         swClient: {
             status: async () => ({ model: { state: 'absent', bytesCached: 0, bytesTotal: 0 } }),
@@ -132,7 +142,10 @@ async function session(respond, { profile, mdnClient, replyMode = 'short' } = {}
                 createPageTransport(({ post }) => createEngineHost({ post, loadLibrary: async () => llm.module }))
             )
     });
-    controller.setAllowed(true);
+    controller.setAllowed(true, { walletAddress: wallet });
+    if (wallet) {
+        while (controller.state.history !== 'ready' || !controller.thoughts) await tick();
+    }
     // Most tests pin the mode; the Auto tests choose it.
     await controller.setReplyMode(replyMode);
     await controller.activate();
@@ -944,5 +957,106 @@ test('Auto: an answer that is not a decision is taken as Short', async () => {
     await controller.send('What is a closure?');
     assert.equal(lastReply(controller).mode, 'short');
     assert.equal(lastReply(controller).content, 'A closure keeps its scope.');
+    assert.equal(llm.state.requests.length, 2);
+});
+
+// ── Stop, wherever it lands ──────────────────────────────────────────────────
+//
+// WebLLM clears its interrupt flag when a stream starts, so a Stop pressed
+// while nothing is generating has nothing to interrupt. Each case below once
+// let the reply carry on.
+
+test('Stop pressed while a request is being set up is not lost: the stream ends at once', async () => {
+    let controllerRef = null;
+    const long = filler('w', 5 * 300);
+    const { controller, llm } = await session(() => {
+        // `create()` is still running: the engine has not started streaming.
+        controllerRef.stop();
+        return { text: long };
+    });
+    controllerRef = controller;
+    await controller.send('Tell me about closures');
+    const reply = lastReply(controller);
+    assert.equal(reply.finishReason, 'abort');
+    assert.equal(reply.stopped, true);
+    assert.ok(llm.state.emitted <= 1, `${llm.state.emitted} pieces were streamed after Stop`);
+});
+
+test('Stop pressed before the first request asks the engine for nothing', async () => {
+    const { controller, llm } = await session(() => ({ text: 'never' }), { replyMode: 'auto' });
+    const sending = controller.send('Create a login form');
+    controller.stop();
+    await sending;
+    assert.equal(llm.state.requests.length, 0);
+    const reply = lastReply(controller);
+    assert.equal(reply.finishReason, 'abort');
+    assert.equal(reply.mode, null, 'a reply never written has no mode');
+});
+
+test('Stop during the recall of earlier thoughts writes no further step', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        const { controller, llm } = await session(
+            (messages, call, request) => ({
+                text: request.response_format ? '{"steps": ["Markup", "Script"]}' : `step${call - 1}`
+            }),
+            { replyMode: 'thinking', wallet: '0xabc' }
+        );
+        // Hold the recall for step 2 until Stop has been pressed.
+        let release;
+        const recall = controller.thoughts.recall.bind(controller.thoughts);
+        controller.thoughts.recall = async (options) => {
+            if (llm.state.requests.length >= 2) await new Promise((resolve) => (release = resolve));
+            return recall(options);
+        };
+        const sending = controller.send('Build a page');
+        while (!release) await tick();
+        assert.equal(controller.state.thinking.phase, 'recall');
+        controller.stop();
+        release();
+        await sending;
+
+        assert.equal(llm.state.requests.length, 2, 'the plan and step 1; step 2 was never asked for');
+        const reply = lastReply(controller);
+        assert.equal(reply.finishReason, 'abort');
+        assert.doesNotMatch(reply.content, /Step 2\/2/, 'no heading for a step that was not written');
+        // The thoughts that were thought are kept.
+        const history = await controller.thoughts.getHistory({ sequenceId: reply.sequenceId });
+        assert.deepEqual(
+            history.value.thoughts.map((t) => t.thoughtNumber),
+            [1, 2]
+        );
+    } finally {
+        fake.restore?.();
+    }
+});
+
+test('Stop during a step’s MDN lookup leaves no empty step heading', async () => {
+    let release;
+    const mdn = fakeMdn();
+    const search = mdn.search;
+    mdn.search = (query, signal) =>
+        query.includes('Clipboard')
+            ? new Promise((resolve, reject) => {
+                  release = resolve;
+                  signal?.addEventListener('abort', () =>
+                      reject(Object.assign(new Error('cancelled'), { kind: 'aborted' }))
+                  );
+              })
+            : search(query, signal);
+    const { controller, llm } = await session(
+        (messages, call, request) => ({
+            text: request.response_format ? '{"steps": ["Build the HTML form", "Use the Clipboard API"]}' : 'form'
+        }),
+        { replyMode: 'thinking', mdnClient: mdn }
+    );
+    const sending = controller.send('Make a form that copies its value with navigator.clipboard');
+    while (!release) await tick();
+    controller.stop();
+    await sending;
+    const reply = lastReply(controller);
+    assert.equal(reply.finishReason, 'abort');
+    assert.match(reply.content, /Step 1\/2/);
+    assert.doesNotMatch(reply.content, /Step 2\/2/);
     assert.equal(llm.state.requests.length, 2);
 });

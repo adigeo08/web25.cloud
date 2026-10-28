@@ -1164,6 +1164,7 @@ test(
                     walletAddress: '0xcdcd',
                     vectors: async (dbName) => new VectorDB({ dbName, objectStore: 'vectors', vectorPath: 'embedding' })
                 });
+                await store.vectorsReady;
                 const add = (sequenceId, thoughtNumber, thought) =>
                     store.appendThought({
                         conversationId: 'c1',

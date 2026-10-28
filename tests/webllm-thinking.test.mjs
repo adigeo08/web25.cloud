@@ -117,6 +117,7 @@ async function openStore({ vectors = null } = {}) {
         now: () => now,
         vectors: vectors ? async () => vectors : null
     });
+    await store.vectorsReady;
     return { store, advance: (ms) => (now += ms) };
 }
 
@@ -471,4 +472,29 @@ test('where the engine ran is remembered with the chat settings and asked for ne
 
     await start('page', false);
     assert.deepEqual(preferredSeen, [null, 'page']);
+});
+
+test('a vector store that never loads does not hold up a thought or a recall', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        const store = await openWebLLMThoughts({
+            walletAddress: WALLET,
+            // A CDN that never answers.
+            vectors: () => new Promise(() => {})
+        });
+        const appended = await store.appendThought({
+            conversationId: 'c1',
+            thought: 'The login form markup',
+            thoughtNumber: 1,
+            totalThoughts: 2,
+            nextThoughtNeeded: true
+        });
+        assert.equal(appended.ok, true);
+        assert.equal(appended.value.thought.vectorKey, null);
+        const recalled = await store.recall({ query: 'login form', conversationId: 'c1', limit: 1 });
+        assert.equal(recalled.length, 1, 'recalled on the CPU');
+        store.close();
+    } finally {
+        fake.restore?.();
+    }
 });
