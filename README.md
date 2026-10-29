@@ -894,16 +894,37 @@ the public endpoint and the model itself could not be reached from the test envi
   thoughts with `totalThoughts` and `nextThoughtNeeded`, revisions (`isRevision`,
   `revisesThought`), branches (`branchId`, `branchFromThought`, branch-scoped numbers),
   idempotent appends by `clientRequestId`, and `{ ok, value | error: { code, message } }`
-  results. The plan is thought 1 and each step the next one. Before a step is written, the
-  earlier thoughts most like it are recalled (this reply's first, then earlier answers in the
-  same conversation) and given to Llama instead of a blind tail of the text. Thoughts go when
-  their conversation is deleted or expires.
+  results. The plan is thought 1 and each step the next one. Before a step is written it is
+  given, within the profile's recall budget (900 tokens on desktop, 300 on mobile): **always the
+  latest completed step** (with the larger share of the budget), then up to 4 (mobile: 2) more
+  thoughts of the same conversation most like the step — this reply's or earlier answers', with
+  only a small preference for this reply (`CURRENT_SEQUENCE_BONUS`, 0.05) so an older, more
+  relevant thought still wins — above a similarity floor of 0.2, without duplicates, in the
+  order they were thought. Thoughts go when their conversation is deleted or expires.
+- **Steps that do not finish are not passed on as finished.** Each step's status comes from the
+  generation's finish reason and deterministic checks of its text as the model wrote it — a code
+  block left open, brackets / strings / comments left open in JS, CSS or JSON, `<script>`,
+  `<style>`, `<body>`… left open in HTML; the fence closed afterwards for the screen does not
+  count. A step cut at its token limit gets **one** continuation in place (450 tokens on
+  desktop, 160 on mobile) when the context window still has room. A step that is still cut off,
+  or ends with its code unfinished, keeps its text, gets a **⚠ Step N is incomplete** line and a
+  notice under the reply, is stored with `incomplete: true` — never recalled as earlier work —
+  and the next steps are told not to rely on it. A last step cut at the limit is left for
+  **Continue** instead. Loop-guarded steps keep their first pass and count as done only if it
+  holds together. No extra Llama request checks a step.
 - **Recall by similarity, on the CPU.** Each thought is embedded in plain JavaScript by feature
   hashing (`src/webllm/thoughtEmbedding.js`: words, word pairs and three-letter pieces, 256
   dimensions, no model and no download) and indexed in
   [idb-vector](https://github.com/PaulKinlan/idb-vector) 0.2.0 (`web25-webllm-thought-vectors-<id>`).
   idb-vector is loaded from jsDelivr only after both of its files match their pinned SHA-384
   (`src/webllm/idbVectorLoader.js`). Without it, the same embedding is compared in the page.
+  Indexing runs on a queue in the background and never holds up a step; each thought gets one
+  vector, and every thought still without one (written while idb-vector was loading, or in a
+  session where it never loaded) is backfilled as soon as it is there. Vectors of thoughts
+  deleted while idb-vector is away are kept as tombstones and deleted when it is back; recall
+  also drops stray vectors it meets. Version 2 of the database adds a `byConversation` index on
+  thoughts, so recall reads one conversation rather than the whole wallet; version 1 databases
+  are upgraded in place.
 - **GPU for Llama only.** Llama runs on WebGPU and nothing else: every adapter request asks
   for `high-performance` without a fallback, a CPU-emulated (fallback) adapter is reported as
   unsupported instead of being used, and the inference worker is used only when it reports a

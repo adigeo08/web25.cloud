@@ -260,6 +260,7 @@ test('recall finds the earlier thoughts most like a step, this sequence first, a
         await add('c1', current, 2, 'The login form: <form id="login"> with an email input and a submit button');
         await add('c1', current, 3, 'Styles for the page header and footer');
         await add('c2', null, 1, 'Another conversation about the login form email input');
+        await store.whenIndexed();
         assert.equal(vectors.rows.size, 5, 'every thought is indexed');
 
         const recalled = await store.recall({

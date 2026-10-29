@@ -1341,13 +1341,19 @@ test(
                 const first = await add(null, 1, 'Draw a bar chart on a canvas');
                 await add(first.value.sequenceId, 2, 'The login form with an email input and a submit button');
                 const third = await add(first.value.sequenceId, 3, 'Header and footer styles');
+                // Indexing runs in the background; the thought is stored already.
+                await store.whenIndexed();
+                const stored = await store.getThought({
+                    sequenceId: first.value.sequenceId,
+                    thoughtId: third.value.thought.id
+                });
                 const recalled = await store.recall({
                     query: 'Validate the email input of the login form',
                     conversationId: 'c1',
                     limit: 1
                 });
                 return {
-                    indexed: third.value.thought.vectorKey !== null,
+                    indexed: stored.value.thoughts[0].vectorKey !== null,
                     recalled: recalled.map((thought) => thought.thought),
                     databases: (await indexedDB.databases()).map((db) => db.name).sort()
                 };
@@ -1360,6 +1366,140 @@ test(
             assert.ok(result.databases.some((name) => name.startsWith('web25-webllm-thought-vectors-')));
             assert.deepEqual(problems, []);
             assert.deepEqual(external, [], 'nothing else left the page');
+        } finally {
+            await context.close();
+        }
+    }
+);
+
+test(
+    'a version 1 thought database is upgraded in place: its thoughts are kept, indexed late, and recalled by conversation',
+    { skip: SKIP },
+    async () => {
+        const { page, context, problems } = await openApp({ viewport: DESKTOP });
+        try {
+            await context.route('https://cdn.jsdelivr.net/npm/idb-vector@0.2.0/**', async (pending) => {
+                const file = new URL(pending.request().url()).pathname.replace('/npm/idb-vector@0.2.0/', '');
+                await pending.fulfill({
+                    status: 200,
+                    contentType: 'text/javascript',
+                    headers: { 'access-control-allow-origin': '*' },
+                    body: await readFile(new URL(`../node_modules/idb-vector/${file}`, import.meta.url))
+                });
+            });
+            const result = await page.evaluate(async () => {
+                const { thoughtsDatabaseName, openWebLLMThoughts } = await import('/src/webllm/webllmThoughtStore.js');
+                const { loadIdbVector } = await import('/src/webllm/idbVectorLoader.js');
+                const name = await thoughtsDatabaseName('0xeeee');
+                // The schema as version 1 wrote it, with thoughts stored before
+                // idb-vector ever loaded.
+                await new Promise((resolve, reject) => {
+                    const request = indexedDB.open(name, 1);
+                    request.onupgradeneeded = () => {
+                        const db = request.result;
+                        db.createObjectStore('sequences', { keyPath: 'sequenceId' }).createIndex(
+                            'byConversation',
+                            'conversationId'
+                        );
+                        const thoughts = db.createObjectStore('thoughts', { keyPath: 'id' });
+                        thoughts.createIndex('bySequence', 'sequenceId');
+                        thoughts.createIndex('byClientRequest', 'clientRequestId');
+                    };
+                    request.onsuccess = () => {
+                        const db = request.result;
+                        const tx = db.transaction(['sequences', 'thoughts'], 'readwrite');
+                        const base = {
+                            completed: false,
+                            thoughtCount: 1,
+                            lastThoughtNumber: 1,
+                            totalThoughts: 2,
+                            lastThoughtPreview: '',
+                            branches: [],
+                            createdAt: 1,
+                            updatedAt: 1,
+                            messageId: null,
+                            title: 't'
+                        };
+                        tx.objectStore('sequences').put({ ...base, sequenceId: 's1', conversationId: 'c1' });
+                        tx.objectStore('sequences').put({ ...base, sequenceId: 's2', conversationId: 'c2' });
+                        const thought = (id, sequenceId, conversationId, text, ordinal) => ({
+                            id,
+                            ordinal,
+                            sequenceId,
+                            conversationId,
+                            thought: text,
+                            thoughtNumber: 1,
+                            totalThoughts: 2,
+                            nextThoughtNeeded: true,
+                            isRevision: false,
+                            revisesThought: null,
+                            branchFromThought: null,
+                            branchId: 'main',
+                            needsMoreThoughts: false,
+                            clientRequestId: null,
+                            fingerprint: id,
+                            vectorKey: null,
+                            createdAt: 1
+                        });
+                        tx.objectStore('thoughts').put(
+                            thought('t1', 's1', 'c1', 'The login form with an email input and a submit button', 1)
+                        );
+                        tx.objectStore('thoughts').put(
+                            thought('t2', 's2', 'c2', 'Another conversation: the login form email input', 2)
+                        );
+                        tx.oncomplete = () => {
+                            db.close();
+                            resolve(undefined);
+                        };
+                        tx.onerror = () => reject(tx.error);
+                    };
+                    request.onerror = () => reject(request.error);
+                });
+                const VectorDB = await loadIdbVector();
+                const store = await openWebLLMThoughts({
+                    walletAddress: '0xeeee',
+                    vectors: async (dbName) => new VectorDB({ dbName, objectStore: 'vectors', vectorPath: 'embedding' })
+                });
+                await store.whenIndexed();
+                const upgraded = await new Promise((resolve) => {
+                    const tx = store.db.transaction(['thoughts'], 'readonly');
+                    resolve({
+                        version: store.db.version,
+                        indexes: [...tx.objectStore('thoughts').indexNames].sort(),
+                        stores: [...store.db.objectStoreNames].sort()
+                    });
+                });
+                const vectorKeys = await store.run(
+                    ['thoughts'],
+                    'readonly',
+                    (tx) =>
+                        new Promise((resolve) => {
+                            const request = tx.objectStore('thoughts').getAll();
+                            request.onsuccess = () => resolve(request.result.map((t) => t.vectorKey !== null));
+                        })
+                );
+                const recalled = await store.recall({
+                    query: 'validate the login form email',
+                    conversationId: 'c1',
+                    limit: 3
+                });
+                await store.deleteConversation('c1');
+                const after = await store.recall({
+                    query: 'validate the login form email',
+                    conversationId: 'c1',
+                    limit: 3
+                });
+                return { upgraded, vectorKeys, recalled: recalled.map((t) => t.id), after: after.length };
+            });
+            assert.deepEqual(result.upgraded, {
+                version: 2,
+                indexes: ['byClientRequest', 'byConversation', 'bySequence'],
+                stores: ['sequences', 'thoughts', 'vectorTombstones']
+            });
+            assert.deepEqual(result.vectorKeys, [true, true], 'thoughts from before are backfilled into idb-vector');
+            assert.deepEqual(result.recalled, ['t1'], 'only this conversation');
+            assert.equal(result.after, 0);
+            assert.deepEqual(problems, []);
         } finally {
             await context.close();
         }

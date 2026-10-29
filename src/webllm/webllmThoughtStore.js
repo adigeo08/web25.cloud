@@ -29,7 +29,20 @@
  * Recall: every thought is also embedded on the CPU (thoughtEmbedding.js) and
  * put in an idb-vector store, so a step can be shown the earlier thoughts most
  * like it rather than just the latest. Without idb-vector (offline, or a
- * failed hash check) recall falls back to recency. Nothing here uses the GPU.
+ * failed hash check) the same embedding is compared here, on the CPU. Nothing
+ * here uses the GPU.
+ *
+ * Indexing never holds up a thought. Vectors are written on a queue in the
+ * background, each only once (a thought that already has a `vectorKey` is
+ * skipped), and any thought still without one — appended while idb-vector was
+ * loading, or in a session where it never loaded — is backfilled as soon as it
+ * is there. A vector whose thought is deleted while idb-vector is away is
+ * remembered in `vectorTombstones` and deleted when it comes back, so the
+ * index does not keep vectors of thoughts that no longer exist.
+ *
+ * Version 2 of the database adds `thoughts.byConversation`, so recall reads
+ * one conversation's thoughts rather than the whole wallet's, and the
+ * `vectorTombstones` store. Version 1 databases are upgraded in place.
  *
  * One database per wallet, named after a hash of the address, like the chat
  * history.
@@ -39,7 +52,25 @@ import { embedText, similarity } from './thoughtEmbedding.js';
 
 export const WEBLLM_THOUGHTS_DB_PREFIX = 'web25-webllm-thoughts-';
 export const WEBLLM_THOUGHT_VECTORS_DB_PREFIX = 'web25-webllm-thought-vectors-';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+
+/**
+ * How much a thought of the sequence being written is preferred over the
+ * conversation's older ones, on top of its similarity (which runs about -0.1
+ * to 1). Small on purpose: an older thought that is clearly more relevant
+ * still wins.
+ */
+export const CURRENT_SEQUENCE_BONUS = 0.05;
+
+/**
+ * Below this similarity a thought is not recalled at all: unrelated texts
+ * score up to about 0.18 with the 256-slot feature hashing, related ones
+ * 0.4 and up.
+ */
+export const RECALL_MIN_SIMILARITY = 0.2;
+
+/** Embeddings kept in memory, so recall does not re-embed the same thoughts. */
+const EMBEDDING_CACHE_SIZE = 2000;
 
 export const MAIN_BRANCH_ID = 'main';
 export const MAX_THOUGHT_TEXT_LENGTH = 20000;
@@ -63,7 +94,7 @@ export const MAX_HISTORY_PAGE_SIZE = 100;
  *             thoughtNumber: number, totalThoughts: number, nextThoughtNeeded: boolean, isRevision: boolean,
  *             revisesThought: number|null, branchFromThought: number|null, branchId: string,
  *             needsMoreThoughts: boolean, clientRequestId: string|null, fingerprint: string,
- *             vectorKey: any, createdAt: number }} ThoughtRecord
+ *             vectorKey: any, createdAt: number, incomplete?: boolean }} ThoughtRecord
  * @typedef {{ branchId: string, parentBranchId: string, branchFromThought: number, createdAt: number }} BranchRecord
  * @typedef {{ sequenceId: string, conversationId: string, messageId: string|null, title: string,
  *             createdAt: number, updatedAt: number, completed: boolean, thoughtCount: number,
@@ -74,7 +105,10 @@ export const MAX_HISTORY_PAGE_SIZE = 100;
  *             thoughtNumber: number, totalThoughts: number, isRevision?: boolean,
  *             revisesThought?: number|null, branchFromThought?: number|null,
  *             branchFromBranchId?: string|null, branchId?: string, needsMoreThoughts?: boolean,
- *             clientRequestId?: string|null }} AppendThoughtCommand
+ *             clientRequestId?: string|null, incomplete?: boolean }} AppendThoughtCommand
+ *   `incomplete` marks a thought whose text was cut off (a step that ran out
+ *   of tokens, was stopped, or did not hold together): it is kept, and never
+ *   recalled as earlier work
  * @typedef {{ insert: (object: any) => Promise<any>, delete: (key: any) => Promise<any>,
  *             query: (vector: number[], options: { limit: number }) => Promise<{ object: any, key: any, similarity: number }[]> }} VectorIndex
  */
@@ -145,7 +179,8 @@ function normalizeCommand(command) {
         branchFromBranchId: command.branchFromBranchId ?? null,
         branchId: command.branchId || MAIN_BRANCH_ID,
         needsMoreThoughts: Boolean(command.needsMoreThoughts),
-        clientRequestId: command.clientRequestId ?? null
+        clientRequestId: command.clientRequestId ?? null,
+        incomplete: Boolean(command.incomplete)
     };
 }
 
@@ -163,10 +198,15 @@ function fingerprintOf(command) {
             command.branchFromThought,
             command.branchFromBranchId,
             command.branchId,
-            command.needsMoreThoughts
+            command.needsMoreThoughts,
+            // Only when set, so the fingerprints of earlier thoughts are unchanged.
+            ...(command.incomplete ? ['incomplete'] : [])
         ])
     );
 }
+
+/** A thought's text as compared for duplicates: case and spacing aside. @param {string} text */
+const normalizedText = (text) => `${text || ''}`.toLowerCase().split(/\s+/u).filter(Boolean).join(' ');
 
 /**
  * Which branch holds thought `number`, looking from `branchId` up through the
@@ -317,6 +357,75 @@ export class WebLLMThoughtStore {
         this.embed = embed;
         /** Ordinals keep the order thoughts were written in, across sequences and sessions. */
         this.ordinal = 0;
+        /** The indexing queue: one vector write at a time, never awaited by an append. */
+        this.indexing = Promise.resolve();
+        /** @type {Map<string, number[]>} thought id → embedding, most recently used last */
+        this.embeddings = new Map();
+        // As soon as idb-vector is here: drop the vectors of thoughts deleted
+        // while it was not, then index the thoughts that have none.
+        void this.vectorsReady.then((loaded) => {
+            if (loaded) this.enqueue(() => this.backfill());
+        });
+    }
+
+    /**
+     * Put work on the indexing queue. It runs after everything queued before
+     * it, never throws into the caller, and is what `whenIndexed` waits for.
+     * @param {() => Promise<any>} work
+     */
+    enqueue(work) {
+        const run = this.indexing.then(work).catch(() => {});
+        this.indexing = run;
+        return run;
+    }
+
+    /** Resolves once idb-vector has settled and every queued vector write has run. */
+    async whenIndexed() {
+        await this.vectorsReady;
+        let tail;
+        do {
+            tail = this.indexing;
+            await tail;
+        } while (tail !== this.indexing);
+    }
+
+    /**
+     * A thought's embedding, from the cache when it has been computed before.
+     * @param {ThoughtRecord} thought
+     */
+    embeddingOf(thought) {
+        const key = `${thought.id}:${thought.fingerprint}`;
+        const cached = this.embeddings.get(key);
+        if (cached) {
+            this.embeddings.delete(key);
+            this.embeddings.set(key, cached);
+            return cached;
+        }
+        const vector = this.embed(thought.thought);
+        this.embeddings.set(key, vector);
+        if (this.embeddings.size > EMBEDDING_CACHE_SIZE) {
+            this.embeddings.delete(/** @type {string} */ (this.embeddings.keys().next().value));
+        }
+        return vector;
+    }
+
+    /**
+     * One conversation's thoughts, through `thoughts.byConversation` — or, in
+     * a database that somehow lacks the index, by filtering all of them.
+     * @param {string} conversationId
+     * @returns {Promise<ThoughtRecord[]>}
+     */
+    async thoughtsOfConversation(conversationId) {
+        return this.run(['thoughts'], 'readonly', (tx) => {
+            const store = tx.objectStore('thoughts');
+            try {
+                return promisify(store.index('byConversation').getAll(conversationId));
+            } catch (_) {
+                return promisify(store.getAll()).then((rows) =>
+                    rows.filter((/** @type {ThoughtRecord} */ t) => t.conversationId === conversationId)
+                );
+            }
+        });
     }
 
     /**
@@ -470,31 +579,44 @@ export class WebLLMThoughtStore {
                 clientRequestId: command.clientRequestId,
                 fingerprint,
                 vectorKey: null,
-                createdAt: now
+                createdAt: now,
+                ...(command.incomplete ? { incomplete: true } : {})
             };
             await this.run(['sequences', 'thoughts'], 'readwrite', async (tx) => {
                 await promisify(tx.objectStore('sequences').put(sequence));
                 await promisify(tx.objectStore('thoughts').put(thought));
             });
 
-            // The thought is stored; its vector is an index, kept best-effort.
-            thought.vectorKey = await this.index(thought);
-            if (thought.vectorKey !== null) {
-                await this.run(['thoughts'], 'readwrite', (tx) => promisify(tx.objectStore('thoughts').put(thought)));
-            }
+            // The thought is stored; its vector is an index, written in the
+            // background so the next step does not wait for it.
+            if (this.vectors) this.enqueue(() => this.index(thought.id));
             return ok({ sequenceId, thought, sequence, deduplicated: false, reopened, numberReused });
         } catch (error) {
             return failure('storage_error', `The thought could not be stored: ${error?.message || error}`);
         }
     }
 
-    /** Put a thought's vector in idb-vector. @param {ThoughtRecord} thought */
-    async index(thought) {
+    /**
+     * Give one thought its vector, if it has none yet. Runs on the indexing
+     * queue. The thought is read again first, so a thought indexed meanwhile
+     * is not indexed twice, and again after the insert: a thought deleted
+     * while its vector was being written takes the vector with it.
+     *
+     * @param {string} thoughtId
+     * @returns {Promise<any>} the vector's key, or null
+     */
+    async index(thoughtId) {
         const vectors = this.vectors;
         if (!vectors) return null;
+        const read = () =>
+            this.run(['thoughts'], 'readonly', (tx) => promisify(tx.objectStore('thoughts').get(thoughtId)));
+        const thought = /** @type {ThoughtRecord|undefined} */ (await read());
+        if (!thought) return null;
+        if (thought.vectorKey !== null && thought.vectorKey !== undefined) return thought.vectorKey;
+        let key;
         try {
-            return await vectors.insert({
-                embedding: this.embed(thought.thought),
+            key = await vectors.insert({
+                embedding: this.embeddingOf(thought),
                 thoughtId: thought.id,
                 sequenceId: thought.sequenceId,
                 conversationId: thought.conversationId
@@ -502,6 +624,50 @@ export class WebLLMThoughtStore {
         } catch (_) {
             return null;
         }
+        if (key === null || key === undefined) return null;
+        const written = await this.run(['thoughts'], 'readwrite', async (tx) => {
+            const store = tx.objectStore('thoughts');
+            const current = await promisify(store.get(thoughtId));
+            if (!current) return false;
+            await promisify(store.put({ ...current, vectorKey: key }));
+            return true;
+        });
+        if (!written) await vectors.delete(key).catch(() => {});
+        return written ? key : null;
+    }
+
+    /**
+     * Catch the vector index up with the thought store: delete the vectors
+     * left behind by thoughts deleted while idb-vector was away, then index
+     * every thought that has no vector. Incremental — one thought at a time,
+     * each written as soon as it is done — and safe to run again.
+     * @returns {Promise<{ indexed: number, removed: number }>}
+     */
+    async backfill() {
+        const vectors = this.vectors;
+        if (!vectors) return { indexed: 0, removed: 0 };
+        let removed = 0;
+        const tombstones = await this.run(['vectorTombstones'], 'readonly', (tx) =>
+            promisify(tx.objectStore('vectorTombstones').getAll())
+        );
+        for (const { key } of tombstones) {
+            try {
+                await vectors.delete(key);
+                removed += 1;
+            } catch (_) {
+                continue;
+            }
+            await this.run(['vectorTombstones'], 'readwrite', (tx) =>
+                promisify(tx.objectStore('vectorTombstones').delete(key))
+            );
+        }
+        const all = await this.run(['thoughts'], 'readonly', (tx) => promisify(tx.objectStore('thoughts').getAll()));
+        let indexed = 0;
+        for (const thought of /** @type {ThoughtRecord[]} */ (all)) {
+            if (thought.vectorKey !== null && thought.vectorKey !== undefined) continue;
+            if ((await this.index(thought.id)) !== null) indexed += 1;
+        }
+        return { indexed, removed };
     }
 
     /** @param {string} sequenceId */
@@ -653,61 +819,143 @@ export class WebLLMThoughtStore {
         return purged;
     }
 
-    /** @param {ThoughtRecord[]} thoughts */
+    /**
+     * Remove deleted thoughts' vectors. With idb-vector away (still loading,
+     * or failed this session) their keys are kept as tombstones and deleted
+     * when it is back, so no vector outlives its thought.
+     * @param {ThoughtRecord[]} thoughts
+     */
     async unindex(thoughts) {
+        const keys = thoughts.map((thought) => thought.vectorKey).filter((key) => key !== null && key !== undefined);
+        for (const thought of thoughts) this.forgetEmbedding(thought);
+        if (keys.length === 0) return;
         const vectors = this.vectors;
-        if (!vectors) return;
-        for (const thought of thoughts) {
-            if (thought.vectorKey === null || thought.vectorKey === undefined) continue;
-            await vectors.delete(thought.vectorKey).catch(() => {});
+        const left = [];
+        for (const key of keys) {
+            if (!vectors) {
+                left.push(key);
+                continue;
+            }
+            try {
+                await vectors.delete(key);
+            } catch (_) {
+                left.push(key);
+            }
         }
+        if (left.length === 0) return;
+        await this.run(['vectorTombstones'], 'readwrite', async (tx) => {
+            for (const key of left) await promisify(tx.objectStore('vectorTombstones').put({ key }));
+        }).catch(() => {});
+    }
+
+    /** @param {ThoughtRecord} thought */
+    forgetEmbedding(thought) {
+        this.embeddings.delete(`${thought.id}:${thought.fingerprint}`);
     }
 
     /**
-     * The earlier thoughts most like `query`, from one conversation, the given
-     * sequence's first. Similarity comes from idb-vector's index; a thought it
-     * does not have (or every thought, without it) is compared here, on the
-     * CPU, with the same embedding. Returned oldest first, as they were thought.
+     * The earlier thoughts most like `query`, from one conversation.
+     *
+     * Only that conversation's thoughts are read (`byConversation`). Each is
+     * scored by similarity — from idb-vector's index where it has the thought,
+     * on the CPU with the same embedding where it does not — plus a small
+     * bonus for the sequence being written. Thoughts under `minSimilarity`,
+     * incomplete ones and duplicates of a better one are left out; `pinned`
+     * thoughts are always in, whatever they score. Returned oldest first, as
+     * they were thought.
+     *
+     * Vectors the index returns for thoughts this conversation no longer has
+     * — or a second vector for one thought — are deleted on the way.
      *
      * @param {{ query: string, conversationId: string, sequenceId?: string|null, limit?: number,
-     *           exclude?: Set<string>, filter?: ((thought: ThoughtRecord) => boolean)|null }} options
+     *           exclude?: Set<string>, filter?: ((thought: ThoughtRecord) => boolean)|null,
+     *           pinned?: string[], minSimilarity?: number, includeIncomplete?: boolean }} options
+     *   `limit` counts the thoughts chosen by similarity, pinned ones aside;
      *   `filter` narrows the candidates, e.g. to the project files the user saved
      * @returns {Promise<ThoughtRecord[]>}
      */
-    async recall({ query, conversationId, sequenceId = null, limit = 4, exclude = new Set(), filter = null }) {
-        const candidates = await this.run(['thoughts'], 'readonly', (tx) =>
-            promisify(tx.objectStore('thoughts').getAll())
-        );
+    async recall({
+        query,
+        conversationId,
+        sequenceId = null,
+        limit = 4,
+        exclude = new Set(),
+        filter = null,
+        pinned = [],
+        minSimilarity = RECALL_MIN_SIMILARITY,
+        includeIncomplete = false
+    }) {
+        const all = await this.thoughtsOfConversation(conversationId);
+        if (all.length === 0) return [];
+        const byId = new Map(all.map((t) => [t.id, t]));
+        const pinnedSet = new Set(pinned.filter((id) => byId.has(id)));
         /** @type {ThoughtRecord[]} */
-        const pool = candidates.filter(
-            (t) => t.conversationId === conversationId && !exclude.has(t.id) && (!filter || filter(t))
+        const pool = all.filter(
+            (t) =>
+                !pinnedSet.has(t.id) &&
+                !exclude.has(t.id) &&
+                (includeIncomplete || !t.incomplete) &&
+                (!filter || filter(t))
         );
-        if (pool.length === 0) return [];
 
-        const vectors = this.vectors;
+        const vector = this.embed(query);
         /** @type {Map<string, number>} */
         const scores = new Map();
-        if (vectors) {
+        const vectors = this.vectors;
+        if (vectors && pool.length > 0) {
             try {
-                const hits = await vectors.query(this.embed(query), { limit: Math.max(limit * 8, 32) });
-                for (const hit of hits) scores.set(hit.object?.thoughtId, hit.similarity);
+                const hits = await vectors.query(vector, { limit: Math.max(limit * 8, 32) });
+                const stale = [];
+                for (const hit of hits) {
+                    const thoughtId = hit.object?.thoughtId;
+                    if (hit.object?.conversationId !== conversationId) continue;
+                    const owner = byId.get(thoughtId);
+                    // A vector of a thought that is gone, or a second one for a
+                    // thought that already has its own: not this index's to keep.
+                    if (
+                        !owner ||
+                        (owner.vectorKey !== null && owner.vectorKey !== undefined && owner.vectorKey !== hit.key)
+                    ) {
+                        stale.push(hit.key);
+                        continue;
+                    }
+                    scores.set(thoughtId, hit.similarity);
+                }
+                if (stale.length > 0) {
+                    this.enqueue(async () => {
+                        for (const key of stale) await vectors.delete(key).catch(() => {});
+                    });
+                }
             } catch (_) {
                 scores.clear();
             }
         }
-        const vector = this.embed(query);
-        const scored = pool.map((t) => ({
-            thought: t,
-            score:
-                (scores.get(t.id) ?? similarity(vector, this.embed(t.thought))) +
-                // The current sequence's thoughts come before older sequences'.
-                (t.sequenceId === sequenceId ? 1 : 0)
-        }));
-        scored.sort((a, b) => b.score - a.score);
-        return scored
-            .slice(0, limit)
-            .map((entry) => entry.thought)
-            .sort((a, b) => a.ordinal - b.ordinal);
+
+        const scored = pool
+            .map((t) => {
+                const similar = scores.get(t.id) ?? similarity(vector, this.embeddingOf(t));
+                return {
+                    thought: t,
+                    similar,
+                    score: similar + (t.sequenceId === sequenceId ? CURRENT_SEQUENCE_BONUS : 0)
+                };
+            })
+            .filter((entry) => entry.similar >= minSimilarity)
+            // Best first; the later of two equally good thoughts wins.
+            .sort((a, b) => b.score - a.score || b.thought.ordinal - a.thought.ordinal);
+
+        const chosen = [...pinnedSet].map((id) => /** @type {ThoughtRecord} */ (byId.get(id)));
+        const seen = new Set(chosen.map((t) => normalizedText(t.thought)));
+        let picked = 0;
+        for (const { thought } of scored) {
+            if (picked >= limit) break;
+            const text = normalizedText(thought.thought);
+            if (seen.has(text)) continue;
+            seen.add(text);
+            chosen.push(thought);
+            picked += 1;
+        }
+        return chosen.sort((a, b) => a.ordinal - b.ordinal);
     }
 
     close() {
@@ -734,19 +982,38 @@ export async function openWebLLMThoughts({
     const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open(name, DB_VERSION);
         request.onupgradeneeded = (event) => {
-            const database = /** @type {any} */ (event.target).result;
+            const target = /** @type {any} */ (event.target);
+            const database = target.result;
             if (!database.objectStoreNames.contains('sequences')) {
                 database
                     .createObjectStore('sequences', { keyPath: 'sequenceId' })
                     .createIndex('byConversation', 'conversationId');
             }
-            if (!database.objectStoreNames.contains('thoughts')) {
-                const thoughts = database.createObjectStore('thoughts', { keyPath: 'id' });
-                thoughts.createIndex('bySequence', 'sequenceId');
-                thoughts.createIndex('byClientRequest', 'clientRequestId');
+            // Version 1 had the store without `byConversation`: it is added in
+            // place, over the thoughts already there.
+            const thoughts = database.objectStoreNames.contains('thoughts')
+                ? target.transaction.objectStore('thoughts')
+                : database.createObjectStore('thoughts', { keyPath: 'id' });
+            const indexes = thoughts.indexNames;
+            const has = (/** @type {string} */ index) =>
+                indexes
+                    ? typeof indexes.contains === 'function'
+                        ? indexes.contains(index)
+                        : [...indexes].includes(index)
+                    : false;
+            if (!has('bySequence')) thoughts.createIndex('bySequence', 'sequenceId');
+            if (!has('byClientRequest')) thoughts.createIndex('byClientRequest', 'clientRequestId');
+            if (!has('byConversation')) thoughts.createIndex('byConversation', 'conversationId');
+            if (!database.objectStoreNames.contains('vectorTombstones')) {
+                database.createObjectStore('vectorTombstones', { keyPath: 'key' });
             }
         };
-        request.onsuccess = () => resolve(request.result);
+        request.onsuccess = () => {
+            const opened = request.result;
+            // Another tab opening a newer version must not be blocked by this one.
+            opened.onversionchange = () => opened.close();
+            resolve(opened);
+        };
         request.onerror = () => reject(request.error);
     });
     // The vector store loads in the background; nothing waits for it but recall.

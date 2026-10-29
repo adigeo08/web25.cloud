@@ -297,9 +297,12 @@ export const WEBLLM_DEFAULT_REPLY_MODE = 'auto';
  *   shortMaxTokens    a short answer; Continue is offered if it is cut
  *   planMaxTokens     the structured plan a thinking answer starts with
  *   stepMaxTokens     each step of a thinking answer
+ *   stepContinueTokens  the one continuation a step cut at stepMaxTokens may get
  *   maxSteps          the most steps a plan may have
  *   recallTokens      how much of the earlier thoughts a step is shown
- *   recallLimit       how many earlier thoughts are recalled for a step
+ *   recallLimit       how many earlier thoughts are recalled for a step, by similarity,
+ *                     besides the latest completed step, which is always shown
+ *   recallMinSimilarity  below this a thought is not recalled (see RECALL_MIN_SIMILARITY)
  *   stepDocShare      the part of the profile's MDN budget one step's lookup may use
  */
 export const WEBLLM_THINKING = Object.freeze({
@@ -308,9 +311,11 @@ export const WEBLLM_THINKING = Object.freeze({
         shortMaxTokens: 360,
         planMaxTokens: 200,
         stepMaxTokens: 900,
+        stepContinueTokens: 450,
         maxSteps: 4,
         recallTokens: 900,
         recallLimit: 4,
+        recallMinSimilarity: 0.2,
         stepDocShare: 0.6
     }),
     mobile: Object.freeze({
@@ -318,9 +323,11 @@ export const WEBLLM_THINKING = Object.freeze({
         shortMaxTokens: 200,
         planMaxTokens: 140,
         stepMaxTokens: 256,
+        stepContinueTokens: 160,
         maxSteps: 3,
         recallTokens: 300,
         recallLimit: 2,
+        recallMinSimilarity: 0.2,
         stepDocShare: 0.6
     })
 });
