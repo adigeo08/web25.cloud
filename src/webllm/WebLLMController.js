@@ -62,17 +62,33 @@ import {
     closeOpenFence,
     formatPlan,
     formatRecall,
+    incompleteStepMarker,
     parseModeDecision,
     parsePlan,
     planInstruction,
+    stepConfirmed,
     stepHeading,
     stepInstruction,
-    stepMessage
+    stepMessage,
+    stepStatus
 } from './webllmThinking.js';
 
 /** Said under a Thinking reply when one of its steps was cut for repeating itself. */
 export const STEP_LOOP_NOTICE =
     'A step started repeating itself and was cut short; the remaining steps were still written.';
+
+/**
+ * Said under a Thinking reply with steps that did not finish. Each such step
+ * also carries its own line in the reply; the next steps are not shown its code.
+ * @param {number[]} steps one-based
+ */
+export function stepIncompleteNotice(steps) {
+    const one = steps.length === 1;
+    return (
+        `${one ? `Step ${steps[0]}` : `Steps ${steps.join(', ')}`} did not finish and ${one ? 'is' : 'are'} ` +
+        `marked incomplete; the remaining steps were still written without relying on ${one ? 'it' : 'them'}.`
+    );
+}
 
 /** One download per browser, however many WEB25 tabs are open. */
 export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
@@ -1014,9 +1030,45 @@ export class WebLLMController {
      * @param {() => boolean} stale
      * @returns {Promise<any>} how the reply ended; null once stale
      */
+    /**
+     * The project files the user saved from the canvas that look most like
+     * `query`, recalled from the thought store (idb-vector). A Thinking reply
+     * recalls them with every other thought; a short one gets only these.
+     * @param {string} query
+     * @returns {Promise<string>} '' when there are none
+     */
+    async recallProjectFiles(query) {
+        const conversationId = this.state.activeConversationId;
+        if (!this.thoughts || !conversationId) return '';
+        try {
+            const isFile = (/** @type {any} */ thought) =>
+                `${thought?.clientRequestId || ''}`.startsWith('project-file:');
+            const recalled = await this.thoughts.recall({
+                query,
+                conversationId,
+                limit: Math.min(2, this.thinking.recallLimit),
+                minSimilarity: this.thinking.recallMinSimilarity,
+                filter: isFile
+            });
+            const files = (Array.isArray(recalled) ? recalled : []).filter(isFile);
+            return formatRecall(
+                files.map((file) => ({ label: 'Project file', text: file.thought })),
+                this.thinking.recallTokens
+            );
+        } catch (error) {
+            this.log(`WebLLM project files could not be recalled: ${error?.message || error}`);
+            return '';
+        }
+    }
+
     async writeShort(engine, prior, content, reply, stale) {
         this.setThinking({ mode: 'short', phase: 'lookup', step: 0, total: 0 });
-        const base = SHORT_SYSTEM_PROMPT;
+        const files = await this.recallProjectFiles(content);
+        if (stale()) return null;
+        // With the files when they fit, without them when they do not.
+        const base = files
+            ? `${SHORT_SYSTEM_PROMPT}\n\nThe user's project, as saved in the canvas:\n${files}`
+            : SHORT_SYSTEM_PROMPT;
         const lookup = await this.lookupDocumentation(content, reply, stale, { system: base });
         if (stale()) return null;
         // Stop during the lookup: nothing was generated.
@@ -1029,7 +1081,7 @@ export class WebLLMController {
             content,
             this.appender(reply, stale),
             stale,
-            lookup ? [withDocs, base] : [base],
+            [...new Set(lookup ? [withDocs, base, SHORT_SYSTEM_PROMPT] : [base, SHORT_SYSTEM_PROMPT])],
             { maxTokens: this.thinking.shortMaxTokens }
         );
         if (stale()) return null;
@@ -1056,14 +1108,19 @@ export class WebLLMController {
     }
 
     /**
-     * What a step is shown of the earlier thinking: the thoughts most like it,
-     * from this sequence first and then this conversation's earlier ones —
-     * or, without a thought store, the end of what this reply has written.
+     * What a step is shown of the earlier thinking: always the latest
+     * completed step, then the thoughts of this conversation most like the
+     * step — this reply's and earlier answers' — above the similarity floor,
+     * without duplicates, in the order they were thought. Steps that did not
+     * finish are never recalled as earlier work. Without a thought store: the
+     * end of what this reply's completed steps wrote.
      *
      * @param {{ step: string, task: string, conversationId: string|null, sequenceId: string|null,
-     *           planThoughtId: string|null, written: string }} options
+     *           planThoughtId: string|null, written: string,
+     *           pinned?: { id: string|null, number: number, text: string }|null }} options
+     *   `written` is the completed steps' text; `pinned` the latest completed step
      */
-    async recallFor({ step, task, conversationId, sequenceId, planThoughtId, written }) {
+    async recallFor({ step, task, conversationId, sequenceId, planThoughtId, written, pinned = null }) {
         const budget = this.thinking.recallTokens;
         if (this.thoughts && conversationId) {
             try {
@@ -1072,24 +1129,56 @@ export class WebLLMController {
                     conversationId,
                     sequenceId,
                     limit: this.thinking.recallLimit,
+                    minSimilarity: this.thinking.recallMinSimilarity,
+                    pinned: pinned?.id ? [pinned.id] : [],
                     // The plan is in the step's prompt already.
                     exclude: new Set(planThoughtId ? [planThoughtId] : [])
                 });
-                return formatRecall(
-                    thoughts.map((thought) => ({
-                        label:
-                            thought.sequenceId === sequenceId
-                                ? `Thought ${thought.thoughtNumber}`
-                                : 'From an earlier answer in this conversation',
-                        text: thought.thought
-                    })),
-                    budget
-                );
+                const entries = thoughts.map((thought) => ({
+                    label:
+                        thought.sequenceId === sequenceId
+                            ? `Thought ${thought.thoughtNumber}`
+                            : 'From an earlier answer in this conversation',
+                    text: thought.thought,
+                    // The step just before gets the larger share of the budget.
+                    weight: pinned?.id && thought.id === pinned.id ? 2 : 1
+                }));
+                // Kept from this reply even if the store did not keep it.
+                if (pinned && !thoughts.some((thought) => thought.id === pinned.id)) {
+                    entries.push({ label: `Thought ${pinned.number}`, text: pinned.text, weight: 2 });
+                }
+                return formatRecall(entries, budget);
             } catch (error) {
                 this.log(`WebLLM thoughts could not be recalled: ${error?.message || error}`);
             }
         }
         return formatRecall(written.trim() ? [{ label: 'Earlier steps', text: written }] : [], budget);
+    }
+
+    /**
+     * The one continuation a step cut at its token limit may get: the step's
+     * own request, with what it wrote so far as the start of the answer, if
+     * that still fits the context window. Streams into the reply like the
+     * step did. Null when there is no room, no text yet, or it failed — the
+     * step then stays truncated, and is marked so.
+     *
+     * @param {any} engine
+     * @param {{ prior: ChatMessage[], message: string, system: string, partial: string,
+     *           append: (delta: string) => void, stale: () => boolean }} options
+     */
+    async continueStep(engine, { prior, message, system, partial, append, stale }) {
+        if (typeof engine?.continue !== 'function' || !partial.trim() || this.stopRequested) return null;
+        const budget = this.profile.promptTokenBudget - estimateTokens(partial) - WEBLLM_MESSAGE_FRAMING_TOKENS;
+        const plan = this.planPrompt(prior, message, budget, system);
+        if (!plan.fits) return null;
+        try {
+            return await engine.continue(plan.messages, partial, append, {
+                maxTokens: this.thinking.stepContinueTokens
+            });
+        } catch (error) {
+            if (!stale()) this.log(`WebLLM step continuation failed: ${classifyError(error).detail}`);
+            return null;
+        }
     }
 
     /**
@@ -1156,11 +1245,15 @@ export class WebLLMController {
         let looped = false;
         /** @type {{ title: string, url: string }[]} */
         const sources = [];
+        /** Zero-based steps that did not finish; they are not built on. @type {number[]} */
+        const incomplete = [];
+        /** The completed steps as written, for recall without a thought store. @type {string[]} */
+        const confirmed = [];
+        /** The latest completed step, always shown to the next. */
+        let pinned = /** @type {{ id: string|null, number: number, text: string }|null} */ (null);
         for (let index = 0; index < total; index += 1) {
             // Stop while the previous step was being saved.
             if (this.stopRequested) return { finishReason: 'abort' };
-            // What the earlier steps wrote, without the plan the prompt repeats.
-            const written = plan.length > 0 ? reply.content.slice(formatPlan(plan).length) : '';
 
             this.setThinking({ mode: 'thinking', phase: 'lookup', step: index + 1, total });
             const base = `${WEBLLM_SYSTEM_PROMPT}\n\n${stepInstruction(index, total)}`;
@@ -1182,7 +1275,8 @@ export class WebLLMController {
                           conversationId,
                           sequenceId,
                           planThoughtId: first?.thought.id ?? null,
-                          written
+                          written: confirmed.join('\n\n'),
+                          pinned
                       })
                     : '';
             if (stale()) return null;
@@ -1194,10 +1288,10 @@ export class WebLLMController {
             if (plan.length > 0) append(`\n\n${stepHeading(index, total, steps[index])}\n\n`);
             this.setThinking({ mode: 'thinking', phase: 'writing', step: index + 1, total });
             const withDocs = buildSystemPrompt(base, lookup);
-            const message = stepMessage({ task: content, steps, index, recalled });
+            const message = stepMessage({ task: content, steps, index, recalled, incomplete });
             // The step's own text starts after its heading.
             const start = reply.content.length;
-            const { result, system } = await this.generate(
+            const generated = await this.generate(
                 engine,
                 prior,
                 message,
@@ -1207,20 +1301,43 @@ export class WebLLMController {
                 { maxTokens: limits.stepMaxTokens }
             );
             if (stale()) return null;
+            const { system } = generated;
             if (lookup && system === withDocs) {
                 for (const source of lookup.sources) {
                     if (!sources.some((entry) => entry.url === source.url)) sources.push(source);
                 }
                 reply.sources = [...sources];
             }
+
+            // Cut at the step's token limit: one continuation, in place, if it fits.
+            let result = generated.result;
+            if (result?.finishReason === 'length') {
+                const more = await this.continueStep(engine, {
+                    prior,
+                    message,
+                    system,
+                    partial: reply.content.slice(start),
+                    append,
+                    stale
+                });
+                if (stale()) return null;
+                if (more) result = more;
+            }
+
             const stopped = result?.finishReason === 'abort' || this.stopRequested;
             if (result?.finishReason === 'loop') {
-                // Keep this step's first pass and go on with the next one.
+                // Keep this step's first pass (a continuation counts from the
+                // step's start too) and go on with the next one.
                 if (typeof result.keepChars === 'number') {
                     reply.content = reply.content.slice(0, start + result.keepChars).trimEnd();
                 }
                 looped = true;
             }
+            // Judged on the text as the model wrote it, before any fence is
+            // closed for the screen: a closed fence is not finished code.
+            const status = stepStatus(result?.finishReason, reply.content.slice(start), { stopped });
+            const done = stepConfirmed(status);
+
             // A step that ended inside a code block closes it, so the next
             // step's heading and snippets are not drawn inside it.
             const stepText = reply.content.slice(start);
@@ -1229,24 +1346,41 @@ export class WebLLMController {
                 reply.content = reply.content.slice(0, start) + closed;
                 this.onChange(this.state, { type: 'delta', messageId: reply.id });
             }
-
-            // Thought index+2: this step, as written.
             const text = reply.content.slice(start).trim();
+            const isLast = index === total - 1;
+            if (!done && !stopped) {
+                incomplete.push(index);
+                // Said in the reply itself. Not for a last step cut at the
+                // limit: Continue picks that one up where it stopped.
+                if (!(status === 'truncated' && isLast)) append(incompleteStepMarker(status, index, total));
+            }
+
+            // Thought index+2: this step, as written — marked when it did not finish.
+            const thoughtText = plan.length > 0 ? `${steps[index]}\n\n${text}` : text;
             if (sequenceId && text) {
-                await this.think({
+                const saved = await this.think({
                     sequenceId,
-                    thought: plan.length > 0 ? `${steps[index]}\n\n${text}` : text,
+                    thought: thoughtText,
                     thoughtNumber: index + 2,
                     totalThoughts: total + 1,
                     nextThoughtNeeded: !stopped && index < total - 1,
-                    clientRequestId: `${reply.id}:${index + 2}`
+                    clientRequestId: `${reply.id}:${index + 2}`,
+                    ...(done ? {} : { incomplete: true })
                 });
                 if (stale()) return null;
+                if (done) pinned = { id: saved?.thought.id ?? null, number: index + 2, text: thoughtText };
+            } else if (done && text) {
+                pinned = { id: null, number: index + 2, text: thoughtText };
+            }
+            if (done && text) {
+                confirmed.push(plan.length > 0 ? `${stepHeading(index, total, steps[index])}\n\n${text}` : text);
             }
             if (stopped) return { ...result, finishReason: 'abort' };
             last = result?.finishReason === 'loop' ? { ...result, finishReason: 'stop' } : result;
         }
-        if (looped) reply.notice = STEP_LOOP_NOTICE;
+        const marked = incomplete.filter((index) => !(index === total - 1 && last?.finishReason === 'length'));
+        if (marked.length > 0) reply.notice = stepIncompleteNotice(marked.map((index) => index + 1));
+        else if (looped) reply.notice = STEP_LOOP_NOTICE;
         return last;
     }
 

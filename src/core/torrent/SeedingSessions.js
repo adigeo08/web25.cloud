@@ -419,6 +419,15 @@ export async function resumeSeedingSession(record) {
 export async function restoreSeedingSessions() {
     if (!this.clientReady || !this.client) return [];
 
+    // Sessions saved before payloads lived in OPFS move into their
+    // repositories first, once; one that cannot move keeps its bytes inline.
+    try {
+        const moved = await this.seedingStore().migrateToWorkspace?.();
+        if (moved) this.log(`Moved ${moved} seeding session payload(s) into OPFS repositories.`);
+    } catch (error) {
+        this.log(`Seeding sessions stay in IndexedDB for now: ${error.message}`);
+    }
+
     let stored = [];
     try {
         stored = await this.seedingStore().list();
@@ -686,7 +695,8 @@ export async function applyRemoteSeedingChange(kind, hash) {
 export async function listSeedingSessionViews() {
     let records = [];
     try {
-        records = await this.seedingStore().list();
+        // What the cards show is in the record; the bytes are not needed.
+        records = await this.seedingStore().list({ payload: false });
     } catch (error) {
         this.log(`Seeding sessions could not be listed: ${error.message}`);
         return [];
@@ -700,6 +710,17 @@ export async function listSeedingSessionViews() {
             (right.savedAt || Date.parse(right.createdAt || '') || 0) -
             (left.savedAt || Date.parse(left.createdAt || '') || 0)
     );
+
+    // The commit each page's repository is at, for the payloads kept in OPFS.
+    const heads = new Map();
+    for (const record of ordered) {
+        if (record.payloadStorage !== 'opfs') continue;
+        try {
+            heads.set(record.hash, (await this.seedingStore().repositoryHead?.(record.hash)) || null);
+        } catch (_) {
+            heads.set(record.hash, null);
+        }
+    }
 
     // Who is signed in right now, not who was when the record was written. A
     // publisher who reseeds their own site from a copy this browser kept is
@@ -743,6 +764,9 @@ export async function listSeedingSessionViews() {
             // the browser has no identity to recognise.
             ownPublisher: sameAddress(record.deploy?.signedBy, identity),
             paused: record.paused === true,
+            // The repository the payload is committed to, when it lives in
+            // OPFS: the commit is what isomorphic-git sees for this site.
+            git: record.payloadStorage === 'opfs' ? { commit: heads.get(record.hash) || null } : null,
             // Paused is a decision, not a failure: it reads differently on the
             // card and it is the state a reload preserves.
             state: error ? 'error' : torrent ? 'seeding' : record.paused === true ? 'paused' : 'stopped',

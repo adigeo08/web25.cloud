@@ -364,6 +364,18 @@ function buildCard(session, openHashes) {
     );
     facts.appendChild(factRow('Signature status', session.signatureStatus || 'VERIFIED'));
     facts.appendChild(factRow('Deployed', formatDate(session.createdAt)));
+    // Only for a payload kept in OPFS: that is what makes it a repository.
+    if (session.git) {
+        facts.appendChild(
+            factRow(
+                'Git repository',
+                session.git.commit
+                    ? `/web25/pages/${session.hash} · ${session.git.commit.slice(0, 7)}`
+                    : `/web25/pages/${session.hash} · not committed yet`,
+                { code: true }
+            )
+        );
+    }
     body.appendChild(facts);
 
     const actions = el('div', 'page-card-actions');

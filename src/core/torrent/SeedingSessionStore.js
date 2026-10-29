@@ -19,7 +19,20 @@
  * record stays, marked paused, and Resume puts it back on the air), or the
  * publisher presses Delete website (the record goes, payload and all). Signing
  * out does not end it, and neither does clearing the site cache.
+ *
+ * Where the bytes live: in OPFS, as a git repository per site
+ * (`/web25/pages/<hash>`, see `GitWorkspace`), whenever the browser can write
+ * there. The IndexedDB record then keeps everything but the bytes — the
+ * ordered file list with each file's type and size — and is marked
+ * `payloadStorage: 'opfs'`; `get` and `list` put the bytes back, so nothing
+ * that reads a record can tell the difference. Every write of a payload is
+ * also committed, in the background: a deployment and a reseed both leave
+ * history in the repository, and neither waits for git to load to be saved.
+ * Without OPFS, or for a payload whose paths cannot be stored as a tree, the
+ * bytes stay inline in the record exactly as before.
  */
+
+import { getGitWorkspace, safeTreePath } from '../../storage/GitWorkspace.js';
 
 const DB_NAME = 'web25-seeding';
 const STORE_SESSIONS = 'sessions';
@@ -44,6 +57,8 @@ const STORE_SESSIONS = 'sessions';
  *   files: SeedingPayloadFile[],
  *   paused?: boolean,
  *   pausedAt?: number|null,
+ *   reseeded?: boolean,
+ *   payloadStorage?: 'opfs',
  *   deploy: {
  *     url: string,
  *     signedBy: string,
@@ -56,10 +71,128 @@ const STORE_SESSIONS = 'sessions';
  * }} SeedingSessionRecord
  */
 
+/** @param {any} value @returns {Uint8Array} */
+function toBytes(value) {
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    if (Array.isArray(value)) return Uint8Array.from(value);
+    return new Uint8Array(0);
+}
+
+/**
+ * Whether these payload files can be a tree: every path stored as itself, and
+ * no path twice. Order is kept by the record, not by the tree.
+ * @param {{ path: string }[]} files
+ */
+/** A record with its bytes inline, nothing claiming they are elsewhere. @param {any} record */
+function inline(record) {
+    if (record?.payloadStorage === undefined && record?.git === undefined) return record;
+    const rest = { ...record };
+    delete rest.payloadStorage;
+    delete rest.git;
+    return rest;
+}
+
+function storableAsTree(files) {
+    const seen = new Set();
+    for (const file of files) {
+        if (safeTreePath(file.path) !== file.path || seen.has(file.path)) return false;
+        seen.add(file.path);
+    }
+    return true;
+}
+
 export default class SeedingSessionStore {
-    constructor() {
+    /**
+     * @param {{ workspace?: import('../../storage/GitWorkspace.js').GitWorkspace|null }} [options]
+     *   where payloads go; null keeps every payload inline in IndexedDB
+     */
+    constructor({ workspace } = {}) {
         /** @type {IDBDatabase|null} */
         this._db = null;
+        this._workspace = workspace === undefined ? null : workspace;
+        this._workspaceDefault = workspace === undefined;
+    }
+
+    /** The workspace when OPFS can be written here, otherwise null. */
+    async workspace() {
+        const workspace = this._workspaceDefault ? getGitWorkspace() : this._workspace;
+        if (!workspace) return null;
+        return (await workspace.isAvailable()) ? workspace : null;
+    }
+
+    /**
+     * Move a record's payload into its repository and return what IndexedDB
+     * keeps of it. Falls back to the record itself, bytes inline, whenever the
+     * payload cannot go to OPFS — the record must be storable either way.
+     *
+     * @param {SeedingSessionRecord} record
+     */
+    async _detachPayload(record) {
+        const files = Array.isArray(record.files) ? record.files : [];
+        if (files.length === 0 || !files.every((file) => file?.bytes)) {
+            // Metadata only, as `patch` and a migration hand it over: it
+            // already says where its bytes are.
+            return record;
+        }
+        const workspace = await this.workspace();
+        if (!workspace || !storableAsTree(files)) return inline(record);
+
+        const dir = workspace.pageDir(record.hash);
+        try {
+            await workspace.snapshot(
+                dir,
+                files.map((file) => ({ path: file.path, bytes: toBytes(file.bytes) })),
+                {
+                    message: `${record.reseeded ? 'Reseed' : 'Deploy'} ${record.siteName || 'website'} (${record.hash})`,
+                    author: {
+                        name: record.deploy?.signedBy || 'WEB25.cloud',
+                        email: 'publisher@web25.cloud'
+                    }
+                }
+            );
+            return {
+                ...record,
+                payloadStorage: /** @type {'opfs'} */ ('opfs'),
+                files: files.map((file) => ({
+                    path: file.path,
+                    type: file.type || 'application/octet-stream',
+                    size: toBytes(file.bytes).length
+                }))
+            };
+        } catch (error) {
+            console.warn('[SeedingSessionStore] Payload kept in IndexedDB; OPFS write failed:', error);
+            return inline(record);
+        }
+    }
+
+    /**
+     * Put the bytes back into a record whose payload lives in OPFS. A tree
+     * that cannot be read gives a record with no files, which every caller
+     * already treats as a session with nothing to seed.
+     *
+     * @param {any} record
+     * @returns {Promise<SeedingSessionRecord|null>}
+     */
+    async _attachPayload(record) {
+        if (!record || record.payloadStorage !== 'opfs') return record || null;
+        const workspace = this._workspaceDefault ? getGitWorkspace() : this._workspace;
+        if (!workspace) return { ...record, files: [] };
+        const dir = workspace.pageDir(record.hash);
+        try {
+            const files = await workspace.read(dir, async () => {
+                const out = [];
+                for (const file of record.files || []) {
+                    out.push({ ...file, bytes: await workspace.readFile(dir, file.path) });
+                }
+                return out;
+            });
+            return { ...record, files };
+        } catch (error) {
+            console.warn('[SeedingSessionStore] Payload could not be read back from OPFS:', error);
+            return { ...record, files: [] };
+        }
     }
 
     /**
@@ -173,28 +306,94 @@ export default class SeedingSessionStore {
         });
     }
 
-    /** @param {SeedingSessionRecord} record */
+    /**
+     * Store a record, payload first: into its repository when OPFS is there,
+     * which commits it, and the record without its bytes into IndexedDB.
+     * @param {SeedingSessionRecord} record
+     */
     async put(record) {
-        await this._withStore('readwrite', (store) => store.put({ ...record, savedAt: Date.now() }));
+        const stored = await this._detachPayload(record);
+        await this._putRaw(stored);
         return record.hash;
+    }
+
+    /** @param {any} record the record exactly as IndexedDB should hold it */
+    async _putRaw(record) {
+        await this._withStore('readwrite', (store) => store.put({ ...record, savedAt: Date.now() }));
+    }
+
+    /** @param {string} hash */
+    async _getRaw(hash) {
+        const result = await this._withStore('readonly', (store) => store.get(hash));
+        return result || null;
     }
 
     /** @param {string} hash @returns {Promise<SeedingSessionRecord|null>} */
     async get(hash) {
-        const result = await this._withStore('readonly', (store) => store.get(hash));
-        return /** @type {SeedingSessionRecord|null} */ (result || null);
+        return this._attachPayload(await this._getRaw(hash));
     }
 
-    /** @returns {Promise<SeedingSessionRecord[]>} newest deployment first */
-    async list() {
+    /**
+     * @param {{ payload?: boolean }} [options] `payload: false` skips reading
+     *   the bytes back — for listings, which only show what a record says
+     * @returns {Promise<SeedingSessionRecord[]>} newest deployment first
+     */
+    async list({ payload = true } = {}) {
         const result = await this._withStore('readonly', (store) => store.getAll());
-        const records = Array.isArray(result) ? result : [];
-        return records.sort((left, right) => (right.savedAt || 0) - (left.savedAt || 0));
+        const records = (Array.isArray(result) ? result : []).sort(
+            (left, right) => (right.savedAt || 0) - (left.savedAt || 0)
+        );
+        if (!payload) return records;
+        const out = [];
+        for (const record of records) out.push(await this._attachPayload(record));
+        return /** @type {SeedingSessionRecord[]} */ (out);
+    }
+
+    /**
+     * Move records written before OPFS was used — bytes inline — into their
+     * repositories. Each record is rewritten only once its payload is safely
+     * committed; one that cannot move stays exactly as it was.
+     * @returns {Promise<number>} how many records moved
+     */
+    async migrateToWorkspace() {
+        if (!(await this.workspace())) return 0;
+        let moved = 0;
+        for (const record of await this.list({ payload: false })) {
+            if (record.payloadStorage === 'opfs' || !record.files?.length) continue;
+            try {
+                const detached = await this._detachPayload(record);
+                if (detached.payloadStorage !== 'opfs') continue;
+                await this._putRaw({ ...detached, savedAt: record.savedAt });
+                moved += 1;
+            } catch (error) {
+                console.warn('[SeedingSessionStore] A stored session could not move to OPFS:', error);
+            }
+        }
+        return moved;
     }
 
     /** @param {string} hash */
     async remove(hash) {
         await this._withStore('readwrite', (store) => store.delete(hash));
+        // The repository goes with the session: Pages is what is a repository.
+        // The reseedable copy the site cache keeps is somewhere else.
+        const workspace = this._workspaceDefault ? getGitWorkspace() : this._workspace;
+        if (workspace && (await workspace.isAvailable())) {
+            await workspace.remove(workspace.pageDir(hash)).catch((error) => {
+                console.warn('[SeedingSessionStore] Repository could not be removed:', error);
+            });
+        }
+    }
+
+    /**
+     * The commit a page's repository is at, or null — no repository, nothing
+     * committed yet, or no OPFS. Read from `.git` itself; git is not loaded.
+     * @param {string} hash
+     */
+    async repositoryHead(hash) {
+        const workspace = this._workspaceDefault ? getGitWorkspace() : this._workspace;
+        if (!workspace) return null;
+        return workspace.headCommit(workspace.pageDir(hash));
     }
 
     /**
@@ -205,14 +404,21 @@ export default class SeedingSessionStore {
      * @param {Partial<SeedingSessionRecord>} patch
      */
     async patch(hash, patch) {
-        const existing = await this.get(hash);
+        // The stored form, not the hydrated one: changing a field must not
+        // read a whole site back out of OPFS only to write it in again.
+        const existing = await this._getRaw(hash);
         if (!existing) return null;
         const merged = {
             ...existing,
             ...patch,
             deploy: { ...existing.deploy, ...(patch.deploy || {}) }
         };
-        await this.put(/** @type {SeedingSessionRecord} */ (merged));
-        return merged;
+        // A patch that brings bytes is a new payload, and goes where payloads go.
+        if (Array.isArray(patch.files)) {
+            await this.put(/** @type {SeedingSessionRecord} */ (merged));
+            return this.get(hash);
+        }
+        await this._putRaw(merged);
+        return this._attachPayload(merged);
     }
 }

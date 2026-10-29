@@ -15,6 +15,7 @@ import { describeProgress } from '../../webllm/webllmProgress.js';
 import { copyToClipboard } from '../ClipboardButton.js';
 import { codeForCopyButton, renderReply } from './replyFormat.js';
 import { createStreamBatcher } from './streamBatcher.js';
+import { extractCodeFiles } from '../../webllm/chatProject.js';
 
 const STEP_ORDER = ['download', 'cache', 'shaders'];
 
@@ -42,7 +43,7 @@ function scrollToBottom(el) {
 }
 
 /**
- * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null }} BubbleContext
+ * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null, project?: boolean }} BubbleContext
  */
 
 /**
@@ -117,7 +118,12 @@ function updateBubble(item, message, context) {
             body.appendChild(label);
         }
     } else {
-        renderReply(body, message.content);
+        // A finished reply's code can be named and saved to the project.
+        const files =
+            context.project && message.role === 'assistant' && !message.pending && !message.error
+                ? extractCodeFiles(message.content)
+                : null;
+        renderReply(body, message.content, { files });
     }
 
     // How the reply was written: a short answer, or a plan written in steps.
@@ -230,9 +236,16 @@ function renderEmptyThread(list) {
  * Bind the tab's controls to a controller and return the renderer.
  *
  * @param {import('../../webllm/WebLLMController.js').WebLLMController} controller
- * @param {{ confirm?: (message: string) => boolean }} [options]
+ * @param {{ confirm?: (message: string) => boolean,
+ *           project?: import('../../webllm/chatProject.js').WebLLMProject|null,
+ *           onOpenCanvas?: ((snippet: { messageId: string, index: number, name: string }) => void)|null }} [options]
+ *   `onOpenCanvas` is what a code block's Preview does
+ * @returns {((state: any, change?: any) => void) & { sidebar: SidebarControl }}
  */
-export function bindWebLLMPanel(controller, { confirm = (message) => window.confirm(message) } = {}) {
+export function bindWebLLMPanel(
+    controller,
+    { confirm = (message) => window.confirm(message), project = null, onOpenCanvas = null } = {}
+) {
     const installBtn = byId('webllm-install-btn');
     const composer = byId('webllm-composer');
     const input = /** @type {HTMLTextAreaElement|null} */ (byId('webllm-input'));
@@ -259,18 +272,11 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     input?.addEventListener('input', () => autosize(input));
 
     byId('webllm-stop-btn')?.addEventListener('click', () => controller.stop());
-    const layout = byId('webllm-layout');
-    const sidebarToggle = byId('webllm-sidebar-toggle');
-    /** On a phone the conversation list is a drawer over the chat. */
-    function setSidebarOpen(open) {
-        layout?.classList.toggle('is-sidebar-open', open);
-        sidebarToggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-    sidebarToggle?.addEventListener('click', () => setSidebarOpen(!layout?.classList.contains('is-sidebar-open')));
+    const sidebar = bindSidebar();
 
     byId('webllm-new-chat-btn')?.addEventListener('click', () => {
         controller.newChat();
-        setSidebarOpen(false);
+        sidebar.closeOnPhone();
         input?.focus();
     });
     byId('webllm-delete-btn')?.addEventListener('click', () => {
@@ -284,13 +290,28 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         const button = /** @type {any} */ (event.target)?.closest?.('[data-conversation-id]');
         if (!button) return;
         void controller.openConversation(button.dataset.conversationId);
-        setSidebarOpen(false);
+        sidebar.closeOnPhone();
     });
 
     messages?.addEventListener('click', (event) => {
         const copy = /** @type {any} */ (event.target)?.closest?.('[data-copy-code]');
         if (copy) {
             void copyCode(copy);
+            return;
+        }
+        const save = /** @type {any} */ (event.target)?.closest?.('[data-save-code]');
+        if (save) {
+            if (project) void saveCode(project, save);
+            return;
+        }
+        const preview = /** @type {any} */ (event.target)?.closest?.('[data-open-canvas]');
+        if (preview) {
+            const input = preview.closest('.webllm-code')?.querySelector('[data-code-name]');
+            onOpenCanvas?.({
+                messageId: preview.closest('[data-message-id]')?.dataset?.messageId,
+                index: Number(preview.dataset.openCanvas),
+                name: `${input?.value || ''}`.trim() || `${input?.placeholder || ''}`.trim()
+            });
             return;
         }
         const button = /** @type {any} */ (event.target)?.closest?.('[data-continue]');
@@ -520,7 +541,8 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
                     createBubble(message, {
                         isLast: index === last,
                         generating: state.generating,
-                        lookup: state.lookup
+                        lookup: state.lookup,
+                        project: Boolean(project?.state.available)
                     })
                 )
             );
@@ -580,7 +602,78 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         if (remove) remove.disabled = state.messages.length === 0 && !state.activeConversationId;
     }
 
-    return render;
+    return Object.assign(render, { sidebar });
+}
+
+/**
+ * @typedef {{ open: (panel?: 'conversations'|'project') => void, close: () => void,
+ *             toggle: (panel: 'conversations'|'project') => void, closeOnPhone: () => void,
+ *             isPhone: () => boolean, state: { open: boolean, panel: 'conversations'|'project' } }} SidebarControl
+ */
+
+/**
+ * The sidebar: one panel at a time — the conversations, or the project — and
+ * open or closed. Each panel's button at the start of the chat head opens it,
+ * and closes the sidebar when its panel is the one showing; × closes it too.
+ *
+ * On a desktop it is a column that starts open; on a phone it is a drawer over
+ * the chat that starts closed and closes again once something in it is chosen.
+ *
+ * @returns {SidebarControl}
+ */
+function bindSidebar() {
+    const layout = byId('webllm-layout');
+    const buttons = {
+        conversations: byId('webllm-sidebar-toggle'),
+        project: byId('webllm-project-toggle')
+    };
+    const isPhone = () => Boolean(globalThis.matchMedia?.('(max-width: 860px)')?.matches);
+    /** @type {{ open: boolean, panel: 'conversations'|'project' }} */
+    const state = { open: !isPhone(), panel: 'conversations' };
+
+    function apply() {
+        layout?.classList.toggle('is-sidebar-open', state.open);
+        if (layout) /** @type {any} */ (layout).dataset.sidebarPanel = state.panel;
+        setHidden(byId('webllm-panel-conversations'), state.panel !== 'conversations');
+        setHidden(byId('webllm-panel-project'), state.panel !== 'project');
+        for (const [panel, button] of Object.entries(buttons)) {
+            const active = state.open && state.panel === panel;
+            button?.setAttribute('aria-expanded', active ? 'true' : 'false');
+            button?.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+    }
+
+    /** @type {SidebarControl} */
+    const control = {
+        state,
+        isPhone,
+        open(panel = state.panel) {
+            Object.assign(state, { open: true, panel });
+            apply();
+        },
+        close() {
+            state.open = false;
+            apply();
+        },
+        toggle(panel) {
+            if (state.open && state.panel === panel) control.close();
+            else control.open(panel);
+        },
+        closeOnPhone() {
+            if (isPhone()) control.close();
+        }
+    };
+
+    buttons.conversations?.addEventListener('click', () => control.toggle('conversations'));
+    buttons.project?.addEventListener('click', () => control.toggle('project'));
+    byId('webllm-sidebar-close')?.addEventListener('click', () => control.close());
+    byId('webllm-project-close')?.addEventListener('click', () => control.close());
+    // Escape closes the drawer a phone shows over the chat.
+    byId('webllm-sidebar')?.addEventListener('keydown', (event) => {
+        if (/** @type {any} */ (event).key === 'Escape' && isPhone()) control.close();
+    });
+    apply();
+    return control;
 }
 
 /**
@@ -599,6 +692,33 @@ async function copyCode(button) {
     button.textContent = copied ? 'Copied' : 'Copy failed';
     setTimeout(() => {
         button.textContent = 'Copy';
+    }, 1500);
+}
+
+/**
+ * Save a code block to the conversation's project under the name typed next
+ * to it (or the one suggested), and say how that went on the button.
+ * @param {import('../../webllm/chatProject.js').WebLLMProject} project
+ * @param {any} button
+ */
+async function saveCode(project, button) {
+    const block = button.closest('.webllm-code');
+    const input = block?.querySelector('[data-code-name]');
+    const name = `${input?.value || ''}`.trim() || `${input?.placeholder || ''}`.trim();
+    const messageId = button.closest('[data-message-id]')?.dataset?.messageId;
+    button.disabled = true;
+    let label = 'Saved ✓';
+    try {
+        const path = await project.saveBlock(messageId, Number(button.dataset.saveCode), name);
+        if (input) input.value = path;
+    } catch (error) {
+        label = 'Not saved';
+        button.title = `${error?.message || error}`;
+    }
+    button.textContent = label;
+    setTimeout(() => {
+        button.textContent = 'Save to project';
+        button.disabled = false;
     }, 1500);
 }
 

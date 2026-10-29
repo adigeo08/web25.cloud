@@ -894,16 +894,37 @@ the public endpoint and the model itself could not be reached from the test envi
   thoughts with `totalThoughts` and `nextThoughtNeeded`, revisions (`isRevision`,
   `revisesThought`), branches (`branchId`, `branchFromThought`, branch-scoped numbers),
   idempotent appends by `clientRequestId`, and `{ ok, value | error: { code, message } }`
-  results. The plan is thought 1 and each step the next one. Before a step is written, the
-  earlier thoughts most like it are recalled (this reply's first, then earlier answers in the
-  same conversation) and given to Llama instead of a blind tail of the text. Thoughts go when
-  their conversation is deleted or expires.
+  results. The plan is thought 1 and each step the next one. Before a step is written it is
+  given, within the profile's recall budget (900 tokens on desktop, 300 on mobile): **always the
+  latest completed step** (with the larger share of the budget), then up to 4 (mobile: 2) more
+  thoughts of the same conversation most like the step — this reply's or earlier answers', with
+  only a small preference for this reply (`CURRENT_SEQUENCE_BONUS`, 0.05) so an older, more
+  relevant thought still wins — above a similarity floor of 0.2, without duplicates, in the
+  order they were thought. Thoughts go when their conversation is deleted or expires.
+- **Steps that do not finish are not passed on as finished.** Each step's status comes from the
+  generation's finish reason and deterministic checks of its text as the model wrote it — a code
+  block left open, brackets / strings / comments left open in JS, CSS or JSON, `<script>`,
+  `<style>`, `<body>`… left open in HTML; the fence closed afterwards for the screen does not
+  count. A step cut at its token limit gets **one** continuation in place (450 tokens on
+  desktop, 160 on mobile) when the context window still has room. A step that is still cut off,
+  or ends with its code unfinished, keeps its text, gets a **⚠ Step N is incomplete** line and a
+  notice under the reply, is stored with `incomplete: true` — never recalled as earlier work —
+  and the next steps are told not to rely on it. A last step cut at the limit is left for
+  **Continue** instead. Loop-guarded steps keep their first pass and count as done only if it
+  holds together. No extra Llama request checks a step.
 - **Recall by similarity, on the CPU.** Each thought is embedded in plain JavaScript by feature
   hashing (`src/webllm/thoughtEmbedding.js`: words, word pairs and three-letter pieces, 256
   dimensions, no model and no download) and indexed in
   [idb-vector](https://github.com/PaulKinlan/idb-vector) 0.2.0 (`web25-webllm-thought-vectors-<id>`).
   idb-vector is loaded from jsDelivr only after both of its files match their pinned SHA-384
   (`src/webllm/idbVectorLoader.js`). Without it, the same embedding is compared in the page.
+  Indexing runs on a queue in the background and never holds up a step; each thought gets one
+  vector, and every thought still without one (written while idb-vector was loading, or in a
+  session where it never loaded) is backfilled as soon as it is there. Vectors of thoughts
+  deleted while idb-vector is away are kept as tombstones and deleted when it is back; recall
+  also drops stray vectors it meets. Version 2 of the database adds a `byConversation` index on
+  thoughts, so recall reads one conversation rather than the whole wallet; version 1 databases
+  are upgraded in place.
 - **GPU for Llama only.** Llama runs on WebGPU and nothing else: every adapter request asks
   for `high-performance` without a fallback, a CPU-emulated (fallback) adapter is reported as
   unsupported instead of being used, and the inference worker is used only when it reports a
@@ -913,6 +934,68 @@ the public endpoint and the model itself could not be reached from the test envi
   **Copy** button, and inline code, bold and headings are formatted
   (`src/ui/webllm/replyFormat.js`). Everything is built from text nodes: model output is never
   parsed as HTML.
+- **Code as a project.** Each finished code block has a file-name field, **▶ Preview** and
+  **Save to project**. A block that names its file — on the fence (```` ```html index.html ````),
+  in a first-line comment (`<!-- index.html -->`, `// app.js`) or on the line just above it
+  (`**style.css**:`) — is saved automatically when the reply ends. The conversation's files are a
+  git repository in OPFS (see §10). Deleting a conversation, or its expiry under the retention
+  setting, removes its project too (`src/webllm/chatProject.js`).
+- **A micro IDE around the chat** (`src/ui/webllm/WebLLMWorkbench.js`):
+  - *Sidebar.* Two buttons at the start of the chat head pick its panel — **Conversations** or
+    **Project** (with a file count). Pressing the open one again, or ×, closes the sidebar, on a
+    desktop as on a phone (where it is a drawer).
+  - *Project panel.* The files as a tree, folders first. **File** and **Folder** create in the
+    selected folder; each row renames, deletes, goes **up a level** (arrow), or **moves to** any
+    folder; rows can also be **dragged** onto a folder or onto the empty space for the top. All of
+    it is a draft (`src/webllm/projectTree.js`), marked `A`/`M` per row, until **Save** commits it
+    as one commit — or **Discard** drops it. **🚀 Deploy project** sits at its foot.
+  - *Canvas.* A third column beside the chat (a sheet over it on narrower screens). **Preview**
+    assembles the project's page — linked stylesheets and scripts inlined — and runs it in an
+    iframe sandboxed without `allow-same-origin`, with its **console** listed underneath.
+    **Code** is CodeMirror 6 (HTML, CSS, JavaScript) from `esm.sh`, every package pinned to one
+    shared set of dependencies (`src/webllm/codeEditor.js`); without the CDN it is a plain editor
+    that saves the same way. **Save** (or Ctrl/⌘+S) commits the file and writes it to the thought
+    store, indexed by idb-vector, as the one current copy of that file: a Thinking reply recalls it
+    with its other thoughts, and a Short reply is given the saved files most like the question.
+    Moving a file moves that memory; deleting it forgets it.
+---
+
+### 10) OPFS workspace + isomorphic-git
+
+The bytes Web25 keeps — sites it hosts, sites it has loaded, Llama's code — are files in the
+**Origin Private File System**, and the ones that are projects are **git repositories**, through
+[isomorphic-git](https://isomorphic-git.org/) imported from `esm.sh` (pinned,
+`ISOMORPHIC_GIT_VERSION`) on first use, never at start-up. `src/storage/OpfsFs.js` is the
+`fs.promises` isomorphic-git runs on, written directly against OPFS handles;
+`src/storage/GitWorkspace.js` is the service on top of it.
+
+```text
+/web25/pages/<hash>/          git repo per site in Pages — the payload as it travels:
+                              .torrentchain + site.bundle.json.gz (or the files, in files mode)
+/web25/sites/<hash>/          unpacked files of a loaded, cached site — a plain tree
+/web25/payloads/<hash>/       the payload kept so a cached site can be reseeded — a plain tree
+/web25/chats/<wallet>/<id>/   git repo per Llama conversation — the code it wrote
+```
+
+- **Deploy** is unchanged — same in-memory bundle, same gzip + `.torrentchain`, same signature
+  and seeding. Only where the result is kept changed: the seeding session's payload is written to
+  `/web25/pages/<hash>` and committed (`Deploy <site> (<hash>)`), and the IndexedDB record keeps
+  the ordered file list, types and sizes (`payloadStorage: 'opfs'`). The Pages card shows the
+  repository and its commit.
+- **Loading** over WebTorrent or a GoFile mirror caches the site's files under `/web25/sites` and
+  its payload under `/web25/payloads` instead of inside IndexedDB rows. The render never waits on
+  OPFS: the row is written as before, and its files are moved out of it right after. These are trees, not
+  repositories: a loaded site becomes a repository only when it is **reseeded**, which puts it in
+  Pages and commits it (`Reseed <site> (<hash>)`) like anything else there.
+- **Migration** is automatic: seeding sessions stored inline move into their repositories on the
+  next start, and a cached site moves to OPFS the next time it is read.
+- **Fallbacks.** Without writable OPFS, for a payload with a path that cannot be a file of its
+  own, or when a write fails, the bytes stay inline in IndexedDB exactly as before. Files are
+  written before they are committed, and the commit runs in the background (with a timeout on the
+  CDN), so an unreachable `esm.sh` costs the git history — never the data, a deployment or a reseed.
+- **Safety.** Paths from torrents and from Llama are normalised and refused if they climb out
+  (`..`) or touch a `.git` directory; a payload can never rewrite the repository that holds it.
+  Each repository's writes are serialised (OPFS allows one writer per file).
 
 ---
 
@@ -951,6 +1034,9 @@ src/
 ├── cache/
 │   ├── PeerWebCache.js
 │   └── SiteLibraryIndex.js
+├── storage/
+│   ├── OpfsFs.js                    # fs.promises over OPFS, for isomorphic-git
+│   └── GitWorkspace.js              # OPFS trees + git repos (pages, sites, payloads, chats)
 ├── channels/
 │   ├── ChannelsService.js
 │   ├── ConversationRoom.js
@@ -993,6 +1079,10 @@ src/
 │   ├── WebLLMTab.js                 # start-up gate (no imports)
 │   ├── WebLLMApp.js                 # loaded when the tab is opened
 │   ├── WebLLMController.js
+│   ├── chatProject.js               # code blocks as files, per-conversation repo, Deploy project
+│   ├── projectTree.js               # the Project panel's draft: moves, renames, folders → one Save
+│   ├── canvasPreview.js             # the page the canvas previews, assets inlined, console bridge
+│   ├── codeEditor.js                # CodeMirror 6 from esm.sh, textarea fallback
 │   ├── WebLLMEngineClient.js
 │   ├── WebLLMServiceWorkerClient.js
 │   ├── webllm-worker.js             # dedicated inference worker
@@ -1110,6 +1200,8 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
   — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
 - WebLLM (only after the WebLLM tab is opened): the library from `cdn.jsdelivr.net`, model weights from
   `huggingface.co/mlc-ai`, the compiled model library from `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`
+- isomorphic-git (only when a deployment, a reseed or a Llama project is committed): `esm.sh`
+- CodeMirror 6 (only when the canvas first shows code): `esm.sh`
 - MDN MCP server (only for web-development questions in the WebLLM chat, and only while enabled in its
   settings): `https://mcp.mdn.mozilla.net/` — receives a few search keywords, never wallet data
 

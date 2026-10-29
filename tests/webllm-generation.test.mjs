@@ -13,7 +13,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { WebLLMController } from '../src/webllm/WebLLMController.js';
+import { WebLLMController, stepIncompleteNotice } from '../src/webllm/WebLLMController.js';
+import { similarity } from '../src/webllm/thoughtEmbedding.js';
 import { WebLLMEngineClient, createPageTransport } from '../src/webllm/WebLLMEngineClient.js';
 import { createEngineHost } from '../src/webllm/webllmEngineHost.js';
 import {
@@ -120,7 +121,7 @@ function scriptedWebLLM(respond) {
 const turns = (messages) => messages.filter((message) => message.role !== 'system');
 
 /** The controller, wired to the scripted model through the real host and client. */
-async function session(respond, { profile, mdnClient, replyMode = 'short', wallet = null } = {}) {
+async function session(respond, { profile, mdnClient, replyMode = 'short', wallet = null, vectors = null } = {}) {
     const llm = scriptedWebLLM(respond);
     const controller = new WebLLMController({
         ...(profile ? { profile } : {}),
@@ -129,7 +130,8 @@ async function session(respond, { profile, mdnClient, replyMode = 'short', walle
         ...(wallet
             ? {
                   openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
-                  openThoughts: (walletAddress) => openWebLLMThoughts({ walletAddress })
+                  openThoughts: (walletAddress) =>
+                      openWebLLMThoughts({ walletAddress, ...(vectors ? { vectors: async () => vectors } : {}) })
               }
             : {}),
         detectWebGPU: async () => ({ supported: true, reason: null, vendor: 'test', description: 'gpu' }),
@@ -884,11 +886,13 @@ test('Thinking: a JSON-schema plan, then each step with its own MDN lookup', asy
     assert.equal(reply.docContext, null, 'a step’s documentation is not carried past it');
 });
 
-test('Thinking: a step cut inside its code block closes it, so the next step’s snippet stays its own', async () => {
-    const { controller } = await session(
+test('Thinking: a step cut inside its code block gets one continuation, then is closed and marked incomplete', async () => {
+    const { controller, llm } = await session(
         (messages, call, request) => {
             if (request.response_format)
                 return { text: '{"steps": ["Write the ```html``` markup", "Add the script"]}' };
+            // The one continuation step 1 gets (a text completion) runs out too.
+            if (messages === null) return { text: '\n  <button>Log in</button>', finish: 'length' };
             // Step 1 runs out of tokens inside its code block; step 2 is whole.
             return call === 2
                 ? { text: '```html\n<form id="login">\n  <input type="email">', finish: 'length' }
@@ -898,15 +902,70 @@ test('Thinking: a step cut inside its code block closes it, so the next step’s
     );
     await controller.send('Make a login form');
     const reply = lastReply(controller);
+    assert.equal(llm.state.completions.length, 1, 'at most one continuation per step');
+    assert.match(llm.state.completions[0].prompt, /<input type="email">$/, 'it continues the step in place');
     assert.deepEqual(splitReply(reply.content), [
         {
             type: 'text',
             text: '**Plan**\n1. Write the html markup\n2. Add the script\n\n### Step 1/2: Write the html markup'
         },
-        { type: 'code', lang: 'html', code: '<form id="login">\n  <input type="email">', closed: true },
-        { type: 'text', text: '### Step 2/2: Add the script' },
+        {
+            type: 'code',
+            lang: 'html',
+            code: '<form id="login">\n  <input type="email">\n  <button>Log in</button>',
+            closed: true
+        },
+        {
+            type: 'text',
+            text:
+                '**⚠ Step 1 is incomplete:** it reached the length limit before it finished, so its code may be cut off.\n\n' +
+                '### Step 2/2: Add the script'
+        },
         { type: 'code', lang: 'js', code: 'const form = document.querySelector("#login");', closed: true }
     ]);
+    assert.equal(reply.notice, stepIncompleteNotice([1]));
+    // The next step is told not to build on it.
+    const step2 = llm.state.requests[2].messages.at(-1).content;
+    assert.match(step2, /Note: step 1 did not finish; do not rely on code from them/);
+    assert.doesNotMatch(step2, /<form id="login">/, 'its code is not passed on as earlier work');
+});
+
+test('Thinking: a truncated step that its continuation finishes counts as complete', async () => {
+    const { controller, llm } = await session(
+        (messages, call, request) => {
+            if (request.response_format) return { text: '{"steps": ["Write the markup", "Add the script"]}' };
+            if (messages === null) return { text: '\n</form>\n```' };
+            return call === 2
+                ? { text: '```html\n<form id="login">\n  <input type="email">', finish: 'length' }
+                : { text: '```js\nconst form = document.querySelector("#login");\n```' };
+        },
+        { replyMode: 'thinking' }
+    );
+    await controller.send('Make a login form');
+    const reply = lastReply(controller);
+    assert.equal(llm.state.completions.length, 1);
+    assert.doesNotMatch(reply.content, /incomplete/);
+    assert.equal(reply.notice ?? null, null);
+    assert.match(reply.content, /<input type="email">\n<\/form>\n```\n\n### Step 2\/2/);
+    // The completed step is what the next one is shown, as its latest step.
+    assert.match(llm.state.requests[2].messages.at(-1).content, /Earlier steps:[\s\S]*<\/form>/);
+});
+
+test('Thinking: a step the model ends with its code unfinished is marked, without a continuation', async () => {
+    const { controller, llm } = await session(
+        (messages, call, request) => {
+            if (request.response_format) return { text: '{"steps": ["Write the function", "Use it"]}' };
+            return call === 2
+                ? { text: '```js\nfunction debounce(fn, ms) {\n  let timer;\n```' }
+                : { text: 'Call `debounce(save, 300)`.' };
+        },
+        { replyMode: 'thinking' }
+    );
+    await controller.send('Write a debounce function');
+    const reply = lastReply(controller);
+    assert.equal(llm.state.completions.length, 0, 'only a step cut at the limit is continued');
+    assert.match(reply.content, /\*\*⚠ Step 1 is incomplete:\*\* its code does not look finished/);
+    assert.equal(reply.notice, stepIncompleteNotice([1]));
 });
 
 test('Thinking without a usable plan writes the task in one go', async () => {
@@ -1085,4 +1144,145 @@ test('Stop during a step’s MDN lookup leaves no empty step heading', async () 
     assert.match(reply.content, /Step 1\/2/);
     assert.doesNotMatch(reply.content, /Step 2\/2/);
     assert.equal(llm.state.requests.length, 2);
+});
+
+// ── memory continuity: recall across steps, budgets, Stop in a continuation ──
+
+/** idb-vector's interface, in memory, with its cosine query. */
+function memoryVectors() {
+    const rows = new Map();
+    let key = 0;
+    return {
+        rows,
+        async insert(object) {
+            key += 1;
+            rows.set(key, object);
+            return key;
+        },
+        async delete(k) {
+            rows.delete(k);
+        },
+        async query(vector, { limit }) {
+            return [...rows.entries()]
+                .map(([k, object]) => ({ key: k, object, similarity: similarity(vector, object.embedding) }))
+                .sort((a, b) => b.similarity - a.similarity)
+                .slice(0, limit);
+        }
+    };
+}
+
+/** The `Earlier thoughts` block of a step's request, or ''. */
+const earlierThoughts = (request) => {
+    const text = request.messages.at(-1).content;
+    const match = text.match(/Earlier thoughts:\n"""\n([\s\S]*?)\n"""/);
+    return match ? match[1] : '';
+};
+
+test('Thinking keeps the latest completed step for the next one and recalls relevant work, never the unrelated', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        const vectors = memoryVectors();
+        const answers = {
+            chart: 'Bar chart: ```js\nrequestAnimationFrame(drawBars);\n```',
+            markup: '```html\n<form id="login"><input type="email" id="email"><button>Log in</button></form>\n```',
+            footer: '```css\nfooter { padding: 1rem; color: gray; }\n```',
+            validate: '```js\ndocument.querySelector("#login").addEventListener("submit", check);\n```'
+        };
+        let plan = null;
+        const { controller, llm } = await session(
+            (messages, call, request) => {
+                if (request.response_format) return { text: JSON.stringify({ steps: plan }) };
+                const step = messages.at(-1).content.match(/Now do step \d+ only: (.*)$/)?.[1] || '';
+                if (/chart/i.test(step)) return { text: answers.chart };
+                if (/markup/i.test(step)) return { text: answers.markup };
+                if (/footer/i.test(step)) return { text: answers.footer };
+                return { text: answers.validate };
+            },
+            { replyMode: 'thinking', wallet: '0xabc', vectors }
+        );
+        plan = ['Draw the animated bar chart canvas', 'Label the chart axes with requestAnimationFrame'];
+        await controller.send('Draw an animated bar chart');
+        plan = [
+            'Write the login form markup with an email input',
+            'Style the page footer',
+            'Add the login form email validation script'
+        ];
+        const before = llm.state.requests.length;
+        await controller.send('Make a login form with email validation');
+        await controller.thoughts.whenIndexed();
+        const steps = llm.state.requests.slice(before + 1);
+        assert.equal(steps.length, 3);
+
+        // Step 2 is shown step 1, the latest completed step, whatever it is about.
+        assert.match(earlierThoughts(steps[1]), /Thought 2:\nWrite the login form markup[\s\S]*<form id="login">/);
+        // Step 3: the latest completed step (the footer) is always there, and
+        // the markup it builds on is recalled by similarity; oldest first.
+        const third = earlierThoughts(steps[2]);
+        assert.match(third, /Thought 2:\nWrite the login form markup[\s\S]*Thought 3:\nStyle the page footer/);
+        assert.equal(third.split('<form id="login">').length, 2, 'recalled once, not twice');
+        assert.doesNotMatch(third, /requestAnimationFrame|bar chart/i, 'an unrelated earlier answer is not injected');
+        assert.ok(vectors.rows.size >= 6, 'both replies’ thoughts are in the vector index');
+    } finally {
+        fake.restore?.();
+    }
+});
+
+test('on a phone the recalled thoughts and the one continuation stay inside the mobile budgets', async () => {
+    const fake = installFakeIndexedDb();
+    try {
+        const long = (word) =>
+            `\`\`\`js\n${Array.from({ length: 120 }, (_, i) => `const ${word}${i} = ${i};`).join('\n')}\n\`\`\``;
+        const { controller, llm } = await session(
+            (messages, call, request) => {
+                if (request.response_format) {
+                    return {
+                        text: '{"steps": ["Write the login values", "Write the login checks", "Write the login form"]}'
+                    };
+                }
+                // Each step is cut at the mobile limit; its continuation finishes it.
+                if (messages === null) return { text: '\nconst done = true;\n```' };
+                return { text: long(`login${call}x`) };
+            },
+            { replyMode: 'thinking', wallet: '0xabc', profile: MOBILE }
+        );
+        await controller.send('Build the login page');
+        const limits = WEBLLM_THINKING.mobile;
+        assert.equal(llm.state.requests.length, 4, 'the plan and three steps');
+        for (const request of llm.state.requests.slice(2)) {
+            const recalled = earlierThoughts(request);
+            assert.ok(recalled, 'each later step is shown earlier work');
+            assert.ok(
+                estimateTokens(recalled) <= limits.recallTokens,
+                `${estimateTokens(recalled)} > ${limits.recallTokens}`
+            );
+        }
+        assert.ok(llm.state.completions.length >= 1 && llm.state.completions.length <= 3, 'at most one per step');
+        for (const completion of llm.state.completions) {
+            assert.ok(completion.max_tokens <= limits.stepContinueTokens);
+        }
+    } finally {
+        fake.restore?.();
+    }
+});
+
+test('Stop during a step’s continuation stops the reply there, without an incomplete-step line', async () => {
+    let controllerRef = null;
+    const { controller, llm } = await session(
+        (messages, call, request) => {
+            if (request.response_format) return { text: '{"steps": ["First part", "Second part"]}' };
+            if (messages === null) {
+                controllerRef.stop();
+                return { text: ' and more text that is never shown', size: 2 };
+            }
+            return { text: '```js\nfunction a() {', finish: 'length' };
+        },
+        { replyMode: 'thinking' }
+    );
+    controllerRef = controller;
+    await controller.send('Build a todo app');
+    const reply = lastReply(controller);
+    assert.equal(reply.finishReason, 'abort');
+    assert.equal(llm.state.requests.length, 2, 'the plan and step 1 only');
+    assert.doesNotMatch(reply.content, /incomplete/);
+    assert.doesNotMatch(reply.content, /Step 2\/2/);
 });

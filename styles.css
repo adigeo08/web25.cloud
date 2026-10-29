@@ -6842,9 +6842,9 @@ select,
     margin: 0.5rem 1rem 0.75rem;
 }
 
-/* Only a phone has the drawer, so only a phone has its button. */
-.webllm-sidebar-toggle {
-    display: none;
+/* The sidebar's two buttons, at the start of the chat head. */
+.webllm-panel-switch .dm-icon-btn {
+    display: inline-flex;
 }
 
 /* Under a reply: where the documentation came from, and Continue. */
@@ -7147,10 +7147,6 @@ select,
         visibility: visible;
     }
 
-    .webllm-sidebar-toggle {
-        display: inline-flex;
-    }
-
     #tab-webllm .channels-message {
         max-width: 88%;
     }
@@ -7211,6 +7207,67 @@ select,
     cursor: pointer;
 }
 
+/* A code block's file name and Save to project (see chatProject.js). */
+.webllm-code-head {
+    flex-wrap: wrap;
+}
+
+.webllm-code-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex: 1 1 10rem;
+    min-width: 0;
+    justify-content: flex-end;
+}
+
+.webllm-code-head .webllm-code-name {
+    flex: 1 1 8rem;
+    width: auto;
+    min-width: 0;
+    max-width: 16rem;
+    height: auto;
+    margin: 0;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+/* On a phone the name gets a row of its own under the language and Copy. */
+@media (max-width: 520px) {
+    .webllm-code-file {
+        order: 3;
+        flex-basis: 100%;
+        padding-bottom: 0.15rem;
+    }
+
+    .webllm-code-head .webllm-code-name {
+        max-width: none;
+    }
+}
+
+.webllm-code-save {
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--accent-line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--accent-hi);
+    font-size: 0.72rem;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.webllm-code-save:disabled {
+    opacity: 0.7;
+    cursor: default;
+}
+
 .webllm-code pre {
     margin: 0;
     padding: 0.6rem 0.75rem;
@@ -7255,4 +7312,894 @@ select,
 
 .webllm-mode[data-mode='thinking'] {
     color: var(--accent-hi);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   WebLLM micro IDE — the sidebar's two panels, the project tree and the
+   canvas (see WebLLMWorkbench.js). Built from the messenger's surfaces:
+   --dm-panel / --dm-head / --dm-line, the accent for what is selected and
+   the status colours for what is unsaved.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* One row, the full height: the chat, the drawers and the canvas all fill it. */
+.webllm-layout {
+    grid-template-rows: minmax(0, 1fr);
+}
+
+/* The sidebar holds one panel at a time and, on a desktop, can close. */
+.webllm-panel {
+    display: flex;
+    margin: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+}
+
+.webllm-panel-close {
+    display: inline-flex;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    margin-left: auto;
+    color: var(--muted);
+}
+
+.webllm-panel-close:hover {
+    color: var(--text);
+}
+
+.webllm-panel-switch {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 2px;
+    margin-left: -0.35rem;
+    padding: 2px;
+    border-radius: 999px;
+    background: var(--surface-2);
+}
+
+.webllm-panel-switch .dm-icon-btn {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+    color: var(--text-dim);
+}
+
+.webllm-panel-switch .dm-icon-btn[aria-pressed='true'] {
+    background: var(--accent-soft);
+    color: var(--accent-hi);
+}
+
+.webllm-toggle-badge {
+    position: absolute;
+    top: 1px;
+    right: 0;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 15px;
+    text-align: center;
+}
+
+.webllm-canvas-btn.is-active {
+    background: var(--accent-soft);
+    color: var(--accent-hi);
+}
+
+@media (min-width: 861px) {
+    .webllm-layout:not(.is-sidebar-open) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .webllm-layout:not(.is-sidebar-open) .webllm-sidebar {
+        display: none;
+    }
+}
+
+/* File-type badges: the extension, in a colour per kind. */
+.webllm-file-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    border-radius: 5px;
+    background: var(--surface-3);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.5rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+}
+
+.webllm-file-badge::before {
+    content: attr(data-ext);
+}
+
+.webllm-file-badge[data-ext=''] {
+    font-size: 0;
+}
+
+.webllm-file-badge[data-ext='html'],
+.webllm-file-badge[data-ext='htm'] {
+    background: rgba(232, 115, 74, 0.16);
+    color: #f08b63;
+}
+
+.webllm-file-badge[data-ext='css'] {
+    background: rgba(76, 154, 255, 0.16);
+    color: #75aeff;
+}
+
+.webllm-file-badge[data-ext='js'],
+.webllm-file-badge[data-ext='mjs'],
+.webllm-file-badge[data-ext='cjs'],
+.webllm-file-badge[data-ext='jsx'] {
+    background: rgba(229, 195, 60, 0.15);
+    color: #e9cc5b;
+}
+
+.webllm-file-badge[data-ext='json'],
+.webllm-file-badge[data-ext='webmanifest'] {
+    background: rgba(139, 92, 246, 0.16);
+    color: #a98bff;
+}
+
+.webllm-file-badge[data-ext='svg'] {
+    background: var(--ok-soft);
+    color: #6fdca4;
+}
+
+.webllm-file-badge[data-kind='dir'],
+.webllm-file-badge[data-kind='file'] {
+    background: transparent;
+    color: var(--accent-hi);
+    font-size: 0;
+}
+
+.webllm-file-badge[data-kind='dir']::before {
+    content: '';
+    width: 15px;
+    height: 11px;
+    border-radius: 2px 3px 3px 3px;
+    background:
+        linear-gradient(currentColor, currentColor) 0 0 / 6px 3px no-repeat,
+        linear-gradient(currentColor, currentColor) 0 2px / 100% 9px no-repeat;
+    opacity: 0.85;
+}
+
+.webllm-file-badge[data-kind='file']::before {
+    content: '';
+    width: 11px;
+    height: 14px;
+    border: 1.6px solid currentColor;
+    border-radius: 2px;
+}
+
+/* The project panel. */
+.webllm-tree-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0 0.6rem 0.45rem;
+}
+
+.webllm-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 28px;
+    padding: 0 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.webllm-tool-btn:hover:not(:disabled) {
+    border-color: var(--accent-line);
+    color: var(--text);
+}
+
+.webllm-tool-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.webllm-tree-target {
+    overflow: hidden;
+    margin-left: auto;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.webllm-tree-new,
+.webllm-tree-rename {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.webllm-tree-new {
+    margin: 0 0.6rem 0.4rem;
+    padding: 0.25rem 0.35rem 0.25rem 0.5rem;
+    border: 1px solid var(--accent-line);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.webllm-sidebar .webllm-tree-input {
+    width: auto;
+    min-width: 0;
+    height: 26px;
+    flex: 1 1 auto;
+    margin: 0;
+    padding: 0 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+}
+
+.webllm-sidebar .webllm-tree-input:focus {
+    border-color: var(--accent-line);
+    outline: none;
+}
+
+.webllm-tree-scroll {
+    position: relative;
+    padding: 0.15rem 0.4rem 0.6rem;
+}
+
+.webllm-tree,
+.webllm-tree-group {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.webllm-tree {
+    min-height: 100%;
+    border-radius: 10px;
+}
+
+.webllm-tree.is-drop-target {
+    outline: 1.5px dashed var(--accent-line);
+    outline-offset: -2px;
+    background: var(--accent-soft);
+}
+
+.webllm-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 30px;
+    padding: 0.15rem 0.3rem 0.15rem calc(0.35rem + var(--depth, 0) * 14px);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.82rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.webllm-tree-row:hover {
+    background: var(--surface-2);
+}
+
+.webllm-tree-row.is-selected {
+    background: var(--accent-soft);
+}
+
+.webllm-tree-row.is-open .webllm-tree-name {
+    color: var(--accent-hi);
+    font-weight: 600;
+}
+
+.webllm-tree-row.is-drop-target {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1.5px var(--accent-line);
+}
+
+.webllm-tree-row.is-dragging {
+    opacity: 0.45;
+}
+
+.webllm-tree-caret {
+    width: 10px;
+    flex: 0 0 10px;
+    color: var(--muted);
+    font-size: 0.7rem;
+    text-align: center;
+}
+
+.webllm-tree-name {
+    overflow: hidden;
+    min-width: 0;
+    flex: 1 1 auto;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.webllm-tree-mark {
+    flex: 0 0 auto;
+    padding: 0 0.3rem;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 800;
+}
+
+.webllm-tree-mark[data-status='added'] {
+    background: var(--ok-soft);
+    color: #6fdca4;
+}
+
+.webllm-tree-mark[data-status='moved'] {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+/* A row's actions show on hover, on focus, and on the selected row. */
+.webllm-tree-actions {
+    display: none;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 1px;
+}
+
+.webllm-tree-row:hover .webllm-tree-actions,
+.webllm-tree-row:focus-within .webllm-tree-actions,
+.webllm-tree-row.is-selected .webllm-tree-actions {
+    display: inline-flex;
+}
+
+.webllm-row-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.webllm-row-btn:hover {
+    background: var(--surface-3);
+    color: var(--text);
+}
+
+.webllm-row-btn.is-danger:hover {
+    background: var(--err-soft);
+    color: #ff8a92;
+}
+
+.webllm-sidebar .webllm-tree-move {
+    width: 24px;
+    height: 24px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6' fill='none' stroke='%23a7b1c2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+        center / 15px no-repeat;
+    box-shadow: none;
+    color: transparent;
+    font-size: 0.78rem;
+    cursor: pointer;
+    appearance: none;
+}
+
+.webllm-sidebar .webllm-tree-move:hover,
+.webllm-sidebar .webllm-tree-move:focus {
+    background-color: var(--surface-3);
+    outline: none;
+}
+
+.webllm-tree-move option {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.webllm-tree-empty {
+    padding: 1.6rem 1rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+    text-align: center;
+}
+
+.webllm-tree-empty-title {
+    margin-bottom: 0.25rem;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+.webllm-tree-error {
+    margin: 0 0.75rem 0.4rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 8px;
+    background: var(--err-soft);
+    color: #ff8a92;
+    font-size: 0.74rem;
+}
+
+/* Unsaved reorganising: what Save will commit. */
+.webllm-tree-pending {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0.6rem 0.5rem;
+    padding: 0.4rem 0.4rem 0.4rem 0.7rem;
+    border: 1px solid rgba(229, 165, 60, 0.35);
+    border-radius: 12px;
+    background: var(--warn-soft);
+}
+
+.webllm-tree-pending-label {
+    min-width: 0;
+    flex: 1 1 auto;
+    color: var(--warn);
+    font-size: 0.74rem;
+    font-weight: 600;
+}
+
+.webllm-tree-pending-label::before {
+    content: '● ';
+}
+
+.webllm-project-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.65rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--dm-line);
+    background: var(--dm-head);
+}
+
+.webllm-project-git {
+    overflow: hidden;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.webllm-project-git:empty {
+    display: none;
+}
+
+.webllm-deploy-project-btn {
+    justify-content: center;
+    width: 100%;
+}
+
+.webllm-project-notice {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+/* A code block's Preview: opens the snippet in the canvas. */
+.webllm-code-preview {
+    padding: 0.1rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.webllm-code-preview::before {
+    content: '▶ ';
+    font-size: 0.6rem;
+}
+
+/* The canvas: a third column beside the chat on a wide screen. */
+.webllm-canvas {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    margin: 0;
+    border-left: 1px solid var(--dm-line);
+    background: var(--dm-panel);
+}
+
+.webllm-canvas-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    min-height: var(--dm-head-h);
+    padding: 0.5rem 0.6rem 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--dm-line);
+    background: var(--dm-head);
+}
+
+.webllm-canvas-tabs {
+    display: inline-flex;
+    flex: 0 0 auto;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--surface);
+}
+
+.webllm-canvas-tab {
+    height: 28px;
+    padding: 0 0.8rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.webllm-canvas-tab[aria-selected='true'] {
+    background: var(--surface-3);
+    box-shadow: var(--shadow-sm);
+    color: var(--text);
+}
+
+.webllm-canvas-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 7rem;
+    flex: 1 1 8rem;
+}
+
+.webllm-canvas .webllm-canvas-path {
+    width: 100%;
+    min-width: 0;
+    height: 30px;
+    margin: 0;
+    padding: 0 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.webllm-canvas .webllm-canvas-path:hover {
+    border-color: var(--border);
+}
+
+.webllm-canvas .webllm-canvas-path:focus {
+    border-color: var(--accent-line);
+    background: var(--surface);
+    outline: none;
+}
+
+.webllm-canvas-status {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.webllm-canvas-status::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 0.35rem;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: 1px;
+}
+
+.webllm-canvas-status:empty::before,
+.webllm-canvas-status[data-state='idle']::before {
+    display: none;
+}
+
+.webllm-canvas-status[data-state='saved'] {
+    color: #6fdca4;
+}
+
+.webllm-canvas-status[data-state='dirty'],
+.webllm-canvas-status[data-state='new'] {
+    color: var(--warn);
+}
+
+.webllm-canvas-status[data-state='error'] {
+    color: #ff8a92;
+}
+
+.webllm-canvas-actions {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.2rem;
+    margin-left: auto;
+}
+
+.webllm-canvas-actions .dm-icon-btn {
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+    color: var(--text-dim);
+}
+
+.webllm-canvas-actions .dm-icon-btn:disabled,
+.webllm-canvas-save:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.webllm-canvas-body {
+    position: relative;
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+}
+
+.webllm-canvas-view {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+}
+
+/* The page itself is white unless it says otherwise, as in a browser. */
+.webllm-canvas-frame {
+    width: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+    border: 0;
+    background: #ffffff;
+}
+
+.webllm-canvas-console {
+    flex: 0 0 auto;
+    max-height: 40%;
+    overflow: auto;
+    border-top: 1px solid var(--dm-line);
+    background: var(--surface);
+    font-size: 0.74rem;
+}
+
+.webllm-canvas-console summary {
+    position: sticky;
+    top: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    background: var(--surface);
+    color: var(--text-dim);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.webllm-console-count {
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--surface-3);
+    color: var(--text-dim);
+    font-size: 0.66rem;
+}
+
+.webllm-console-count[data-level='warn'] {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+.webllm-console-count[data-level='error'] {
+    background: var(--err-soft);
+    color: #ff8a92;
+}
+
+.webllm-console-log {
+    margin: 0;
+    padding: 0 0 0.35rem;
+    list-style: none;
+    font-family: var(--font-mono);
+}
+
+.webllm-console-entry {
+    padding: 0.2rem 0.75rem 0.2rem 1.6rem;
+    border-top: 1px solid var(--border-soft);
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.webllm-console-entry[data-level='warn'] {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+.webllm-console-entry[data-level='error'] {
+    background: var(--err-soft);
+    color: #ff8a92;
+}
+
+.webllm-canvas-editor {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    background: var(--surface);
+}
+
+.webllm-canvas-editor .cm-editor {
+    height: 100%;
+}
+
+.webllm-canvas .webllm-canvas-textarea {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0.75rem 1rem;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface);
+    box-shadow: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    resize: none;
+    tab-size: 4;
+}
+
+.webllm-canvas .webllm-canvas-textarea:focus {
+    outline: none;
+}
+
+.webllm-canvas-note {
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    border-top: 1px solid var(--dm-line);
+    background: var(--dm-head);
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.webllm-canvas-empty {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    padding: 2rem;
+    color: var(--muted);
+    font-size: 0.82rem;
+    text-align: center;
+}
+
+.webllm-canvas-empty-title {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+@media (min-width: 1181px) {
+    .webllm-layout.is-canvas-open {
+        grid-template-columns: minmax(200px, 250px) minmax(320px, 1fr) minmax(380px, 1.15fr);
+    }
+
+    .webllm-layout.is-canvas-open:not(.is-sidebar-open) {
+        grid-template-columns: minmax(320px, 1fr) minmax(400px, 1.2fr);
+    }
+}
+
+/* Narrower: the canvas slides over the chat from the right. */
+@media (max-width: 1180px) {
+    .webllm-canvas {
+        position: absolute;
+        inset: 0 0 0 auto;
+        z-index: 7;
+        width: min(100%, 680px);
+        box-shadow: var(--shadow-lg);
+    }
+}
+
+@media (max-width: 860px) {
+    .webllm-canvas {
+        width: 100%;
+        border-left: 0;
+    }
+
+    .webllm-canvas-file {
+        order: 3;
+        flex-basis: 100%;
+    }
+
+    .webllm-avatar {
+        display: none;
+    }
+}
+
+/* The chat column narrows when the canvas opens beside it: its head keeps
+   only icons, and a code block's file controls take a row of their own. */
+.webllm-main,
+.webllm-canvas {
+    container-type: inline-size;
+}
+
+@container (max-width: 640px) {
+    .webllm-main .dm-head-btn {
+        justify-content: center;
+        width: 36px;
+        padding: 0;
+    }
+
+    .webllm-main .dm-head-btn-label {
+        display: none;
+    }
+
+    .webllm-code-file {
+        order: 3;
+        flex-basis: 100%;
+        padding-bottom: 0.15rem;
+    }
+
+    .webllm-code-head .webllm-code-name {
+        max-width: none;
+    }
+}
+
+/* A narrow canvas says Saved / Unsaved with its dot alone; the words stay
+   for screen readers and in the tooltip. */
+@container (max-width: 600px) {
+    .webllm-canvas-status {
+        position: relative;
+        width: 12px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-indent: 20px;
+    }
+
+    .webllm-canvas-status::before {
+        position: absolute;
+        top: 50%;
+        left: 2px;
+        margin: -3.5px 0 0;
+    }
+}
+
+.webllm-tree-pending-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }

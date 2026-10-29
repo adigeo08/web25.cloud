@@ -60,6 +60,7 @@ import { GoFileService } from '../../gofile/GoFileService.js';
 import { GoFileCredentialStore } from '../../gofile/GoFileCredentialStore.js';
 import { encodeGoFileMirror, gofileMirrorFilename } from '../../gofile/GoFileMirrorCodec.js';
 import { formatWeb25Url } from '../../gofile/Web25Url.js';
+import { STAGE_DEPLOY_EVENT } from '../../ui/publish/StageDeploy.js';
 
 const DEPLOY_SESSION_STORAGE_KEY = 'web25.deploy.session.v1';
 /** How long a searched address shows "checking" before it is called offline. */
@@ -3196,6 +3197,20 @@ export function setupEventListeners() {
     if (deployAnother) {
         deployAnother.addEventListener('click', () => {
             this.resetDeployPipeline();
+        });
+    }
+
+    // A project handed over from elsewhere in the app — Deploy project in the
+    // Llama chat — arrives as files with folder-relative paths and is staged
+    // exactly as if that folder had been dropped here. From then on it is the
+    // ordinary deploy: bundle, .torrentchain, sign, seed.
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        window.addEventListener(STAGE_DEPLOY_EVENT, (event) => {
+            const files = /** @type {any} */ (event)?.detail?.files;
+            if (!Array.isArray(files) || files.length === 0) return;
+            const publishTab = /** @type {any} */ (document.querySelector('.tab-nav .tab-btn[data-tab="publish"]'));
+            if (typeof publishTab?.click === 'function') publishTab.click();
+            this.handleDroppedFiles(files);
         });
     }
 

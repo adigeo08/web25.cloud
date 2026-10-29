@@ -230,10 +230,50 @@ function appendText(doc, parent, text) {
 }
 
 /**
+ * @typedef {{ index: number, filename: string|null, suggested: string|null, code?: string }} CodeFileName
+ */
+
+/**
+ * The file controls of one block: its name, editable, and Save to project.
+ * @param {Document} doc
+ * @param {CodeFileName} file
+ */
+function createFileControls(doc, file) {
+    const wrap = doc.createElement('span');
+    wrap.className = 'webllm-code-file';
+    const input = doc.createElement('input');
+    input.type = 'text';
+    input.className = 'webllm-code-name';
+    input.dataset.codeName = '';
+    input.value = file.filename || '';
+    input.placeholder = file.suggested || 'file name';
+    input.maxLength = 120;
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.setAttribute('aria-label', 'File name for this snippet');
+    const save = doc.createElement('button');
+    save.type = 'button';
+    save.className = 'webllm-code-save';
+    save.dataset.saveCode = `${file.index}`;
+    save.textContent = 'Save to project';
+    save.setAttribute('aria-label', 'Save this snippet to the conversation’s project');
+    const preview = doc.createElement('button');
+    preview.type = 'button';
+    preview.className = 'webllm-code-preview';
+    preview.dataset.openCanvas = `${file.index}`;
+    preview.textContent = 'Preview';
+    preview.setAttribute('aria-label', 'Open this snippet in the canvas, to preview and edit it');
+    wrap.append(input, preview, save);
+    return wrap;
+}
+
+/**
  * @param {Document} doc
  * @param {{ lang: string, code: string, closed: boolean }} block
+ * @param {CodeFileName|null} [file] file controls for this block, when the
+ *   reply's code can be saved to a project
  */
-function createCodeBlock(doc, block) {
+function createCodeBlock(doc, block, file = null) {
     const figure = doc.createElement('div');
     figure.className = `webllm-code${block.closed ? '' : ' is-open'}`;
     const head = doc.createElement('div');
@@ -247,11 +287,14 @@ function createCodeBlock(doc, block) {
     copy.dataset.copyCode = '';
     copy.textContent = 'Copy';
     copy.setAttribute('aria-label', `Copy ${block.lang || 'code'} snippet`);
-    head.append(label, copy);
+    if (file) head.append(label, createFileControls(doc, file), copy);
+    else head.append(label, copy);
     const pre = doc.createElement('pre');
     const code = doc.createElement('code');
     if (block.lang) code.className = `language-${block.lang}`;
-    code.textContent = block.code;
+    // A file name written as the first line (```html index.html) is shown in
+    // the name field, so the block shows the file's code without it.
+    code.textContent = file && typeof file.code === 'string' ? file.code : block.code;
     pre.appendChild(code);
     figure.append(head, pre);
     return figure;
@@ -261,13 +304,20 @@ function createCodeBlock(doc, block) {
  * Draw `content` into `body`, replacing what was there.
  * @param {HTMLElement} body
  * @param {string} content
+ * @param {{ files?: CodeFileName[]|null }} [options] `files` gives code blocks
+ *   their file controls, matched by `index` (the block's place among the
+ *   reply's code blocks); without it a block has only Copy
  */
-export function renderReply(body, content) {
+export function renderReply(body, content, { files = null } = {}) {
     const doc = body.ownerDocument;
     body.textContent = '';
+    let index = -1;
     for (const block of splitReply(content)) {
-        if (block.type === 'code') body.appendChild(createCodeBlock(doc, block));
-        else appendText(doc, body, block.text);
+        if (block.type === 'code') {
+            index += 1;
+            const file = files?.find((entry) => entry.index === index) || null;
+            body.appendChild(createCodeBlock(doc, block, file));
+        } else appendText(doc, body, block.text);
     }
 }
 

@@ -163,7 +163,8 @@ async function startScriptedChat(
         continueResult = { finishReason: 'stop' },
         mdn = null,
         decision = 'short',
-        plan = null
+        plan = null,
+        project = false
     } = {}
 ) {
     await page.evaluate(
@@ -175,7 +176,8 @@ async function startScriptedChat(
             continueResult: moreResult,
             mdn: mdnMode,
             decision: autoMode,
-            plan: planSteps
+            plan: planSteps,
+            project: withProject
         }) => {
             const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
             const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
@@ -256,14 +258,50 @@ async function startScriptedChat(
                 // The real thought store, in this browser; no CDN here, so recall runs without idb-vector.
                 openThoughts: (walletAddress) => openWebLLMThoughts({ walletAddress }),
                 mdnClient,
-                onChange: (state, change) => render(state, change)
+                onChange: (state, change) => {
+                    render(state, change);
+                    window.__project?.handle(state, change);
+                }
             });
-            render = bindWebLLMPanel(controller);
+            // The conversation's project, as WebLLMApp wires it: this browser's
+            // real OPFS, with no CDN for git, so files are saved uncommitted.
+            let project = null;
+            let renderProject = () => {};
+            let workbench = null;
+            if (withProject) {
+                const { WebLLMProject } = await import('/src/webllm/chatProject.js');
+                let available = false;
+                project = new WebLLMProject({
+                    controller,
+                    onChange: (state) => {
+                        renderProject(state);
+                        if (state.available !== available) {
+                            available = state.available;
+                            render(controller.state);
+                        }
+                    }
+                });
+                window.__project = project;
+            }
+            const panel = bindWebLLMPanel(controller, {
+                project,
+                onOpenCanvas: (snippet) => void workbench?.openSnippet(snippet)
+            });
+            render = panel;
+            if (project) {
+                // The micro IDE, as WebLLMApp wires it. No CDN here: git commits
+                // are skipped and the editor is the plain fallback.
+                const { bindWebLLMWorkbench } = await import('/src/ui/webllm/WebLLMWorkbench.js');
+                workbench = bindWebLLMWorkbench({ project, controller, sidebar: panel.sidebar, confirm: () => true });
+                renderProject = workbench.renderProject;
+                renderProject(project.state);
+                window.__workbench = workbench;
+            }
             window.__controller = controller;
             controller.setAllowed(true, { walletAddress: address });
             await controller.activate();
         },
-        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan }
+        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan, project }
     );
 }
 
@@ -894,6 +932,132 @@ test('code in a reply is drawn as a code block with a Copy button, never as mark
 });
 
 test(
+    'the micro IDE: sidebar panels, a project tree saved in one go, and a canvas that previews and edits',
+    { skip: SKIP },
+    async () => {
+        const { page, context, problems } = await openApp({ viewport: DESKTOP });
+        try {
+            await openWebLLMTab(page, DESKTOP, { scripted: true });
+            await startScriptedChat(
+                page,
+                [
+                    '```html index.html\n<!doctype html><html><head><link rel="stylesheet" href="style.css"></head>' +
+                        '<body><h1>Hi</h1><script src="app.js"></script></body></html>\n```\n',
+                    'Then:\n```css\nh1 { color: red; }\n```\nAnd:\n```js app.js\nconsole.log("hello from app");\n```'
+                ],
+                undefined,
+                { wallet: '0xcdcd', project: true }
+            );
+            await page.waitForFunction(() => window.__controller.state.history === 'ready');
+            await page.waitForFunction(() => window.__project.state.available);
+            await ask(page, 'Make a page');
+
+            // The sidebar starts open on a desktop; × closes it and its button reopens it.
+            assert.equal(await page.isVisible('#webllm-panel-conversations'), true);
+            await page.click('#webllm-sidebar-close');
+            assert.equal(await page.isHidden('#webllm-sidebar'), true);
+            assert.equal(await page.getAttribute('#webllm-sidebar-toggle', 'aria-expanded'), 'false');
+            await page.click('#webllm-sidebar-toggle');
+            assert.equal(await page.isVisible('#webllm-sidebar'), true);
+
+            // The project button swaps the panel; pressing it again closes the sidebar.
+            await page.click('#webllm-project-toggle');
+            assert.equal(await page.isVisible('#webllm-panel-project'), true);
+            assert.equal(await page.isHidden('#webllm-panel-conversations'), true);
+            assert.equal(await page.getAttribute('#webllm-project-toggle', 'aria-pressed'), 'true');
+            const rows = () =>
+                page.$$eval('#webllm-tree .webllm-tree-row', (items) => items.map((el) => el.dataset.row));
+            await page.waitForFunction(() => document.querySelectorAll('#webllm-tree .webllm-tree-row').length === 2);
+            assert.deepEqual(await rows(), ['app.js', 'index.html']);
+
+            // The unnamed stylesheet, saved from the chat under the name it suggests.
+            await page.click('#webllm-messages [data-save-code="1"]');
+            await page.waitForFunction(() => document.querySelectorAll('#webllm-tree .webllm-tree-row').length === 3);
+
+            // A new folder and a drag into it are a draft until Save.
+            await page.click('#webllm-tree-new-folder');
+            await page.fill('#webllm-tree-new-name', 'css');
+            await page.press('#webllm-tree-new-name', 'Enter');
+            await page.dragAndDrop('[data-row="style.css"]', '[data-row="css"]');
+            assert.equal(await page.textContent('#webllm-tree-pending-label'), '2 changes');
+            assert.deepEqual(await page.evaluate(() => window.__project.state.files), [
+                'app.js',
+                'index.html',
+                'style.css'
+            ]);
+            await page.click('#webllm-tree-save');
+            await page.waitForFunction(() => window.__project.state.files.includes('css/style.css'));
+            await page.waitForSelector('#webllm-tree-pending', { state: 'hidden' });
+            assert.deepEqual(await rows(), ['css', 'css/style.css', 'app.js', 'index.html']);
+
+            // Up a level with the arrow, then Discard puts it back.
+            await page.hover('[data-row="css/style.css"]');
+            await page.click('[data-row="css/style.css"] [data-tree-action="up"]');
+            assert.deepEqual(await rows(), ['css', 'app.js', 'index.html', 'style.css']);
+            await page.click('#webllm-tree-discard');
+            assert.deepEqual(await rows(), ['css', 'css/style.css', 'app.js', 'index.html']);
+
+            // Preview on a snippet: the page, its script inlined, its console below.
+            await page.click('#webllm-messages [data-open-canvas="0"]');
+            await page.waitForSelector('#webllm-canvas:not(.hidden)');
+            const frame = page.frameLocator('#webllm-canvas-frame');
+            assert.equal(await frame.locator('h1').textContent(), 'Hi');
+            await page.waitForFunction(
+                () => document.getElementById('webllm-canvas-console-count').textContent === '1'
+            );
+            assert.equal(await page.textContent('#webllm-canvas-console-log'), 'hello from app');
+            assert.equal(await page.textContent('#webllm-canvas-status'), 'Saved');
+            // The sandbox has no way back into the app's origin.
+            assert.equal(await page.getAttribute('#webllm-canvas-frame', 'sandbox'), 'allow-scripts allow-modals');
+
+            // Edit in Code (the plain editor here: no CDN), save with the keyboard.
+            await page.click('#webllm-canvas-tab-code');
+            await page.waitForSelector('.webllm-canvas-textarea');
+            assert.match(await page.textContent('#webllm-canvas-editor-note'), /plain editor/);
+            await page.fill('.webllm-canvas-textarea', '<h1>Edited</h1>');
+            assert.equal(await page.textContent('#webllm-canvas-status'), 'Unsaved changes');
+            await page.press('.webllm-canvas-textarea', 'Control+s');
+            await page.waitForFunction(() => document.getElementById('webllm-canvas-status').textContent === 'Saved');
+            assert.equal(await page.evaluate(() => window.__project.readFile('index.html')), '<h1>Edited</h1>');
+            await page.click('#webllm-canvas-tab-preview');
+            assert.equal(await frame.locator('h1').textContent(), 'Edited');
+
+            // Saved into the thought store too, and recalled into Llama's next prompt.
+            await page.evaluate(() => window.__project.whenIdle());
+            const titles = await page.evaluate(async () => {
+                const listed = await window.__controller.thoughts.listSequences({
+                    conversationId: window.__controller.state.activeConversationId
+                });
+                return listed.value.sequences.map((sequence) => sequence.title);
+            });
+            assert.ok(titles.includes('Project file: index.html'));
+            await ask(page, 'Make the heading on index.html blue', { install: false });
+            const system = await page.evaluate(
+                () => window.__sent.filter((entry) => entry.kind === 'chat').at(-1).messages[0].content
+            );
+            assert.match(system, /The user's project, as saved in the canvas:[\s\S]*<h1>Edited<\/h1>/);
+
+            // Deploy project sends the reorganised tree, as a folder.
+            await page.evaluate(() => {
+                window.addEventListener('web25:stage-deploy', (event) => {
+                    window.__staged = event.detail.files.map((file) => file.webkitRelativePath);
+                });
+            });
+            await page.click('#webllm-deploy-project-btn');
+            await page.waitForFunction(() => Array.isArray(window.__staged));
+            assert.deepEqual(await page.evaluate(() => window.__staged), [
+                'make-a-page/app.js',
+                'make-a-page/css/style.css',
+                'make-a-page/index.html'
+            ]);
+            assert.deepEqual(problems, []);
+        } finally {
+            await context.close();
+        }
+    }
+);
+
+test(
     'Auto: Llama chooses Thinking, plans in JSON, and writes each step from its recalled thoughts',
     { skip: SKIP },
     async () => {
@@ -1177,13 +1341,19 @@ test(
                 const first = await add(null, 1, 'Draw a bar chart on a canvas');
                 await add(first.value.sequenceId, 2, 'The login form with an email input and a submit button');
                 const third = await add(first.value.sequenceId, 3, 'Header and footer styles');
+                // Indexing runs in the background; the thought is stored already.
+                await store.whenIndexed();
+                const stored = await store.getThought({
+                    sequenceId: first.value.sequenceId,
+                    thoughtId: third.value.thought.id
+                });
                 const recalled = await store.recall({
                     query: 'Validate the email input of the login form',
                     conversationId: 'c1',
                     limit: 1
                 });
                 return {
-                    indexed: third.value.thought.vectorKey !== null,
+                    indexed: stored.value.thoughts[0].vectorKey !== null,
                     recalled: recalled.map((thought) => thought.thought),
                     databases: (await indexedDB.databases()).map((db) => db.name).sort()
                 };
@@ -1196,6 +1366,140 @@ test(
             assert.ok(result.databases.some((name) => name.startsWith('web25-webllm-thought-vectors-')));
             assert.deepEqual(problems, []);
             assert.deepEqual(external, [], 'nothing else left the page');
+        } finally {
+            await context.close();
+        }
+    }
+);
+
+test(
+    'a version 1 thought database is upgraded in place: its thoughts are kept, indexed late, and recalled by conversation',
+    { skip: SKIP },
+    async () => {
+        const { page, context, problems } = await openApp({ viewport: DESKTOP });
+        try {
+            await context.route('https://cdn.jsdelivr.net/npm/idb-vector@0.2.0/**', async (pending) => {
+                const file = new URL(pending.request().url()).pathname.replace('/npm/idb-vector@0.2.0/', '');
+                await pending.fulfill({
+                    status: 200,
+                    contentType: 'text/javascript',
+                    headers: { 'access-control-allow-origin': '*' },
+                    body: await readFile(new URL(`../node_modules/idb-vector/${file}`, import.meta.url))
+                });
+            });
+            const result = await page.evaluate(async () => {
+                const { thoughtsDatabaseName, openWebLLMThoughts } = await import('/src/webllm/webllmThoughtStore.js');
+                const { loadIdbVector } = await import('/src/webllm/idbVectorLoader.js');
+                const name = await thoughtsDatabaseName('0xeeee');
+                // The schema as version 1 wrote it, with thoughts stored before
+                // idb-vector ever loaded.
+                await new Promise((resolve, reject) => {
+                    const request = indexedDB.open(name, 1);
+                    request.onupgradeneeded = () => {
+                        const db = request.result;
+                        db.createObjectStore('sequences', { keyPath: 'sequenceId' }).createIndex(
+                            'byConversation',
+                            'conversationId'
+                        );
+                        const thoughts = db.createObjectStore('thoughts', { keyPath: 'id' });
+                        thoughts.createIndex('bySequence', 'sequenceId');
+                        thoughts.createIndex('byClientRequest', 'clientRequestId');
+                    };
+                    request.onsuccess = () => {
+                        const db = request.result;
+                        const tx = db.transaction(['sequences', 'thoughts'], 'readwrite');
+                        const base = {
+                            completed: false,
+                            thoughtCount: 1,
+                            lastThoughtNumber: 1,
+                            totalThoughts: 2,
+                            lastThoughtPreview: '',
+                            branches: [],
+                            createdAt: 1,
+                            updatedAt: 1,
+                            messageId: null,
+                            title: 't'
+                        };
+                        tx.objectStore('sequences').put({ ...base, sequenceId: 's1', conversationId: 'c1' });
+                        tx.objectStore('sequences').put({ ...base, sequenceId: 's2', conversationId: 'c2' });
+                        const thought = (id, sequenceId, conversationId, text, ordinal) => ({
+                            id,
+                            ordinal,
+                            sequenceId,
+                            conversationId,
+                            thought: text,
+                            thoughtNumber: 1,
+                            totalThoughts: 2,
+                            nextThoughtNeeded: true,
+                            isRevision: false,
+                            revisesThought: null,
+                            branchFromThought: null,
+                            branchId: 'main',
+                            needsMoreThoughts: false,
+                            clientRequestId: null,
+                            fingerprint: id,
+                            vectorKey: null,
+                            createdAt: 1
+                        });
+                        tx.objectStore('thoughts').put(
+                            thought('t1', 's1', 'c1', 'The login form with an email input and a submit button', 1)
+                        );
+                        tx.objectStore('thoughts').put(
+                            thought('t2', 's2', 'c2', 'Another conversation: the login form email input', 2)
+                        );
+                        tx.oncomplete = () => {
+                            db.close();
+                            resolve(undefined);
+                        };
+                        tx.onerror = () => reject(tx.error);
+                    };
+                    request.onerror = () => reject(request.error);
+                });
+                const VectorDB = await loadIdbVector();
+                const store = await openWebLLMThoughts({
+                    walletAddress: '0xeeee',
+                    vectors: async (dbName) => new VectorDB({ dbName, objectStore: 'vectors', vectorPath: 'embedding' })
+                });
+                await store.whenIndexed();
+                const upgraded = await new Promise((resolve) => {
+                    const tx = store.db.transaction(['thoughts'], 'readonly');
+                    resolve({
+                        version: store.db.version,
+                        indexes: [...tx.objectStore('thoughts').indexNames].sort(),
+                        stores: [...store.db.objectStoreNames].sort()
+                    });
+                });
+                const vectorKeys = await store.run(
+                    ['thoughts'],
+                    'readonly',
+                    (tx) =>
+                        new Promise((resolve) => {
+                            const request = tx.objectStore('thoughts').getAll();
+                            request.onsuccess = () => resolve(request.result.map((t) => t.vectorKey !== null));
+                        })
+                );
+                const recalled = await store.recall({
+                    query: 'validate the login form email',
+                    conversationId: 'c1',
+                    limit: 3
+                });
+                await store.deleteConversation('c1');
+                const after = await store.recall({
+                    query: 'validate the login form email',
+                    conversationId: 'c1',
+                    limit: 3
+                });
+                return { upgraded, vectorKeys, recalled: recalled.map((t) => t.id), after: after.length };
+            });
+            assert.deepEqual(result.upgraded, {
+                version: 2,
+                indexes: ['byClientRequest', 'byConversation', 'bySequence'],
+                stores: ['sequences', 'thoughts', 'vectorTombstones']
+            });
+            assert.deepEqual(result.vectorKeys, [true, true], 'thoughts from before are backfilled into idb-vector');
+            assert.deepEqual(result.recalled, ['t1'], 'only this conversation');
+            assert.equal(result.after, 0);
+            assert.deepEqual(problems, []);
         } finally {
             await context.close();
         }

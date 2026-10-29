@@ -1224,43 +1224,150 @@
                     -->
                     <section id="webllm-chat" class="quick-upload card-base dm-app webllm-app hidden" aria-label="Local AI chat">
                         <div id="webllm-layout" class="webllm-layout">
-                            <aside id="webllm-sidebar" class="dm-contacts webllm-sidebar" aria-label="Saved conversations">
-                                <div class="dm-contacts-head webllm-sidebar-head">
-                                    <p class="dm-contacts-title">Conversations</p>
-                                    <span id="webllm-conversation-count" class="dm-contacts-count">0</span>
-                                </div>
-                                <div class="webllm-sidebar-scroll">
-                                    <ul id="webllm-conversations" class="webllm-conversation-list"></ul>
-                                    <p id="webllm-conversations-empty" class="webllm-conversations-empty">
-                                        No saved conversations yet.
+                            <!--
+                                The sidebar holds one panel at a time: the saved
+                                conversations, or the open conversation's project.
+                                The two buttons at the start of the chat head pick
+                                one; pressing the open one again, or ×, closes it.
+                            -->
+                            <aside id="webllm-sidebar" class="dm-contacts webllm-sidebar" aria-label="Conversations and project">
+                                <section id="webllm-panel-conversations" class="webllm-panel" aria-labelledby="webllm-conversations-title">
+                                    <div class="dm-contacts-head webllm-sidebar-head">
+                                        <p id="webllm-conversations-title" class="dm-contacts-title">Conversations</p>
+                                        <span id="webllm-conversation-count" class="dm-contacts-count">0</span>
+                                        <button
+                                            id="webllm-sidebar-close"
+                                            type="button"
+                                            class="dm-icon-btn webllm-panel-close"
+                                            title="Close the sidebar"
+                                            aria-label="Close the sidebar"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+                                        </button>
+                                    </div>
+                                    <div class="webllm-sidebar-scroll">
+                                        <ul id="webllm-conversations" class="webllm-conversation-list"></ul>
+                                        <p id="webllm-conversations-empty" class="webllm-conversations-empty">
+                                            No saved conversations yet.
+                                        </p>
+                                    </div>
+                                    <p id="webllm-history-note" class="dm-contacts-hint webllm-history-note">
+                                        Saved only in this browser, for this wallet.
                                     </p>
-                                </div>
-                                <p id="webllm-history-note" class="dm-contacts-hint webllm-history-note">
-                                    Saved only in this browser, for this wallet.
-                                </p>
+                                </section>
+
+                                <section id="webllm-panel-project" class="webllm-panel webllm-project-panel hidden" aria-labelledby="webllm-project-title">
+                                    <div class="dm-contacts-head webllm-sidebar-head">
+                                        <p id="webllm-project-title" class="dm-contacts-title">Project</p>
+                                        <span id="webllm-project-count" class="dm-contacts-count">0</span>
+                                        <button
+                                            id="webllm-project-close"
+                                            type="button"
+                                            class="dm-icon-btn webllm-panel-close"
+                                            title="Close the sidebar"
+                                            aria-label="Close the sidebar"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+                                        </button>
+                                    </div>
+                                    <div class="webllm-tree-toolbar" role="toolbar" aria-label="Project files">
+                                        <button id="webllm-tree-new-file" type="button" class="webllm-tool-btn" title="New file">
+                                            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M12 11v6M9 14h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                                            <span>File</span>
+                                        </button>
+                                        <button id="webllm-tree-new-folder" type="button" class="webllm-tool-btn" title="New folder">
+                                            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                                            <span>Folder</span>
+                                        </button>
+                                        <span id="webllm-tree-target" class="webllm-tree-target" title="New files and folders go here">in /</span>
+                                    </div>
+                                    <form id="webllm-tree-new" class="webllm-tree-new hidden" autocomplete="off">
+                                        <span id="webllm-tree-new-icon" class="webllm-file-badge" data-kind="file" aria-hidden="true"></span>
+                                        <input id="webllm-tree-new-name" class="webllm-tree-input" type="text" maxlength="80" spellcheck="false" aria-label="Name" />
+                                        <button type="submit" class="webllm-row-btn" title="Create" aria-label="Create">✓</button>
+                                        <button id="webllm-tree-new-cancel" type="button" class="webllm-row-btn" title="Cancel" aria-label="Cancel">✕</button>
+                                    </form>
+                                    <div class="webllm-sidebar-scroll webllm-tree-scroll">
+                                        <ul id="webllm-tree" class="webllm-tree" role="tree" aria-label="Project files"></ul>
+                                        <div id="webllm-tree-empty" class="webllm-tree-empty">
+                                            <p class="webllm-tree-empty-title">No files yet</p>
+                                            <p>Ask Llama for code, save a snippet, or create a file.</p>
+                                        </div>
+                                    </div>
+                                    <p id="webllm-tree-error" class="webllm-tree-error hidden" role="alert"></p>
+                                    <div id="webllm-tree-pending" class="webllm-tree-pending hidden" role="status">
+                                        <span id="webllm-tree-pending-label" class="webllm-tree-pending-label"></span>
+                                        <button id="webllm-tree-discard" type="button" class="btn btn-secondary btn-sm">Discard</button>
+                                        <button id="webllm-tree-save" type="button" class="btn btn-primary btn-sm">Save</button>
+                                    </div>
+                                    <div class="webllm-project-foot">
+                                        <code id="webllm-project-git" class="webllm-project-git"></code>
+                                        <button
+                                            id="webllm-deploy-project-btn"
+                                            type="button"
+                                            class="btn btn-primary btn-sm webllm-deploy-project-btn"
+                                            title="Send this conversation's files to Deploy, as a folder"
+                                        >
+                                            🚀 Deploy project
+                                        </button>
+                                        <p id="webllm-project-notice" class="webllm-project-notice hidden" role="status"></p>
+                                    </div>
+                                </section>
                             </aside>
 
                             <div class="dm-main webllm-main">
                                 <div class="dm-chat-head">
-                                    <button
-                                        id="webllm-sidebar-toggle"
-                                        type="button"
-                                        class="dm-icon-btn webllm-sidebar-toggle"
-                                        title="Conversations"
-                                        aria-label="Conversations"
-                                        aria-controls="webllm-sidebar"
-                                        aria-expanded="false"
-                                    >
-                                        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                                            <path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                                        </svg>
-                                    </button>
+                                    <div class="webllm-panel-switch" role="group" aria-label="Sidebar">
+                                        <button
+                                            id="webllm-sidebar-toggle"
+                                            type="button"
+                                            class="dm-icon-btn webllm-sidebar-toggle"
+                                            title="Conversations"
+                                            aria-label="Conversations"
+                                            aria-controls="webllm-sidebar"
+                                            aria-expanded="false"
+                                            aria-pressed="false"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                                                <path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                                            </svg>
+                                        </button>
+                                        <button
+                                            id="webllm-project-toggle"
+                                            type="button"
+                                            class="dm-icon-btn webllm-project-toggle hidden"
+                                            title="Project files"
+                                            aria-label="Project files"
+                                            aria-controls="webllm-sidebar"
+                                            aria-expanded="false"
+                                            aria-pressed="false"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                                                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+                                            </svg>
+                                            <span id="webllm-project-badge" class="webllm-toggle-badge hidden"></span>
+                                        </button>
+                                    </div>
                                     <span class="dm-avatar webllm-avatar" aria-hidden="true">🦙</span>
                                     <span class="dm-chat-title">
                                         <span class="dm-peer-label">Llama 3.2 1B · Local AI</span>
                                         <span id="webllm-chat-status" class="status-chip status-success">Running on this device</span>
                                     </span>
                                     <div class="dm-chat-actions">
+                                        <button
+                                            id="webllm-canvas-btn"
+                                            type="button"
+                                            class="dm-head-btn webllm-canvas-btn hidden"
+                                            title="Open the canvas: preview and edit the project"
+                                            aria-label="Canvas"
+                                            aria-controls="webllm-canvas"
+                                            aria-expanded="false"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                                <path d="M4 5h16v14H4zM13 5v14M16 9h1.5M16 12h1.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                                            </svg>
+                                            <span class="dm-head-btn-label">Canvas</span>
+                                        </button>
                                         <button
                                             id="webllm-new-chat-btn"
                                             type="button"
@@ -1356,6 +1463,64 @@
                                     for this wallet.
                                 </p>
                             </div>
+
+                            <!--
+                                The canvas: the open file previewed, and its code.
+                                The preview frame is sandboxed without
+                                allow-same-origin, so the code runs in an opaque
+                                origin — none of this app's storage or wallet.
+                            -->
+                            <section id="webllm-canvas" class="webllm-canvas hidden" aria-label="Canvas">
+                                <div class="webllm-canvas-head">
+                                    <div class="webllm-canvas-tabs" role="tablist" aria-label="Canvas view">
+                                        <button id="webllm-canvas-tab-preview" type="button" role="tab" class="webllm-canvas-tab" data-canvas-view="preview" aria-selected="true" aria-controls="webllm-canvas-preview">
+                                            Preview
+                                        </button>
+                                        <button id="webllm-canvas-tab-code" type="button" role="tab" class="webllm-canvas-tab" data-canvas-view="code" aria-selected="false" aria-controls="webllm-canvas-code">
+                                            Code
+                                        </button>
+                                    </div>
+                                    <label class="webllm-canvas-file">
+                                        <span id="webllm-canvas-badge" class="webllm-file-badge" data-ext="" aria-hidden="true"></span>
+                                        <input id="webllm-canvas-path" class="webllm-canvas-path" type="text" maxlength="120" spellcheck="false" placeholder="index.html" aria-label="File name" />
+                                    </label>
+                                    <span id="webllm-canvas-status" class="webllm-canvas-status" data-state="saved">Saved</span>
+                                    <div class="webllm-canvas-actions">
+                                        <button id="webllm-canvas-reload" type="button" class="dm-icon-btn" title="Reload the preview" aria-label="Reload the preview">
+                                            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                                        </button>
+                                        <button id="webllm-canvas-save" type="button" class="btn btn-primary btn-sm webllm-canvas-save" title="Save to the project (Ctrl+S)">Save</button>
+                                        <button id="webllm-canvas-close" type="button" class="dm-icon-btn" title="Close the canvas" aria-label="Close the canvas">
+                                            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="webllm-canvas-body">
+                                    <div id="webllm-canvas-preview" class="webllm-canvas-view" role="tabpanel" aria-labelledby="webllm-canvas-tab-preview">
+                                        <iframe
+                                            id="webllm-canvas-frame"
+                                            class="webllm-canvas-frame"
+                                            title="Preview"
+                                            sandbox="allow-scripts allow-modals"
+                                            referrerpolicy="no-referrer"
+                                        ></iframe>
+                                        <details id="webllm-canvas-console" class="webllm-canvas-console">
+                                            <summary>
+                                                Console <span id="webllm-canvas-console-count" class="webllm-console-count">0</span>
+                                            </summary>
+                                            <ol id="webllm-canvas-console-log" class="webllm-console-log"></ol>
+                                        </details>
+                                    </div>
+                                    <div id="webllm-canvas-code" class="webllm-canvas-view hidden" role="tabpanel" aria-labelledby="webllm-canvas-tab-code">
+                                        <div id="webllm-canvas-editor" class="webllm-canvas-editor"></div>
+                                        <p id="webllm-canvas-editor-note" class="webllm-canvas-note hidden"></p>
+                                    </div>
+                                    <div id="webllm-canvas-empty" class="webllm-canvas-empty">
+                                        <p class="webllm-canvas-empty-title">Nothing open</p>
+                                        <p>Press <strong>Preview</strong> on a snippet in the chat, or pick a file in the project.</p>
+                                    </div>
+                                </div>
+                            </section>
                         </div>
 
                         <!--

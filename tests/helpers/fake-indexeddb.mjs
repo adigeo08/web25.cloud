@@ -58,6 +58,11 @@ class FakeStore {
         return new FakeIndex(this, keyPath);
     }
 
+    get indexNames() {
+        const names = [...this.indexes.keys()];
+        return { contains: (name) => names.includes(name), length: names.length };
+    }
+
     index(name) {
         const keyPath = this.indexes.get(name);
         if (!keyPath) throw new Error(`No such index: ${name}`);
@@ -240,6 +245,9 @@ export function installFakeIndexedDb() {
                 db.closed = false;
                 if (needsUpgrade) {
                     request.result = db;
+                    // The version-change transaction, through which an upgrade
+                    // reaches the stores that already exist.
+                    request.transaction = { objectStore: (storeName) => db.stores.get(storeName) };
                     // The real API hands the handler an event whose `target` is
                     // the request; code that reads `event.target.result` is
                     // doing the ordinary thing, not something exotic.
