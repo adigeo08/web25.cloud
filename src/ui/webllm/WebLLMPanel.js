@@ -237,9 +237,15 @@ function renderEmptyThread(list) {
  *
  * @param {import('../../webllm/WebLLMController.js').WebLLMController} controller
  * @param {{ confirm?: (message: string) => boolean,
- *           project?: import('../../webllm/chatProject.js').WebLLMProject|null }} [options]
+ *           project?: import('../../webllm/chatProject.js').WebLLMProject|null,
+ *           onOpenCanvas?: ((snippet: { messageId: string, index: number, name: string }) => void)|null }} [options]
+ *   `onOpenCanvas` is what a code block's Preview does
+ * @returns {((state: any, change?: any) => void) & { sidebar: SidebarControl }}
  */
-export function bindWebLLMPanel(controller, { confirm = (message) => window.confirm(message), project = null } = {}) {
+export function bindWebLLMPanel(
+    controller,
+    { confirm = (message) => window.confirm(message), project = null, onOpenCanvas = null } = {}
+) {
     const installBtn = byId('webllm-install-btn');
     const composer = byId('webllm-composer');
     const input = /** @type {HTMLTextAreaElement|null} */ (byId('webllm-input'));
@@ -266,18 +272,11 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
     input?.addEventListener('input', () => autosize(input));
 
     byId('webllm-stop-btn')?.addEventListener('click', () => controller.stop());
-    const layout = byId('webllm-layout');
-    const sidebarToggle = byId('webllm-sidebar-toggle');
-    /** On a phone the conversation list is a drawer over the chat. */
-    function setSidebarOpen(open) {
-        layout?.classList.toggle('is-sidebar-open', open);
-        sidebarToggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-    sidebarToggle?.addEventListener('click', () => setSidebarOpen(!layout?.classList.contains('is-sidebar-open')));
+    const sidebar = bindSidebar();
 
     byId('webllm-new-chat-btn')?.addEventListener('click', () => {
         controller.newChat();
-        setSidebarOpen(false);
+        sidebar.closeOnPhone();
         input?.focus();
     });
     byId('webllm-delete-btn')?.addEventListener('click', () => {
@@ -291,7 +290,7 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         const button = /** @type {any} */ (event.target)?.closest?.('[data-conversation-id]');
         if (!button) return;
         void controller.openConversation(button.dataset.conversationId);
-        setSidebarOpen(false);
+        sidebar.closeOnPhone();
     });
 
     messages?.addEventListener('click', (event) => {
@@ -303,6 +302,16 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         const save = /** @type {any} */ (event.target)?.closest?.('[data-save-code]');
         if (save) {
             if (project) void saveCode(project, save);
+            return;
+        }
+        const preview = /** @type {any} */ (event.target)?.closest?.('[data-open-canvas]');
+        if (preview) {
+            const input = preview.closest('.webllm-code')?.querySelector('[data-code-name]');
+            onOpenCanvas?.({
+                messageId: preview.closest('[data-message-id]')?.dataset?.messageId,
+                index: Number(preview.dataset.openCanvas),
+                name: `${input?.value || ''}`.trim() || `${input?.placeholder || ''}`.trim()
+            });
             return;
         }
         const button = /** @type {any} */ (event.target)?.closest?.('[data-continue]');
@@ -593,7 +602,78 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         if (remove) remove.disabled = state.messages.length === 0 && !state.activeConversationId;
     }
 
-    return render;
+    return Object.assign(render, { sidebar });
+}
+
+/**
+ * @typedef {{ open: (panel?: 'conversations'|'project') => void, close: () => void,
+ *             toggle: (panel: 'conversations'|'project') => void, closeOnPhone: () => void,
+ *             isPhone: () => boolean, state: { open: boolean, panel: 'conversations'|'project' } }} SidebarControl
+ */
+
+/**
+ * The sidebar: one panel at a time — the conversations, or the project — and
+ * open or closed. Each panel's button at the start of the chat head opens it,
+ * and closes the sidebar when its panel is the one showing; × closes it too.
+ *
+ * On a desktop it is a column that starts open; on a phone it is a drawer over
+ * the chat that starts closed and closes again once something in it is chosen.
+ *
+ * @returns {SidebarControl}
+ */
+function bindSidebar() {
+    const layout = byId('webllm-layout');
+    const buttons = {
+        conversations: byId('webllm-sidebar-toggle'),
+        project: byId('webllm-project-toggle')
+    };
+    const isPhone = () => Boolean(globalThis.matchMedia?.('(max-width: 860px)')?.matches);
+    /** @type {{ open: boolean, panel: 'conversations'|'project' }} */
+    const state = { open: !isPhone(), panel: 'conversations' };
+
+    function apply() {
+        layout?.classList.toggle('is-sidebar-open', state.open);
+        if (layout) /** @type {any} */ (layout).dataset.sidebarPanel = state.panel;
+        setHidden(byId('webllm-panel-conversations'), state.panel !== 'conversations');
+        setHidden(byId('webllm-panel-project'), state.panel !== 'project');
+        for (const [panel, button] of Object.entries(buttons)) {
+            const active = state.open && state.panel === panel;
+            button?.setAttribute('aria-expanded', active ? 'true' : 'false');
+            button?.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+    }
+
+    /** @type {SidebarControl} */
+    const control = {
+        state,
+        isPhone,
+        open(panel = state.panel) {
+            Object.assign(state, { open: true, panel });
+            apply();
+        },
+        close() {
+            state.open = false;
+            apply();
+        },
+        toggle(panel) {
+            if (state.open && state.panel === panel) control.close();
+            else control.open(panel);
+        },
+        closeOnPhone() {
+            if (isPhone()) control.close();
+        }
+    };
+
+    buttons.conversations?.addEventListener('click', () => control.toggle('conversations'));
+    buttons.project?.addEventListener('click', () => control.toggle('project'));
+    byId('webllm-sidebar-close')?.addEventListener('click', () => control.close());
+    byId('webllm-project-close')?.addEventListener('click', () => control.close());
+    // Escape closes the drawer a phone shows over the chat.
+    byId('webllm-sidebar')?.addEventListener('keydown', (event) => {
+        if (/** @type {any} */ (event).key === 'Escape' && isPhone()) control.close();
+    });
+    apply();
+    return control;
 }
 
 /**
@@ -640,63 +720,6 @@ async function saveCode(project, button) {
         button.textContent = 'Save to project';
         button.disabled = false;
     }, 1500);
-}
-
-/**
- * Bind the project bar over the chat — the open conversation's files, its git
- * history, and Deploy project — and return its renderer.
- * @param {import('../../webllm/chatProject.js').WebLLMProject} project
- */
-export function bindWebLLMProjectBar(project) {
-    const deploy = /** @type {any} */ (byId('webllm-deploy-project-btn'));
-    deploy?.addEventListener('click', () => {
-        void project.deploy().catch(() => {});
-    });
-
-    byId('webllm-project-files')?.addEventListener('click', (event) => {
-        const remove = /** @type {any} */ (event.target)?.closest?.('[data-remove-file]');
-        if (remove) void project.removeFile(remove.dataset.removeFile).catch(() => {});
-    });
-
-    /** @param {import('../../webllm/chatProject.js').ProjectState} state */
-    return function renderProject(state) {
-        const bar = byId('webllm-project');
-        const show = state.available && Boolean(state.conversationId) && state.files.length > 0;
-        setHidden(bar, !show);
-        const count = byId('webllm-project-count');
-        if (count) count.textContent = `${state.files.length} ${state.files.length === 1 ? 'file' : 'files'}`;
-        const git = byId('webllm-project-git');
-        if (git) {
-            git.textContent = state.commit
-                ? `git ${state.commit.slice(0, 7)} · ${state.commits} ${state.commits === 1 ? 'commit' : 'commits'}`
-                : '';
-        }
-        const list = byId('webllm-project-files');
-        if (list) {
-            list.textContent = '';
-            for (const path of state.files) {
-                const item = document.createElement('li');
-                item.className = 'webllm-project-file';
-                const name = document.createElement('code');
-                name.textContent = path;
-                const remove = document.createElement('button');
-                remove.type = 'button';
-                remove.className = 'webllm-project-remove';
-                remove.dataset.removeFile = path;
-                remove.textContent = '×';
-                remove.setAttribute('aria-label', `Remove ${path} from the project`);
-                item.append(name, remove);
-                list.appendChild(item);
-            }
-        }
-        if (deploy) {
-            deploy.disabled = state.busy || state.files.length === 0;
-            deploy.setAttribute('aria-busy', state.busy ? 'true' : 'false');
-        }
-        const notice = byId('webllm-project-notice');
-        if (notice) notice.textContent = state.notice || '';
-        setHidden(notice, !state.notice);
-    };
 }
 
 /** Grow the textarea with its content, up to the CSS max-height. */

@@ -194,6 +194,58 @@ export class ChatProjectStore {
         return this.workspace.read(dir, () => this.workspace.listFiles(dir));
     }
 
+    /** Files and folders, empty folders included. @param {string} wallet @param {string} conversationId */
+    async entries(wallet, conversationId) {
+        const dir = this.dir(wallet, conversationId);
+        return this.workspace.read(dir, () => this.workspace.listEntries(dir));
+    }
+
+    /**
+     * One file's text.
+     * @param {string} wallet
+     * @param {string} conversationId
+     * @param {string} path
+     */
+    async readText(wallet, conversationId, path) {
+        const dir = this.dir(wallet, conversationId);
+        const bytes = await this.workspace.read(dir, () => this.workspace.readFile(dir, path));
+        return new TextDecoder().decode(bytes);
+    }
+
+    /**
+     * Every file's text, by path — what the canvas previews a page against.
+     * @param {string} wallet
+     * @param {string} conversationId
+     * @returns {Promise<Map<string, string>>}
+     */
+    async readAllText(wallet, conversationId) {
+        const dir = this.dir(wallet, conversationId);
+        const files = await this.workspace.read(dir, () => this.workspace.readTree(dir));
+        const decoder = new TextDecoder();
+        return new Map(files.map(({ path, bytes }) => [path, decoder.decode(bytes)]));
+    }
+
+    /**
+     * Apply the Project panel's batch — moves, renames, new files and folders,
+     * deletions — as one commit.
+     * @param {string} wallet
+     * @param {string} conversationId
+     * @param {import('./projectTree.js').ProjectChange[]} changes
+     * @param {string} message
+     */
+    async apply(wallet, conversationId, changes, message) {
+        for (const change of changes) {
+            const paths = change.op === 'move' ? [change.from, change.to] : [change.path];
+            for (const path of paths) {
+                if (!projectPath(path)) throw new Error(`"${path}" is not a name a project can use.`);
+            }
+        }
+        return this.workspace.applyChanges(this.dir(wallet, conversationId), changes, {
+            message,
+            author: { name: 'You', email: 'user@web25.cloud' }
+        });
+    }
+
     /** @param {string} wallet @param {string} conversationId */
     async history(wallet, conversationId) {
         return this.workspace.log(this.dir(wallet, conversationId));
@@ -254,9 +306,30 @@ export class ChatProjectStore {
 }
 
 /**
- * @typedef {{ available: boolean, conversationId: string|null, files: string[],
+ * @typedef {{ available: boolean, conversationId: string|null, files: string[], dirs: string[],
  *             commit: string|null, commits: number, busy: boolean, notice: string }} ProjectState
  */
+
+/** How a saved file is marked in the thought store, so it can be found again. */
+export const PROJECT_FILE_THOUGHT = 'project-file:';
+const PROJECT_FILE_TITLE = 'Project file: ';
+/** Room left for the code once the thought's own words are counted. */
+const MAX_FILE_THOUGHT_CODE = 18000;
+
+/** Whether a thought is a project file the user saved. @param {{ clientRequestId?: string|null }} thought */
+export function isProjectFileThought(thought) {
+    return `${thought?.clientRequestId || ''}`.startsWith(PROJECT_FILE_THOUGHT);
+}
+
+/** A short, stable fingerprint of a file's text. @param {string} text */
+function fingerprint(text) {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+}
 
 /**
  * Keeps the open conversation's project in step with the chat.
@@ -282,6 +355,7 @@ export class WebLLMProject {
             available: false,
             conversationId: null,
             files: [],
+            dirs: [],
             commit: null,
             commits: 0,
             busy: false,
@@ -352,12 +426,17 @@ export class WebLLMProject {
         const conversationId = this.state.conversationId;
         if (!wallet || !conversationId || !this.state.available) return;
         try {
-            const [files, history] = await Promise.all([
-                this.store.files(wallet, conversationId),
+            const [entries, history] = await Promise.all([
+                this.store.entries(wallet, conversationId),
                 this.store.history(wallet, conversationId)
             ]);
             if (conversationId !== this.state.conversationId) return;
-            this.update({ files, commit: history[0]?.oid || null, commits: history.length });
+            this.update({
+                files: entries.files,
+                dirs: entries.dirs,
+                commit: history[0]?.oid || null,
+                commits: history.length
+            });
         } catch (error) {
             this.log(`Project files could not be read: ${error?.message || error}`);
         }
@@ -421,6 +500,122 @@ export class WebLLMProject {
         } catch (error) {
             this.log(`Project files could not be saved: ${error?.message || error}`);
             throw error;
+        }
+    }
+
+    /** The open conversation's wallet and id, or an error saying why there is none. */
+    target() {
+        const wallet = this.wallet();
+        const conversationId = this.state.conversationId;
+        if (!wallet || !conversationId || !this.state.available) {
+            throw new Error('Send a message first: a project belongs to a saved conversation.');
+        }
+        return { wallet, conversationId };
+    }
+
+    /** @param {string} path */
+    async readFile(path) {
+        const { wallet, conversationId } = this.target();
+        return this.store.readText(wallet, conversationId, path);
+    }
+
+    /** Every file of the open project, text by path. */
+    async readAll() {
+        const { wallet, conversationId } = this.target();
+        return this.store.readAllText(wallet, conversationId);
+    }
+
+    /**
+     * Save a file from the canvas: into the project, as a commit, and into the
+     * thought store, where Llama recalls it — by similarity, through
+     * idb-vector — the next time it answers in this conversation.
+     *
+     * @param {string} path
+     * @param {string} code
+     * @returns {Promise<string>} the path saved under
+     */
+    async writeFile(path, code) {
+        const { conversationId } = this.target();
+        const safe = projectPath(path);
+        if (!safe) throw new Error('Use a file name like index.html, style.css or js/app.js.');
+        await this.save(conversationId, [{ path: safe, code }], `Edit ${safe}`);
+        this.track(this.rememberFile(conversationId, safe, code));
+        return safe;
+    }
+
+    /**
+     * Apply the Project panel's batch, then bring Llama's memory of the files
+     * in line: a deleted file is forgotten, a moved one remembered under its
+     * new name.
+     * @param {import('./projectTree.js').ProjectChange[]} changes
+     * @param {string} message
+     */
+    async applyChanges(changes, message) {
+        const { wallet, conversationId } = this.target();
+        if (changes.length === 0) return;
+        const { committed } = await this.store.apply(wallet, conversationId, changes, message);
+        await this.refresh();
+        this.track(committed.then(() => this.refresh()));
+        for (const change of changes) {
+            if (change.op === 'delete') this.track(this.forgetFile(conversationId, change.path));
+            if (change.op === 'move') {
+                this.track(
+                    this.forgetFile(conversationId, change.from).then(async (known) => {
+                        if (known) await this.rememberFile(conversationId, change.to, await this.readFile(change.to));
+                    })
+                );
+            }
+        }
+    }
+
+    /**
+     * Drop what the thought store holds about one file.
+     * @param {string} conversationId
+     * @param {string} path
+     * @returns {Promise<boolean>} whether it held anything
+     */
+    async forgetFile(conversationId, path) {
+        const thoughts = this.controller.thoughts;
+        if (!thoughts?.listSequences) return false;
+        const listed = await thoughts.listSequences({ conversationId, limit: 100 });
+        if (!listed?.ok) return false;
+        let found = false;
+        for (const sequence of listed.value.sequences) {
+            if (sequence.title !== `${PROJECT_FILE_TITLE}${path}`) continue;
+            found = true;
+            await thoughts.deleteSequence(sequence.sequenceId);
+        }
+        return found;
+    }
+
+    /**
+     * Keep one file's current text where Llama recalls from. One thought per
+     * file: the previous version is dropped first, so Llama never recalls code
+     * the user has since changed.
+     * @param {string} conversationId
+     * @param {string} path
+     * @param {string} code
+     */
+    async rememberFile(conversationId, path, code) {
+        const thoughts = this.controller.thoughts;
+        if (!thoughts?.appendThought) return false;
+        try {
+            await this.forgetFile(conversationId, path);
+            const lang = fileTypeOf(path)?.lang || '';
+            const body = code.length > MAX_FILE_THOUGHT_CODE ? `${code.slice(0, MAX_FILE_THOUGHT_CODE)}\n…` : code;
+            const result = await thoughts.appendThought({
+                conversationId,
+                sequenceTitle: `${PROJECT_FILE_TITLE}${path}`,
+                thought: `The user's project file ${path}, as they last saved it:\n\`\`\`${lang}\n${body}\n\`\`\``,
+                thoughtNumber: 1,
+                totalThoughts: 1,
+                nextThoughtNeeded: false,
+                clientRequestId: `${PROJECT_FILE_THOUGHT}${path.slice(0, 80)}:${fingerprint(code)}`
+            });
+            return Boolean(result?.ok);
+        } catch (error) {
+            this.log(`Llama could not be shown ${path}: ${error?.message || error}`);
+            return false;
         }
     }
 

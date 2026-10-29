@@ -266,10 +266,10 @@ async function startScriptedChat(
             // The conversation's project, as WebLLMApp wires it: this browser's
             // real OPFS, with no CDN for git, so files are saved uncommitted.
             let project = null;
+            let renderProject = () => {};
+            let workbench = null;
             if (withProject) {
                 const { WebLLMProject } = await import('/src/webllm/chatProject.js');
-                const { bindWebLLMProjectBar } = await import('/src/ui/webllm/WebLLMPanel.js');
-                let renderProject = () => {};
                 let available = false;
                 project = new WebLLMProject({
                     controller,
@@ -281,10 +281,22 @@ async function startScriptedChat(
                         }
                     }
                 });
-                renderProject = bindWebLLMProjectBar(project);
                 window.__project = project;
             }
-            render = bindWebLLMPanel(controller, { project });
+            const panel = bindWebLLMPanel(controller, {
+                project,
+                onOpenCanvas: (snippet) => void workbench?.openSnippet(snippet)
+            });
+            render = panel;
+            if (project) {
+                // The micro IDE, as WebLLMApp wires it. No CDN here: git commits
+                // are skipped and the editor is the plain fallback.
+                const { bindWebLLMWorkbench } = await import('/src/ui/webllm/WebLLMWorkbench.js');
+                workbench = bindWebLLMWorkbench({ project, controller, sidebar: panel.sidebar, confirm: () => true });
+                renderProject = workbench.renderProject;
+                renderProject(project.state);
+                window.__workbench = workbench;
+            }
             window.__controller = controller;
             controller.setAllowed(true, { walletAddress: address });
             await controller.activate();
@@ -919,55 +931,131 @@ test('code in a reply is drawn as a code block with a Copy button, never as mark
     }
 });
 
-test('code a reply names goes into the conversation’s project, and Deploy project sends it to Deploy', { skip: SKIP }, async () => {
-    const { page, context, problems } = await openApp({ viewport: DESKTOP });
-    try {
-        await openWebLLMTab(page, DESKTOP, { scripted: true });
-        await startScriptedChat(
-            page,
-            ['```html index.html\n<h1>Hi</h1>\n```\n', 'Then:\n```css\nh1 { color: red; }\n```'],
-            undefined,
-            { wallet: '0xcdcd', project: true }
-        );
-        await page.waitForFunction(() => window.__controller.state.history === 'ready');
-        await page.waitForFunction(() => window.__project.state.available);
-        await ask(page, 'Make a page');
+test(
+    'the micro IDE: sidebar panels, a project tree saved in one go, and a canvas that previews and edits',
+    { skip: SKIP },
+    async () => {
+        const { page, context, problems } = await openApp({ viewport: DESKTOP });
+        try {
+            await openWebLLMTab(page, DESKTOP, { scripted: true });
+            await startScriptedChat(
+                page,
+                [
+                    '```html index.html\n<!doctype html><html><head><link rel="stylesheet" href="style.css"></head>' +
+                        '<body><h1>Hi</h1><script src="app.js"></script></body></html>\n```\n',
+                    'Then:\n```css\nh1 { color: red; }\n```\nAnd:\n```js app.js\nconsole.log("hello from app");\n```'
+                ],
+                undefined,
+                { wallet: '0xcdcd', project: true }
+            );
+            await page.waitForFunction(() => window.__controller.state.history === 'ready');
+            await page.waitForFunction(() => window.__project.state.available);
+            await ask(page, 'Make a page');
 
-        await page.waitForSelector('#webllm-project:not(.hidden)');
-        const chips = () => page.$$eval('#webllm-project-files code', (items) => items.map((el) => el.textContent));
-        assert.deepEqual(await chips(), ['index.html']);
-        const names = await page.$$eval('#webllm-messages [data-code-name]', (inputs) =>
-            inputs.map((input) => [input.value, input.placeholder])
-        );
-        assert.deepEqual(names, [
-            ['index.html', 'index.html'],
-            ['', 'style.css']
-        ]);
-        // The fence line's file name is a label, not a line of code.
-        assert.equal(await page.textContent('#webllm-messages .webllm-code pre code'), '<h1>Hi</h1>');
+            // The sidebar starts open on a desktop; × closes it and its button reopens it.
+            assert.equal(await page.isVisible('#webllm-panel-conversations'), true);
+            await page.click('#webllm-sidebar-close');
+            assert.equal(await page.isHidden('#webllm-sidebar'), true);
+            assert.equal(await page.getAttribute('#webllm-sidebar-toggle', 'aria-expanded'), 'false');
+            await page.click('#webllm-sidebar-toggle');
+            assert.equal(await page.isVisible('#webllm-sidebar'), true);
 
-        // The unnamed block, saved under the name it suggests.
-        await page.click('#webllm-messages [data-save-code="1"]');
-        await page.waitForFunction(() => document.querySelectorAll('#webllm-project-files code').length === 2);
-        assert.deepEqual(await chips(), ['index.html', 'style.css']);
+            // The project button swaps the panel; pressing it again closes the sidebar.
+            await page.click('#webllm-project-toggle');
+            assert.equal(await page.isVisible('#webllm-panel-project'), true);
+            assert.equal(await page.isHidden('#webllm-panel-conversations'), true);
+            assert.equal(await page.getAttribute('#webllm-project-toggle', 'aria-pressed'), 'true');
+            const rows = () =>
+                page.$$eval('#webllm-tree .webllm-tree-row', (items) => items.map((el) => el.dataset.row));
+            await page.waitForFunction(() => document.querySelectorAll('#webllm-tree .webllm-tree-row').length === 2);
+            assert.deepEqual(await rows(), ['app.js', 'index.html']);
 
-        await page.evaluate(() => {
-            window.addEventListener('web25:stage-deploy', (event) => {
-                window.__staged = event.detail.files.map((file) => [file.webkitRelativePath, file.type]);
+            // The unnamed stylesheet, saved from the chat under the name it suggests.
+            await page.click('#webllm-messages [data-save-code="1"]');
+            await page.waitForFunction(() => document.querySelectorAll('#webllm-tree .webllm-tree-row').length === 3);
+
+            // A new folder and a drag into it are a draft until Save.
+            await page.click('#webllm-tree-new-folder');
+            await page.fill('#webllm-tree-new-name', 'css');
+            await page.press('#webllm-tree-new-name', 'Enter');
+            await page.dragAndDrop('[data-row="style.css"]', '[data-row="css"]');
+            assert.equal(await page.textContent('#webllm-tree-pending-label'), '2 changes');
+            assert.deepEqual(await page.evaluate(() => window.__project.state.files), [
+                'app.js',
+                'index.html',
+                'style.css'
+            ]);
+            await page.click('#webllm-tree-save');
+            await page.waitForFunction(() => window.__project.state.files.includes('css/style.css'));
+            await page.waitForSelector('#webllm-tree-pending', { state: 'hidden' });
+            assert.deepEqual(await rows(), ['css', 'css/style.css', 'app.js', 'index.html']);
+
+            // Up a level with the arrow, then Discard puts it back.
+            await page.hover('[data-row="css/style.css"]');
+            await page.click('[data-row="css/style.css"] [data-tree-action="up"]');
+            assert.deepEqual(await rows(), ['css', 'app.js', 'index.html', 'style.css']);
+            await page.click('#webllm-tree-discard');
+            assert.deepEqual(await rows(), ['css', 'css/style.css', 'app.js', 'index.html']);
+
+            // Preview on a snippet: the page, its script inlined, its console below.
+            await page.click('#webllm-messages [data-open-canvas="0"]');
+            await page.waitForSelector('#webllm-canvas:not(.hidden)');
+            const frame = page.frameLocator('#webllm-canvas-frame');
+            assert.equal(await frame.locator('h1').textContent(), 'Hi');
+            await page.waitForFunction(
+                () => document.getElementById('webllm-canvas-console-count').textContent === '1'
+            );
+            assert.equal(await page.textContent('#webllm-canvas-console-log'), 'hello from app');
+            assert.equal(await page.textContent('#webllm-canvas-status'), 'Saved');
+            // The sandbox has no way back into the app's origin.
+            assert.equal(await page.getAttribute('#webllm-canvas-frame', 'sandbox'), 'allow-scripts allow-modals');
+
+            // Edit in Code (the plain editor here: no CDN), save with the keyboard.
+            await page.click('#webllm-canvas-tab-code');
+            await page.waitForSelector('.webllm-canvas-textarea');
+            assert.match(await page.textContent('#webllm-canvas-editor-note'), /plain editor/);
+            await page.fill('.webllm-canvas-textarea', '<h1>Edited</h1>');
+            assert.equal(await page.textContent('#webllm-canvas-status'), 'Unsaved changes');
+            await page.press('.webllm-canvas-textarea', 'Control+s');
+            await page.waitForFunction(() => document.getElementById('webllm-canvas-status').textContent === 'Saved');
+            assert.equal(await page.evaluate(() => window.__project.readFile('index.html')), '<h1>Edited</h1>');
+            await page.click('#webllm-canvas-tab-preview');
+            assert.equal(await frame.locator('h1').textContent(), 'Edited');
+
+            // Saved into the thought store too, and recalled into Llama's next prompt.
+            await page.evaluate(() => window.__project.whenIdle());
+            const titles = await page.evaluate(async () => {
+                const listed = await window.__controller.thoughts.listSequences({
+                    conversationId: window.__controller.state.activeConversationId
+                });
+                return listed.value.sequences.map((sequence) => sequence.title);
             });
-        });
-        await page.click('#webllm-deploy-project-btn');
-        await page.waitForFunction(() => Array.isArray(window.__staged));
-        assert.deepEqual(await page.evaluate(() => window.__staged), [
-            ['make-a-page/index.html', 'text/html'],
-            ['make-a-page/style.css', 'text/css']
-        ]);
-        assert.equal(await page.textContent('#webllm-project-notice'), 'Sent 2 files to Deploy.');
-        assert.deepEqual(problems, []);
-    } finally {
-        await context.close();
+            assert.ok(titles.includes('Project file: index.html'));
+            await ask(page, 'Make the heading on index.html blue', { install: false });
+            const system = await page.evaluate(
+                () => window.__sent.filter((entry) => entry.kind === 'chat').at(-1).messages[0].content
+            );
+            assert.match(system, /The user's project, as saved in the canvas:[\s\S]*<h1>Edited<\/h1>/);
+
+            // Deploy project sends the reorganised tree, as a folder.
+            await page.evaluate(() => {
+                window.addEventListener('web25:stage-deploy', (event) => {
+                    window.__staged = event.detail.files.map((file) => file.webkitRelativePath);
+                });
+            });
+            await page.click('#webllm-deploy-project-btn');
+            await page.waitForFunction(() => Array.isArray(window.__staged));
+            assert.deepEqual(await page.evaluate(() => window.__staged), [
+                'make-a-page/app.js',
+                'make-a-page/css/style.css',
+                'make-a-page/index.html'
+            ]);
+            assert.deepEqual(problems, []);
+        } finally {
+            await context.close();
+        }
     }
-});
+);
 
 test(
     'Auto: Llama chooses Thinking, plans in JSON, and writes each step from its recalled thoughts',

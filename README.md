@@ -913,15 +913,30 @@ the public endpoint and the model itself could not be reached from the test envi
   **Copy** button, and inline code, bold and headings are formatted
   (`src/ui/webllm/replyFormat.js`). Everything is built from text nodes: model output is never
   parsed as HTML.
-- **Code as a project.** Each finished code block has a file-name field and **Save to project**.
-  A block that names its file — on the fence (```` ```html index.html ````), in a first-line
-  comment (`<!-- index.html -->`, `// app.js`) or on the line just above it (`**style.css**:`) —
-  is saved automatically when the reply ends. The conversation's files are a git repository in
-  OPFS (see §10), listed in a bar over the chat, and **🚀 Deploy project** hands them to the
-  Deploy tab as a folder (`<conversation-title>/index.html`, …), exactly as if it had been picked
-  from the device. From there the deploy is the ordinary one. Deleting a conversation, or its
-  expiry under the retention setting, removes its project too (`src/webllm/chatProject.js`).
-
+- **Code as a project.** Each finished code block has a file-name field, **▶ Preview** and
+  **Save to project**. A block that names its file — on the fence (```` ```html index.html ````),
+  in a first-line comment (`<!-- index.html -->`, `// app.js`) or on the line just above it
+  (`**style.css**:`) — is saved automatically when the reply ends. The conversation's files are a
+  git repository in OPFS (see §10). Deleting a conversation, or its expiry under the retention
+  setting, removes its project too (`src/webllm/chatProject.js`).
+- **A micro IDE around the chat** (`src/ui/webllm/WebLLMWorkbench.js`):
+  - *Sidebar.* Two buttons at the start of the chat head pick its panel — **Conversations** or
+    **Project** (with a file count). Pressing the open one again, or ×, closes the sidebar, on a
+    desktop as on a phone (where it is a drawer).
+  - *Project panel.* The files as a tree, folders first. **File** and **Folder** create in the
+    selected folder; each row renames, deletes, goes **up a level** (arrow), or **moves to** any
+    folder; rows can also be **dragged** onto a folder or onto the empty space for the top. All of
+    it is a draft (`src/webllm/projectTree.js`), marked `A`/`M` per row, until **Save** commits it
+    as one commit — or **Discard** drops it. **🚀 Deploy project** sits at its foot.
+  - *Canvas.* A third column beside the chat (a sheet over it on narrower screens). **Preview**
+    assembles the project's page — linked stylesheets and scripts inlined — and runs it in an
+    iframe sandboxed without `allow-same-origin`, with its **console** listed underneath.
+    **Code** is CodeMirror 6 (HTML, CSS, JavaScript) from `esm.sh`, every package pinned to one
+    shared set of dependencies (`src/webllm/codeEditor.js`); without the CDN it is a plain editor
+    that saves the same way. **Save** (or Ctrl/⌘+S) commits the file and writes it to the thought
+    store, indexed by idb-vector, as the one current copy of that file: a Thinking reply recalls it
+    with its other thoughts, and a Short reply is given the saved files most like the question.
+    Moving a file moves that memory; deleting it forgets it.
 ---
 
 ### 10) OPFS workspace + isomorphic-git
@@ -1044,6 +1059,9 @@ src/
 │   ├── WebLLMApp.js                 # loaded when the tab is opened
 │   ├── WebLLMController.js
 │   ├── chatProject.js               # code blocks as files, per-conversation repo, Deploy project
+│   ├── projectTree.js               # the Project panel's draft: moves, renames, folders → one Save
+│   ├── canvasPreview.js             # the page the canvas previews, assets inlined, console bridge
+│   ├── codeEditor.js                # CodeMirror 6 from esm.sh, textarea fallback
 │   ├── WebLLMEngineClient.js
 │   ├── WebLLMServiceWorkerClient.js
 │   ├── webllm-worker.js             # dedicated inference worker
@@ -1162,6 +1180,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
 - WebLLM (only after the WebLLM tab is opened): the library from `cdn.jsdelivr.net`, model weights from
   `huggingface.co/mlc-ai`, the compiled model library from `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`
 - isomorphic-git (only when a deployment, a reseed or a Llama project is committed): `esm.sh`
+- CodeMirror 6 (only when the canvas first shows code): `esm.sh`
 - MDN MCP server (only for web-development questions in the WebLLM chat, and only while enabled in its
   settings): `https://mcp.mdn.mozilla.net/` — receives a few search keywords, never wallet data
 

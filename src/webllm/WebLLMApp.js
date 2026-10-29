@@ -15,7 +15,8 @@ import { openWebLLMThoughts } from './webllmThoughtStore.js';
 import { loadIdbVector } from './idbVectorLoader.js';
 import { createMcpClient } from './mdnMcpClient.js';
 import { WebLLMProject } from './chatProject.js';
-import { bindWebLLMPanel, bindWebLLMProjectBar } from '../ui/webllm/WebLLMPanel.js';
+import { bindWebLLMPanel } from '../ui/webllm/WebLLMPanel.js';
+import { bindWebLLMWorkbench } from '../ui/webllm/WebLLMWorkbench.js';
 
 /** @param {{ log?: (message: string) => void }} [options] */
 export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${message}`) } = {}) {
@@ -60,8 +61,9 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
         mdnClient: createMcpClient()
     });
 
-    // The open conversation's code, as files in a git repository in OPFS, and
-    // the Deploy project button that hands them to the Deploy tab.
+    // The open conversation's code, as files in a git repository in OPFS: the
+    // Project panel that organises them and the canvas that previews and
+    // edits them (see WebLLMWorkbench.js).
     /** @type {(state: any) => void} */
     let renderProject = () => {};
     let projectAvailable = false;
@@ -78,8 +80,15 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
         }
     });
 
-    render = bindWebLLMPanel(controller, { project });
-    renderProject = bindWebLLMProjectBar(project);
+    /** @type {ReturnType<typeof bindWebLLMWorkbench>|null} */
+    let workbench = null;
+    const panel = bindWebLLMPanel(controller, {
+        project,
+        onOpenCanvas: (snippet) => void workbench?.openSnippet(snippet)
+    });
+    render = panel;
+    workbench = bindWebLLMWorkbench({ project, controller, sidebar: panel.sidebar });
+    renderProject = workbench.renderProject;
     render(controller.state);
     renderProject(project.state);
     // A tab closed mid-reply keeps what was written, marked as interrupted.

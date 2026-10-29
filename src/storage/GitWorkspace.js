@@ -195,7 +195,8 @@ export class GitWorkspace {
      * Commit `dir` once whatever is queued for it has run. Never rejects: a
      * commit that fails is reported and resolves to null.
      * @param {string} dir
-     * @param {{ message: string, author?: { name: string, email: string } }} options
+     * @param {{ message: string, author?: { name: string, email: string }, touched?: string[] }} options
+     *   `touched` names the files the write changed, staged from their content
      * @returns {Promise<string|null>}
      */
     queueCommit(dir, options) {
@@ -339,6 +340,123 @@ export class GitWorkspace {
         return out.sort();
     }
 
+    /**
+     * Every file and every directory under `dir`, `.git` excluded, as
+     * relative paths, sorted. Directories are listed too — empty ones are
+     * part of a project's layout even though git does not track them.
+     * @param {string} dir
+     * @returns {Promise<{ files: string[], dirs: string[] }>}
+     */
+    async listEntries(dir) {
+        /** @type {string[]} */
+        const files = [];
+        /** @type {string[]} */
+        const dirs = [];
+        /** @param {string} prefix */
+        const walk = async (prefix) => {
+            let names;
+            try {
+                names = await this.fs.readdir(prefix ? `${dir}/${prefix}` : dir);
+            } catch (error) {
+                if (/** @type {any} */ (error)?.code === 'ENOENT' && !prefix) return;
+                throw error;
+            }
+            for (const name of names) {
+                if (!prefix && name === '.git') continue;
+                const path = prefix ? `${prefix}/${name}` : name;
+                const stats = await this.fs.stat(`${dir}/${path}`);
+                if (stats.isDirectory()) {
+                    dirs.push(path);
+                    await walk(path);
+                } else files.push(path);
+            }
+        };
+        await walk('');
+        return { files: files.sort(), dirs: dirs.sort() };
+    }
+
+    /**
+     * Apply a batch of changes to a repository's working tree and commit them
+     * as one: what a project's Save does with everything moved, renamed,
+     * created and deleted since the last one.
+     *
+     * Moves read every source before anything is written, so swapping two
+     * names, or moving a file into the folder it is replacing, cannot lose a
+     * file. Folders left empty by a move stay unless `rmdir` names them.
+     *
+     * @param {string} dir
+     * @param {({ op: 'mkdir', path: string } | { op: 'rmdir', path: string } |
+     *          { op: 'delete', path: string } | { op: 'move', from: string, to: string } |
+     *          { op: 'write', path: string, bytes: any })[]} changes
+     * @param {{ message: string, author?: { name: string, email: string } }} options
+     * @returns {Promise<{ committed: Promise<string|null> }>}
+     */
+    applyChanges(dir, changes, { message, author }) {
+        /** @param {string} path */
+        const safe = (path) => {
+            const value = safeTreePath(path);
+            if (!value) throw new Error(`"${path}" cannot be stored in the workspace.`);
+            return value;
+        };
+        let plan;
+        try {
+            plan = changes.map((change) =>
+                change.op === 'move'
+                    ? { ...change, from: safe(change.from), to: safe(change.to) }
+                    : { ...change, path: safe(change.path) }
+            );
+        } catch (error) {
+            return Promise.reject(error);
+        }
+        return this.mutate(dir, async () => {
+            /** @type {Map<string, Uint8Array>} */
+            const moving = new Map();
+            for (const change of plan) {
+                if (change.op === 'move') moving.set(change.from, await this.fs.readFile(`${dir}/${change.from}`));
+            }
+            /** @param {string} path */
+            const parentOf = async (path) => {
+                const slash = path.lastIndexOf('/');
+                if (slash > 0) await this.fs.mkdir(`${dir}/${path.slice(0, slash)}`, { recursive: true });
+            };
+            for (const change of plan) {
+                if (change.op === 'move') await this.fs.rm(`${dir}/${change.from}`, { force: true });
+                if (change.op === 'delete') await this.fs.rm(`${dir}/${change.path}`, { force: true });
+            }
+            for (const change of plan) {
+                if (change.op === 'mkdir') await this.fs.mkdir(`${dir}/${change.path}`, { recursive: true });
+                if (change.op === 'move') {
+                    await parentOf(change.to);
+                    await this.fs.writeFile(`${dir}/${change.to}`, /** @type {Uint8Array} */ (moving.get(change.from)));
+                }
+                if (change.op === 'write') {
+                    await parentOf(change.path);
+                    await this.fs.writeFile(`${dir}/${change.path}`, toBytes(change.bytes));
+                }
+            }
+            // Deepest first, so a folder inside a removed folder goes before
+            // it. Only ever an empty one: a file that arrived in the folder
+            // after the batch was planned is not the batch's to delete.
+            const removed = plan
+                .filter((change) => change.op === 'rmdir')
+                .map((change) => /** @type {any} */ (change).path)
+                .sort((a, b) => b.length - a.length);
+            for (const path of removed) {
+                await this.fs.rmdir(`${dir}/${path}`).catch((/** @type {any} */ error) => {
+                    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') throw error;
+                });
+            }
+            const touched = plan.flatMap((change) =>
+                change.op === 'move'
+                    ? [change.from, change.to]
+                    : change.op === 'write' || change.op === 'delete'
+                      ? [change.path]
+                      : []
+            );
+            return { committed: this.queueCommit(dir, { message, author, touched }) };
+        });
+    }
+
     /** @param {string} dir @param {string} path */
     async readFile(dir, path) {
         const safe = safeTreePath(path);
@@ -376,11 +494,18 @@ export class GitWorkspace {
      * @param {{ message: string, author?: { name: string, email: string } }} options
      * @returns {Promise<string|null>} the commit id, or null with nothing to commit
      */
-    async commitAll(dir, { message, author = DEFAULT_AUTHOR }) {
+    async commitAll(dir, { message, author = DEFAULT_AUTHOR, touched = [] }) {
         const git = await this.loadGit();
         const fs = { promises: this.fs };
         if (!(await this.hasRepository(dir))) {
             await git.init({ fs, dir, defaultBranch: 'main' });
+        }
+        // The files this write touched are staged from their content. Git's
+        // status trusts a file's size and mtime, and two saves of the same
+        // size within one millisecond look identical to it.
+        for (const filepath of new Set(touched)) {
+            if (await this.fs.exists(`${dir}/${filepath}`)) await git.add({ fs, dir, filepath });
+            else await git.remove({ fs, dir, filepath }).catch(() => {});
         }
         const matrix = await git.statusMatrix({ fs, dir });
         let changed = false;
@@ -464,7 +589,7 @@ export class GitWorkspace {
                 : await this.writeFiles(dir, files);
             // Queued inside the write, so the next write to this tree waits
             // for this commit rather than racing it.
-            return { paths, committed: this.queueCommit(dir, { message, author }) };
+            return { paths, committed: this.queueCommit(dir, { message, author, touched: paths }) };
         });
     }
 
@@ -477,11 +602,14 @@ export class GitWorkspace {
      */
     removeFiles(dir, paths, { message, author }) {
         return this.mutate(dir, async () => {
+            const touched = [];
             for (const path of paths) {
                 const safe = safeTreePath(path);
-                if (safe) await this.fs.rm(`${dir}/${safe}`, { force: true });
+                if (!safe) continue;
+                await this.fs.rm(`${dir}/${safe}`, { force: true });
+                touched.push(safe);
             }
-            return { committed: this.queueCommit(dir, { message, author }) };
+            return { committed: this.queueCommit(dir, { message, author, touched }) };
         });
     }
 

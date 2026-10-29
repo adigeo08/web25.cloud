@@ -257,7 +257,13 @@ function createFileControls(doc, file) {
     save.dataset.saveCode = `${file.index}`;
     save.textContent = 'Save to project';
     save.setAttribute('aria-label', 'Save this snippet to the conversation’s project');
-    wrap.append(input, save);
+    const preview = doc.createElement('button');
+    preview.type = 'button';
+    preview.className = 'webllm-code-preview';
+    preview.dataset.openCanvas = `${file.index}`;
+    preview.textContent = 'Preview';
+    preview.setAttribute('aria-label', 'Open this snippet in the canvas, to preview and edit it');
+    wrap.append(input, preview, save);
     return wrap;
 }
 

@@ -670,15 +670,18 @@ export class WebLLMThoughtStore {
      * CPU, with the same embedding. Returned oldest first, as they were thought.
      *
      * @param {{ query: string, conversationId: string, sequenceId?: string|null, limit?: number,
-     *           exclude?: Set<string> }} options
+     *           exclude?: Set<string>, filter?: ((thought: ThoughtRecord) => boolean)|null }} options
+     *   `filter` narrows the candidates, e.g. to the project files the user saved
      * @returns {Promise<ThoughtRecord[]>}
      */
-    async recall({ query, conversationId, sequenceId = null, limit = 4, exclude = new Set() }) {
+    async recall({ query, conversationId, sequenceId = null, limit = 4, exclude = new Set(), filter = null }) {
         const candidates = await this.run(['thoughts'], 'readonly', (tx) =>
             promisify(tx.objectStore('thoughts').getAll())
         );
         /** @type {ThoughtRecord[]} */
-        const pool = candidates.filter((t) => t.conversationId === conversationId && !exclude.has(t.id));
+        const pool = candidates.filter(
+            (t) => t.conversationId === conversationId && !exclude.has(t.id) && (!filter || filter(t))
+        );
         if (pool.length === 0) return [];
 
         const vectors = this.vectors;

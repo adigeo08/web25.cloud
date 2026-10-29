@@ -1014,9 +1014,44 @@ export class WebLLMController {
      * @param {() => boolean} stale
      * @returns {Promise<any>} how the reply ended; null once stale
      */
+    /**
+     * The project files the user saved from the canvas that look most like
+     * `query`, recalled from the thought store (idb-vector). A Thinking reply
+     * recalls them with every other thought; a short one gets only these.
+     * @param {string} query
+     * @returns {Promise<string>} '' when there are none
+     */
+    async recallProjectFiles(query) {
+        const conversationId = this.state.activeConversationId;
+        if (!this.thoughts || !conversationId) return '';
+        try {
+            const isFile = (/** @type {any} */ thought) =>
+                `${thought?.clientRequestId || ''}`.startsWith('project-file:');
+            const recalled = await this.thoughts.recall({
+                query,
+                conversationId,
+                limit: Math.min(2, this.thinking.recallLimit),
+                filter: isFile
+            });
+            const files = (Array.isArray(recalled) ? recalled : []).filter(isFile);
+            return formatRecall(
+                files.map((file) => ({ label: 'Project file', text: file.thought })),
+                this.thinking.recallTokens
+            );
+        } catch (error) {
+            this.log(`WebLLM project files could not be recalled: ${error?.message || error}`);
+            return '';
+        }
+    }
+
     async writeShort(engine, prior, content, reply, stale) {
         this.setThinking({ mode: 'short', phase: 'lookup', step: 0, total: 0 });
-        const base = SHORT_SYSTEM_PROMPT;
+        const files = await this.recallProjectFiles(content);
+        if (stale()) return null;
+        // With the files when they fit, without them when they do not.
+        const base = files
+            ? `${SHORT_SYSTEM_PROMPT}\n\nThe user's project, as saved in the canvas:\n${files}`
+            : SHORT_SYSTEM_PROMPT;
         const lookup = await this.lookupDocumentation(content, reply, stale, { system: base });
         if (stale()) return null;
         // Stop during the lookup: nothing was generated.
@@ -1029,7 +1064,7 @@ export class WebLLMController {
             content,
             this.appender(reply, stale),
             stale,
-            lookup ? [withDocs, base] : [base],
+            [...new Set(lookup ? [withDocs, base, SHORT_SYSTEM_PROMPT] : [base, SHORT_SYSTEM_PROMPT])],
             { maxTokens: this.thinking.shortMaxTokens }
         );
         if (stale()) return null;
