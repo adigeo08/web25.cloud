@@ -13,7 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { WebLLMController, WEBLLM_INSTALL_LOCK } from '../src/webllm/WebLLMController.js';
-import { WEBLLM_SYSTEM_PROMPT } from '../src/webllm/webllmConfig.js';
+import { WEBLLM_PROFILES, WEBLLM_SYSTEM_PROMPT } from '../src/webllm/webllmConfig.js';
 import { SHORT_SYSTEM_PROMPT } from '../src/webllm/webllmThinking.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -80,9 +80,11 @@ function harness({
     engines = [fakeEngine()],
     storage = null,
     locks = null,
-    legacyBytes = 0
+    legacyBytes = 0,
+    profile = undefined,
+    replaced = []
 } = {}) {
-    const calls = { detect: 0, status: 0, prepare: 0, clear: 0, clearLegacy: 0, create: 0 };
+    const calls = { detect: 0, status: 0, prepare: 0, clear: 0, clearLegacy: 0, clearReplaced: [], create: 0 };
     const changes = [];
     let model = { state: cacheState, bytesCached: cacheState === 'partial' ? 300 : 0, bytesTotal: 1000 };
     let legacy = legacyBytes ? [{ state: 'installed', bytesCached: legacyBytes }] : [];
@@ -109,8 +111,16 @@ function harness({
                 calls.clearLegacy += 1;
                 legacy = [{ state: 'absent', bytesCached: 0 }];
                 return [{ removed: 4 }];
+            },
+            // What the real client deletes: the builds the page's model replaces.
+            clearReplacedModels: async () => {
+                calls.clearReplaced.push(calls.status);
+                const result = replaced;
+                replaced = replaced.map((entry) => ({ ...entry, removed: 0 }));
+                return result;
             }
         },
+        profile,
         createEngine: async () => {
             calls.create += 1;
             return engines.shift() || fakeEngine();
@@ -136,7 +146,15 @@ test('nothing is detected, registered or downloaded until the tab is opened', as
     controller.setAllowed(true);
     await flush();
     assert.equal(controller.state.status, 'idle');
-    assert.deepEqual(calls, { detect: 0, status: 0, prepare: 0, clear: 0, clearLegacy: 0, create: 0 });
+    assert.deepEqual(calls, {
+        detect: 0,
+        status: 0,
+        prepare: 0,
+        clear: 0,
+        clearLegacy: 0,
+        clearReplaced: [],
+        create: 0
+    });
 
     await controller.activate();
     assert.equal(controller.state.status, 'not-installed');
@@ -480,4 +498,52 @@ test('a check left over from before a lock does not disturb the next session', a
     // Opening the tab again does not start a third check.
     await controller.activate();
     assert.equal(detections, 2);
+});
+
+// ── a phone that held Llama ─────────────────────────────────────────────────
+
+const LLAMA_REMOVED = [
+    { modelId: 'Llama-3.2-1B-Instruct-q4f32_1-MLC', label: 'Llama 3.2 1B', removed: 7 },
+    { modelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B (q4f16)', removed: 0 }
+];
+
+test('on a phone, Llama is removed before the cache is read, and SmolLM2 is offered in its place', async () => {
+    const logs = [];
+    const { controller, calls } = harness({ profile: { ...WEBLLM_PROFILES.mobile }, replaced: LLAMA_REMOVED });
+    controller.log = (message) => logs.push(message);
+    controller.setAllowed(true);
+    await controller.activate();
+
+    assert.deepEqual(calls.clearReplaced, [0], 'once, before the cache status is read');
+    assert.equal(calls.status, 1);
+    assert.equal(controller.model.key, 'smollm');
+    assert.equal(controller.state.status, 'not-installed');
+    assert.deepEqual(controller.state.replaced, ['Llama 3.2 1B'], 'only what was actually there');
+    assert.ok(logs.some((line) => /Removed Llama-3\.2-1B-Instruct-q4f32_1-MLC .*SmolLM2-360M/.test(line)));
+    assert.equal(calls.create, 0, 'nothing is downloaded without Install');
+});
+
+test('on a phone with no Llama nothing is reported; on a desktop nothing is removed at all', async () => {
+    const phone = harness({ profile: { ...WEBLLM_PROFILES.mobile }, replaced: [] });
+    phone.controller.setAllowed(true);
+    await phone.controller.activate();
+    assert.deepEqual(phone.calls.clearReplaced, [0]);
+    assert.deepEqual(phone.controller.state.replaced, []);
+
+    const desktop = harness({ profile: { ...WEBLLM_PROFILES.desktop }, replaced: LLAMA_REMOVED });
+    desktop.controller.setAllowed(true);
+    await desktop.controller.activate();
+    assert.deepEqual(desktop.calls.clearReplaced, [], 'a desktop keeps Llama and never asks');
+    assert.equal(desktop.controller.model.key, 'llama');
+});
+
+test('the npub is kept for project commits, and goes with the lock', async () => {
+    const { controller } = harness();
+    controller.setAllowed(true, { walletAddress: '0xABC', npub: 'npub1abc' });
+    assert.equal(controller.npub, 'npub1abc');
+    // The Nostr identity can arrive after the wallet: the same wallet, now with an npub.
+    controller.setAllowed(true, { walletAddress: '0xabc', npub: 'npub1def' });
+    assert.equal(controller.npub, 'npub1def');
+    controller.setAllowed(false);
+    assert.equal(controller.npub, null);
 });

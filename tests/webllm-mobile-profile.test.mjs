@@ -21,6 +21,7 @@ import {
     getWebLLMModel,
     isDevelopmentHost,
     otherWebLLMModels,
+    replacedWebLLMModels,
     isMobileDevice,
     resolveWebLLMProfile
 } from '../src/webllm/webllmConfig.js';
@@ -317,4 +318,21 @@ test('flushNow draws immediately, cancel drops what is waiting, and a new reply 
     assert.deepEqual(drawn, [1, 2], 'the earlier reply is drawn before switching');
     time.advance(1000);
     assert.deepEqual(drawn, [1, 2, 3]);
+});
+
+test('SmolLM2 replaces every Llama build on a phone; Llama replaces nothing on a desktop', () => {
+    assert.deepEqual(
+        replacedWebLLMModels(WEBLLM_MODELS.smollm).map((entry) => [entry.modelId, entry.label]),
+        [
+            ['Llama-3.2-1B-Instruct-q4f32_1-MLC', 'Llama 3.2 1B'],
+            ['Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Llama 3.2 1B (q4f16)']
+        ]
+    );
+    assert.deepEqual(replacedWebLLMModels(WEBLLM_MODELS.llama), []);
+    for (const entry of replacedWebLLMModels(WEBLLM_MODELS.smollm)) {
+        assert.ok(
+            !WEBLLM_MODELS.smollm.modelUrl.startsWith(entry.modelUrl),
+            'never a prefix of what it makes room for'
+        );
+    }
 });

@@ -805,10 +805,12 @@ the settings above. Both live in `WEBLLM_PROFILES` and `WEBLLM_MODELS`
   `WEBLLM_MODELS` (anything else is Llama). Install screen, chat header, status lines and
   error messages name the model in use; the system prompt names none. Auto, Short and
   Thinking all stay available on mobile — on Auto, SmolLM2 makes the choice.
-- **Switching device class.** Each model has its own files. A phone that downloaded Llama
-  before this change is shown the install screen for SmolLM2; the Llama files stay until the
-  browser's site data is cleared (the service worker reports them as builds the page does
-  not load, and never deletes them on its own).
+- **A phone that held Llama.** SmolLM2 takes its place: when the tab is opened on a phone,
+  every Llama 3.2 1B build in WebLLM's caches is deleted first (`replaces` in
+  `WEBLLM_MODELS`, `clearReplacedModels` in the service-worker client), the install screen
+  is SmolLM2's — its icon, size, credit and licence — and a line says Llama was removed to
+  make room. The shared library cache stays. Nothing is downloaded until **Install**.
+  Desktops and laptops replace nothing: Llama stays, and an older build is left alone.
 
 - **Which profile.** Mobile when User-Agent Client Hints say so, the user agent names a phone
   or tablet (Android, iPhone, iPad, …), or a "Mac" has touch points (iPadOS). Decided once
@@ -956,8 +958,11 @@ the public endpoint and the model itself could not be reached from the test envi
   **Save to project**. A block that names its file — on the fence (```` ```html index.html ````),
   in a first-line comment (`<!-- index.html -->`, `// app.js`) or on the line just above it
   (`**style.css**:`) — is saved automatically when the reply ends. The conversation's files are a
-  git repository in OPFS (see §10). Deleting a conversation, or its expiry under the retention
-  setting, removes its project too (`src/webllm/chatProject.js`).
+  git repository in OPFS (see §10). Every commit in it — files saved from a reply, Project panel
+  changes, removals — is authored by the signed-in user's Nostr address (npub; the wallet address
+  if Nostr is off for it), never by the model, whose name is only shown in the chat. Deleting a
+  conversation, or its expiry under the retention setting, removes its project too
+  (`src/webllm/chatProject.js`).
 - **A micro IDE around the chat** (`src/ui/webllm/WebLLMWorkbench.js`):
   - *Sidebar.* Two buttons at the start of the chat head pick its panel — **Conversations** or
     **Project** (with a file count). Pressing the open one again, or ×, closes the sidebar, on a
@@ -1218,7 +1223,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
   — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
 - WebLLM (only after the WebLLM tab is opened): the library from `cdn.jsdelivr.net`, model weights from
   `huggingface.co/mlc-ai`, the compiled model library from `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`
-- isomorphic-git (only when a deployment, a reseed or a Llama project is committed): `esm.sh`
+- isomorphic-git (only when a deployment, a reseed or a chat project is committed): `esm.sh`
 - CodeMirror 6 (only when the canvas first shows code): `esm.sh`
 - MDN MCP server (only for web-development questions in the WebLLM chat, and only while enabled in its
   settings): `https://mcp.mdn.mozilla.net/` — receives a few search keywords, never wallet data

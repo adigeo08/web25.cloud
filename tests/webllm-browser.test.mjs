@@ -167,7 +167,8 @@ async function startScriptedChat(
         decision = 'short',
         plan = null,
         project = false,
-        profile = null
+        profile = null,
+        replaced = null
     } = {}
 ) {
     await page.evaluate(
@@ -181,7 +182,8 @@ async function startScriptedChat(
             decision: autoMode,
             plan: planSteps,
             project: withProject,
-            profile: profileId
+            profile: profileId,
+            replaced: replacedModels
         }) => {
             const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
             const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
@@ -257,7 +259,9 @@ async function startScriptedChat(
                     clearModel: async () => {
                         window.__modelCleared = true;
                         return {};
-                    }
+                    },
+                    // What a phone deleted to make room for SmolLM2, when scripted.
+                    ...(replacedModels ? { clearReplacedModels: async () => replacedModels } : {})
                 },
                 createEngine: async () => engine,
                 profile: profileId ? { ...WEBLLM_PROFILES[profileId] } : undefined,
@@ -308,7 +312,7 @@ async function startScriptedChat(
             controller.setAllowed(true, { walletAddress: address });
             await controller.activate();
         },
-        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan, project, profile }
+        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan, project, profile, replaced }
     );
 }
 
@@ -704,8 +708,22 @@ test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by 
     const { page, context, problems } = await openApp({ viewport: PHONE });
     try {
         await openWebLLMTab(page, PHONE, { scripted: true });
-        await startScriptedChat(page, ['Closures keep their scope.'], { finishReason: 'stop' }, { profile: 'mobile' });
+        await startScriptedChat(
+            page,
+            ['Closures keep their scope.'],
+            { finishReason: 'stop' },
+            {
+                profile: 'mobile',
+                replaced: [{ modelId: 'Llama-3.2-1B-Instruct-q4f32_1-MLC', label: 'Llama 3.2 1B', removed: 9 }]
+            }
+        );
         await page.waitForSelector('#webllm-install-btn:not([disabled])');
+        // The Llama this phone held is gone, and the install screen says why.
+        assert.match(
+            await page.textContent('#webllm-device'),
+            /^Llama 3\.2 1B was removed from this device to make room for SmolLM2 360M\. WebGPU ready/
+        );
+        const deviceLine = await page.textContent('#webllm-device');
 
         const install = await page.evaluate(() => ({
             title: document.getElementById('webllm-install-title').textContent.trim(),
@@ -724,7 +742,11 @@ test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by 
             license: 'https://www.apache.org/licenses/LICENSE-2.0'
         });
         assert.match(install.lede, /^Download SmolLM directly into your browser/);
-        assert.doesNotMatch(await page.textContent('#webllm-install'), /Llama/);
+        assert.doesNotMatch(
+            (await page.textContent('#webllm-install')).replace(deviceLine, ''),
+            /Llama/,
+            'apart from the removal note, the install screen is SmolLM2’s'
+        );
 
         await page.click('#webllm-install-btn');
         await page.waitForSelector('#webllm-chat:not(.hidden)');

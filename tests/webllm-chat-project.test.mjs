@@ -17,6 +17,7 @@ import { GitWorkspace } from '../src/storage/GitWorkspace.js';
 import {
     ChatProjectStore,
     WebLLMProject,
+    commitAuthor,
     extractCodeFiles,
     projectFolderName,
     projectPath
@@ -24,6 +25,7 @@ import {
 import { STAGE_DEPLOY_EVENT, folderFile, stageDeployFiles } from '../src/ui/publish/StageDeploy.js';
 
 const WALLET = '0xabc0000000000000000000000000000000000001';
+const NPUB = 'npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsxxxxxx';
 
 function store() {
     const opfs = createFakeOpfs();
@@ -105,6 +107,7 @@ test('names from the model are made safe or refused', () => {
 function fakeController() {
     return {
         walletAddress: WALLET,
+        npub: NPUB,
         state: {
             history: 'ready',
             conversations: [{ id: 'conv-1', title: 'Landing page' }],
@@ -145,8 +148,9 @@ test('a finished reply saves the files it names, as one commit', async () => {
     assert.match(state.commit, /^[0-9a-f]{40}$/);
     const dir = workspace.chatDir(WALLET, 'conv-1');
     const [commit] = await workspace.log(dir);
-    assert.equal(commit.message, 'Llama: index.html, style.css');
-    assert.equal(commit.author, 'Llama');
+    // The user's Nostr address is the author; the model is named nowhere in git.
+    assert.equal(commit.message, 'Save index.html, style.css');
+    assert.equal(commit.author, NPUB);
 
     // The unnamed block is saved by naming it in the chat.
     assert.equal(await project.saveBlock(2, 2, 'js/main.js'), 'js/main.js');
@@ -235,4 +239,31 @@ test('staging dispatches the files the Deploy tab listens for', () => {
     assert.equal(received.source, 'webllm');
     assert.equal(received.files[0].webkitRelativePath, 'site/index.html');
     assert.equal(stageDeployFiles([], { target }), false);
+});
+
+test('every project commit is authored by the user’s npub, or the wallet without one', async () => {
+    assert.deepEqual(commitAuthor(NPUB, WALLET), { name: NPUB, email: '' });
+    assert.deepEqual(commitAuthor(null, WALLET), { name: WALLET, email: '' });
+
+    const { store: projects, workspace } = store();
+    const controller = fakeController();
+    const project = new WebLLMProject({ controller, store: projects });
+    await settle(project);
+    Object.assign(controller.state, { activeConversationId: 'conv-1' });
+    project.handle(controller.state, { type: 'state' });
+    await settle(project);
+
+    await project.save('conv-1', [{ path: 'a.html', code: '<p>a</p>' }], 'Save a.html');
+    await settle(project);
+    await project.applyChanges([{ op: 'move', from: 'a.html', to: 'b.html' }], 'Rename a.html');
+    await settle(project);
+    await project.removeFile('b.html');
+    await settle(project);
+
+    const log = await workspace.log(workspace.chatDir(WALLET, 'conv-1'));
+    assert.deepEqual(
+        log.map((entry) => entry.author),
+        [NPUB, NPUB, NPUB]
+    );
+    assert.ok(log.every((entry) => !/llama|smollm/i.test(`${entry.author} ${entry.message}`)));
 });

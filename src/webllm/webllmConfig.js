@@ -58,6 +58,7 @@ export const WEBLLM_MODEL_DOWNLOAD_BYTES = 850 * 1024 * 1024;
 export const WEBLLM_LEGACY_MODELS = Object.freeze([
     Object.freeze({
         modelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+        label: 'Llama 3.2 1B (q4f16)',
         modelUrl: 'https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/',
         modelLibUrl:
             'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Llama-3.2-1B-Instruct-q4f16_1_cs1k-webgpu.wasm'
@@ -228,12 +229,15 @@ export const SMOLLM_LICENSE_URL = 'https://www.apache.org/licenses/LICENSE-2.0';
  *   sampling        replaces the shared chat options' sampling, where the model's
  *                   own recommendation differs: SmolLM2's card uses temperature 0.2
  *   credit, license what the install screen names
+ *   replaces        builds this model takes the place of: removed from the browser,
+ *                   without asking, before it is installed (see `replacedWebLLMModels`)
  *
  * @typedef {'llama'|'smollm'} WebLLMModelKey
  * @typedef {{ key: WebLLMModelKey, modelId: string, modelUrl: string, modelLibUrl: string,
  *             vramMB: number, downloadBytes: number, downloadLabel: string, name: string, label: string,
  *             icon: string, chatTemplate: 'llama3'|'chatml', sampling: Record<string, number>,
- *             credit: string, license: { label: string, url: string } }} WebLLMModel
+ *             credit: string, license: { label: string, url: string },
+ *             replaces: readonly string[] }} WebLLMModel
  */
 export const WEBLLM_MODELS = Object.freeze({
     llama: Object.freeze({
@@ -250,7 +254,9 @@ export const WEBLLM_MODELS = Object.freeze({
         chatTemplate: 'llama3',
         sampling: Object.freeze({}),
         credit: 'Llama 3.2 by Meta · © Meta Platforms, Inc. ·',
-        license: Object.freeze({ label: 'Llama 3.2 Community License', url: LLAMA_LICENSE_URL })
+        license: Object.freeze({ label: 'Llama 3.2 Community License', url: LLAMA_LICENSE_URL }),
+        // A desktop changes nothing: an older build it holds is left alone.
+        replaces: Object.freeze([])
     }),
     smollm: Object.freeze({
         key: 'smollm',
@@ -266,7 +272,9 @@ export const WEBLLM_MODELS = Object.freeze({
         chatTemplate: 'chatml',
         sampling: Object.freeze({ temperature: 0.2 }),
         credit: 'SmolLM2 by Hugging Face ·',
-        license: Object.freeze({ label: 'Apache License 2.0', url: SMOLLM_LICENSE_URL })
+        license: Object.freeze({ label: 'Apache License 2.0', url: SMOLLM_LICENSE_URL }),
+        // A phone that downloaded Llama before gets that space back for SmolLM2.
+        replaces: Object.freeze([WEBLLM_MODEL_ID, ...WEBLLM_LEGACY_MODELS.map((entry) => entry.modelId)])
     })
 });
 
@@ -293,8 +301,9 @@ export function chatOptionsFor(model) {
 /**
  * Builds this page does not load: the older Llama build, and the other
  * device's model, which a browser may hold from before — a phone that
- * downloaded Llama, say. Only ever looked for, and removed on the user's own
- * request; nothing removes them on its own.
+ * downloaded Llama, say. Reported in status checks. Of these, only what the
+ * page's model replaces is removed without asking (a phone's Llama); the rest
+ * is removed only on the user's own request.
  * @param {WebLLMModel} model the one this page loads
  * @returns {{ modelId: string, modelUrl: string, modelLibUrl: string }[]}
  */
@@ -302,6 +311,20 @@ export function otherWebLLMModels(model) {
     return [...WEBLLM_LEGACY_MODELS, ...Object.values(WEBLLM_MODELS).filter((entry) => entry.key !== model.key)].map(
         ({ modelId, modelUrl, modelLibUrl }) => ({ modelId, modelUrl, modelLibUrl })
     );
+}
+
+/**
+ * The builds a model replaces, with their files: what a phone deletes before it
+ * installs SmolLM2. Nothing on a desktop.
+ * @param {WebLLMModel} model
+ * @returns {{ modelId: string, label: string, modelUrl: string, modelLibUrl: string }[]}
+ */
+export function replacedWebLLMModels(model) {
+    const known = [...Object.values(WEBLLM_MODELS), ...WEBLLM_LEGACY_MODELS];
+    return model.replaces
+        .map((modelId) => known.find((entry) => entry.modelId === modelId))
+        .filter(Boolean)
+        .map(({ modelId, label, modelUrl, modelLibUrl }) => ({ modelId, label, modelUrl, modelLibUrl }));
 }
 
 /**

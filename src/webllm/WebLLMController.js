@@ -183,6 +183,8 @@ function initialState() {
         },
         /** @type {'searching'|null} an MDN lookup in progress */
         lookup: null,
+        /** @type {string[]} models removed from this browser to make room for this one (on a phone, Llama) */
+        replaced: [],
         /**
          * Where the reply being written is in its sequence, for the status line.
          * @type {{ mode: 'auto'|import('./webllmThinking.js').ReplyMode,
@@ -231,6 +233,8 @@ export class WebLLMController {
         this.history = null;
         /** @type {string|null} */
         this.walletAddress = null;
+        /** @type {string|null} the signed-in identity's Nostr address (npub), the author of project commits */
+        this.npub = null;
         /** The reply being written, so a lock can save what there is of it. */
         this.activeReply = null;
         /** @type {AbortController|null} an MDN lookup Stop can cancel */
@@ -273,12 +277,15 @@ export class WebLLMController {
 
     /**
      * The wallet gate. Only a signed-in, onboarded identity may use the chat,
-     * and only that wallet's saved conversations are opened.
+     * and only that wallet's saved conversations are opened. Its Nostr address
+     * is kept as the author of the projects' commits; it may arrive after the
+     * wallet does, so it is taken on every call.
      * @param {boolean} allowed
-     * @param {{ walletAddress?: string|null }} [identity]
+     * @param {{ walletAddress?: string|null, npub?: string|null }} [identity]
      */
-    setAllowed(allowed, { walletAddress = null } = {}) {
+    setAllowed(allowed, { walletAddress = null, npub = null } = {}) {
         const wallet = walletAddress ? `${walletAddress}`.toLowerCase() : null;
+        this.npub = allowed && npub ? `${npub}` : null;
         if (allowed === this.allowed && (!allowed || wallet === this.walletAddress)) return;
         // Another wallet without a lock in between: close the first one's session.
         if (allowed && this.allowed) this.lock();
@@ -543,6 +550,11 @@ export class WebLLMController {
                 return;
             }
 
+            // On a phone, a Llama downloaded before goes first: SmolLM2 takes
+            // its place, and the space it frees is what the storage check sees.
+            await this.removeReplacedModels();
+            if (epoch !== this.epoch) return;
+
             const cache = await this.readCache();
             if (epoch !== this.epoch) return;
             this.update({ gpu, cache });
@@ -564,6 +576,28 @@ export class WebLLMController {
                 if (epoch === this.epoch) this.checking = null;
             });
         return this.checking;
+    }
+
+    /**
+     * Delete the builds the profile's model replaces, without asking: on a
+     * phone, any Llama 3.2 1B a browser still holds. A desktop replaces
+     * nothing. What was found and removed is kept in `state.replaced`, for the
+     * install screen to say. Best-effort: a failure only means the space is not
+     * freed.
+     */
+    async removeReplacedModels() {
+        if (!this.model.replaces.length || typeof this.swClient.clearReplacedModels !== 'function') return;
+        try {
+            const results = await this.swClient.clearReplacedModels();
+            const removed = (results || []).filter((entry) => entry.removed > 0);
+            if (removed.length === 0) return;
+            this.log(
+                `Removed ${removed.map((entry) => entry.modelId).join(', ')} to make room for ${this.model.modelId}.`
+            );
+            this.update({ replaced: [...new Set(removed.map((entry) => entry.label))] });
+        } catch (error) {
+            this.log(`Older models could not be removed: ${error?.message || error}`);
+        }
     }
 
     /** What the WebLLM service worker can see in WebLLM's caches. */

@@ -10,8 +10,11 @@
  */
 
 let allowed = false;
-/** Whose conversations the chat may open: the unlocked wallet's address. */
-let identity = { walletAddress: null };
+/**
+ * Whose conversations the chat may open — the unlocked wallet's address — and
+ * the Nostr address its project commits are authored by.
+ */
+let identity = { walletAddress: null, npub: null };
 /** @type {Promise<any>|null} */
 let app = null;
 
@@ -52,11 +55,11 @@ export function installWebLLMTab({ loadApp } = {}) {
  * dropped from memory, while saved conversations and the downloaded model
  * stay for the next session of the same wallet.
  * @param {boolean} isAllowed
- * @param {{ walletAddress?: string|null }} [who]
+ * @param {{ walletAddress?: string|null, npub?: string|null }} [who]
  */
-export function setWebLLMAccess(isAllowed, { walletAddress = null } = {}) {
+export function setWebLLMAccess(isAllowed, { walletAddress = null, npub = null } = {}) {
     allowed = Boolean(isAllowed);
-    identity = { walletAddress: allowed ? walletAddress : null };
+    identity = { walletAddress: allowed ? walletAddress : null, npub: allowed ? npub : null };
     // Only an app that was already opened has anything to lock or unlock.
     void app?.then((controller) => controller.setAllowed(allowed, identity)).catch(() => {});
 }
@@ -64,6 +67,6 @@ export function setWebLLMAccess(isAllowed, { walletAddress = null } = {}) {
 /** For tests: forget the loaded app and the gate. */
 export function resetWebLLMTabForTests() {
     allowed = false;
-    identity = { walletAddress: null };
+    identity = { walletAddress: null, npub: null };
     app = null;
 }

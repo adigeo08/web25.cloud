@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * A Llama conversation's project: the code it wrote, as files.
+ * A chat conversation's project: the code it wrote, as files.
  *
  * Every code block in a reply can carry a file name. Blocks that name one —
  * on the fence (```html index.html), as a comment on their first line
@@ -9,7 +9,7 @@
  * finishes; any other block can be added by naming it in the chat. The tree is
  * a git repository in OPFS (`/web25/chats/<wallet>/<conversation>`, see
  * `GitWorkspace`), so each reply that changes files is a commit and an earlier
- * version of a file is still in the history after Llama rewrites it.
+ * version of a file is still in the history after the model rewrites it.
  *
  * Deploy project exports the tree to the Deploy tab as a folder, the same way
  * a folder picked from the device arrives there, and the deployment that
@@ -171,7 +171,20 @@ export function projectFolderName(title) {
 }
 
 /**
- * The trees of one browser's Llama conversations.
+ * Who a project commit is by: the signed-in identity, as its Nostr address
+ * (npub). The model that wrote the code is never the author — its name is
+ * only for the chat to show. Without an npub (Nostr turned off for this
+ * wallet), the wallet address stands in.
+ * @param {string|null|undefined} npub
+ * @param {string|null|undefined} wallet
+ * @returns {{ name: string, email: string }}
+ */
+export function commitAuthor(npub, wallet) {
+    return { name: `${npub || wallet || 'WEB25'}`, email: '' };
+}
+
+/**
+ * The trees of one browser's chat conversations.
  */
 export class ChatProjectStore {
     /** @param {{ workspace?: import('../storage/GitWorkspace.js').GitWorkspace }} [options] */
@@ -232,8 +245,9 @@ export class ChatProjectStore {
      * @param {string} conversationId
      * @param {import('./projectTree.js').ProjectChange[]} changes
      * @param {string} message
+     * @param {{ name: string, email: string }} [author]
      */
-    async apply(wallet, conversationId, changes, message) {
+    async apply(wallet, conversationId, changes, message, author = commitAuthor(null, wallet)) {
         for (const change of changes) {
             const paths = change.op === 'move' ? [change.from, change.to] : [change.path];
             for (const path of paths) {
@@ -242,7 +256,7 @@ export class ChatProjectStore {
         }
         return this.workspace.applyChanges(this.dir(wallet, conversationId), changes, {
             message,
-            author: { name: 'You', email: 'user@web25.cloud' }
+            author
         });
     }
 
@@ -259,9 +273,10 @@ export class ChatProjectStore {
      * @param {string} conversationId
      * @param {{ path: string, code: string }[]} files
      * @param {string} message
+     * @param {{ name: string, email: string }} [author]
      * @returns {Promise<{ paths: string[], committed: Promise<string|null> }>}
      */
-    async save(wallet, conversationId, files, message) {
+    async save(wallet, conversationId, files, message, author = commitAuthor(null, wallet)) {
         const entries = [];
         for (const file of files) {
             const path = projectPath(file.path);
@@ -271,16 +286,19 @@ export class ChatProjectStore {
         if (entries.length === 0) return { paths: [], committed: Promise.resolve(null) };
         return this.workspace.snapshot(this.dir(wallet, conversationId), entries, {
             message,
-            author: { name: 'Llama', email: 'llama@web25.cloud' },
+            author,
             replace: false
         });
     }
 
-    /** @param {string} wallet @param {string} conversationId @param {string} path */
-    async removeFile(wallet, conversationId, path) {
+    /**
+     * @param {string} wallet @param {string} conversationId @param {string} path
+     * @param {{ name: string, email: string }} [author]
+     */
+    async removeFile(wallet, conversationId, path, author = commitAuthor(null, wallet)) {
         return this.workspace.removeFiles(this.dir(wallet, conversationId), [path], {
             message: `Remove ${path}`,
-            author: { name: 'Llama', email: 'llama@web25.cloud' }
+            author
         });
     }
 
@@ -384,6 +402,11 @@ export class WebLLMProject {
         return this.controller.walletAddress || null;
     }
 
+    /** Every commit is the signed-in user's, by their Nostr address. */
+    author() {
+        return commitAuthor(this.controller.npub, this.wallet());
+    }
+
     /**
      * React to one controller change.
      * @param {any} chat the controller's state
@@ -459,7 +482,7 @@ export class WebLLMProject {
         await this.save(
             conversationId,
             [...byName].map(([path, code]) => ({ path, code })),
-            `Llama: ${[...byName.keys()].join(', ')}`
+            `Save ${[...byName.keys()].join(', ')}`
         );
     }
 
@@ -491,7 +514,7 @@ export class WebLLMProject {
         const wallet = this.wallet();
         if (!wallet || !this.state.available) return null;
         try {
-            const result = await this.store.save(wallet, conversationId, files, message);
+            const result = await this.store.save(wallet, conversationId, files, message, this.author());
             // The files are there now; the commit follows, and the bar's git
             // line with it.
             if (conversationId === this.state.conversationId) await this.refresh();
@@ -527,7 +550,7 @@ export class WebLLMProject {
 
     /**
      * Save a file from the canvas: into the project, as a commit, and into the
-     * thought store, where Llama recalls it — by similarity, through
+     * thought store, where the model recalls it — by similarity, through
      * idb-vector — the next time it answers in this conversation.
      *
      * @param {string} path
@@ -544,7 +567,7 @@ export class WebLLMProject {
     }
 
     /**
-     * Apply the Project panel's batch, then bring Llama's memory of the files
+     * Apply the Project panel's batch, then bring the model's memory of the files
      * in line: a deleted file is forgotten, a moved one remembered under its
      * new name.
      * @param {import('./projectTree.js').ProjectChange[]} changes
@@ -553,7 +576,7 @@ export class WebLLMProject {
     async applyChanges(changes, message) {
         const { wallet, conversationId } = this.target();
         if (changes.length === 0) return;
-        const { committed } = await this.store.apply(wallet, conversationId, changes, message);
+        const { committed } = await this.store.apply(wallet, conversationId, changes, message, this.author());
         await this.refresh();
         this.track(committed.then(() => this.refresh()));
         for (const change of changes) {
@@ -589,8 +612,8 @@ export class WebLLMProject {
     }
 
     /**
-     * Keep one file's current text where Llama recalls from. One thought per
-     * file: the previous version is dropped first, so Llama never recalls code
+     * Keep one file's current text where the model recalls from. One thought per
+     * file: the previous version is dropped first, so the model never recalls code
      * the user has since changed.
      * @param {string} conversationId
      * @param {string} path
@@ -614,7 +637,7 @@ export class WebLLMProject {
             });
             return Boolean(result?.ok);
         } catch (error) {
-            this.log(`Llama could not be shown ${path}: ${error?.message || error}`);
+            this.log(`The model could not be shown ${path}: ${error?.message || error}`);
             return false;
         }
     }
@@ -624,7 +647,7 @@ export class WebLLMProject {
         const wallet = this.wallet();
         const conversationId = this.state.conversationId;
         if (!wallet || !conversationId) return;
-        const { committed } = await this.store.removeFile(wallet, conversationId, path);
+        const { committed } = await this.store.removeFile(wallet, conversationId, path, this.author());
         await this.refresh();
         this.track(committed.then(() => this.refresh()));
     }

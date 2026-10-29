@@ -484,14 +484,18 @@ export function bindWebLLMPanel(
                     : 'Installing — keep this tab open.';
             case 'not-installed':
             case 'error': {
+                // On a phone that held Llama: it is gone, and why.
+                const replaced = state.replaced?.length
+                    ? `${state.replaced.join(' and ')} was removed from this device to make room for ${model.label}. `
+                    : '';
                 if (state.cache?.state === 'partial' && state.cache.percent > 0) {
-                    return `${state.cache.percent}% already downloaded — installing resumes from there.`;
+                    return `${replaced}${state.cache.percent}% already downloaded — installing resumes from there.`;
                 }
                 if (state.gpu?.supported) {
                     const gpu = [state.gpu.vendor, state.gpu.description].filter(Boolean).join(' · ');
-                    return gpu ? `WebGPU ready · ${gpu}` : 'WebGPU ready on this device.';
+                    return replaced + (gpu ? `WebGPU ready · ${gpu}` : 'WebGPU ready on this device.');
                 }
-                return '';
+                return replaced.trim();
             }
             default:
                 return '';

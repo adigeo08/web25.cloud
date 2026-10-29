@@ -20,7 +20,8 @@ import {
     WEBLLM_MODELS,
     WEBLLM_SW_SCOPE,
     WEBLLM_SW_URL,
-    otherWebLLMModels
+    otherWebLLMModels,
+    replacedWebLLMModels
 } from './webllmConfig.js';
 
 export const WEBLLM_SW_PROTOCOL = 'web25-webllm/1';
@@ -114,6 +115,7 @@ export function createWebLLMServiceWorkerClient({
     const model = { modelUrl: activeModel.modelUrl, modelLibUrl: activeModel.modelLibUrl };
     const library = { url: WEBLLM_LIBRARY_URL, integrity: WEBLLM_LIBRARY_INTEGRITY };
     const legacy = otherWebLLMModels(activeModel).map(({ modelUrl, modelLibUrl }) => ({ modelUrl, modelLibUrl }));
+    const replaced = replacedWebLLMModels(activeModel);
 
     return {
         register,
@@ -129,6 +131,26 @@ export function createWebLLMServiceWorkerClient({
          * user's own click; the library cache is shared and left alone.
          */
         clearLegacyModels: () =>
-            Promise.all(legacy.map((entry) => request('CLEAR_MODEL', { model: entry, includeLibrary: false })))
+            Promise.all(legacy.map((entry) => request('CLEAR_MODEL', { model: entry, includeLibrary: false }))),
+        /**
+         * Delete the builds this page's model replaces — on a phone, Llama, to
+         * make room for SmolLM2 — and say which of them had anything stored.
+         * The shared library cache is left alone. On a desktop there is
+         * nothing to delete and nothing is asked.
+         * @returns {Promise<{ modelId: string, label: string, removed: number }[]|null>}
+         */
+        clearReplacedModels: async () => {
+            if (replaced.length === 0) return [];
+            const results = [];
+            for (const { modelId, label, modelUrl, modelLibUrl } of replaced) {
+                const result = await request('CLEAR_MODEL', {
+                    model: { modelUrl, modelLibUrl },
+                    includeLibrary: false
+                });
+                if (result === null) return null;
+                results.push({ modelId, label, removed: Number(result?.removed) || 0 });
+            }
+            return results;
+        }
     };
 }
