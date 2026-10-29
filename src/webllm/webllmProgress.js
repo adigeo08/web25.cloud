@@ -17,6 +17,7 @@
 
 import {
     WEBLLM_HISTORY_MESSAGES,
+    WEBLLM_MODELS,
     WEBLLM_MESSAGE_FRAMING_TOKENS,
     WEBLLM_PROMPT_TOKEN_BUDGET,
     WEBLLM_REQUEST_FRAMING_TOKENS
@@ -24,7 +25,7 @@ import {
 
 /** Shown under a reply the loop guard cut off. */
 export const LOOP_NOTICE =
-    'Stopped automatically: Llama started repeating itself. Try rephrasing, or start a new chat.';
+    'Stopped automatically: the model started repeating itself. Try rephrasing, or start a new chat.';
 
 /**
  * Shown under a reply that stopped at the length limit and cannot be continued:
@@ -39,7 +40,7 @@ export const MDN_UNAVAILABLE_NOTE =
     'MDN documentation couldn’t be reached, so this answer comes from the model’s own knowledge.';
 
 /** Shown when the newest message alone is more than the model can read at once. */
-export const MESSAGE_TOO_LONG = 'That message is too long for Llama to read at once. Try a shorter one.';
+export const MESSAGE_TOO_LONG = 'That message is too long for the model to read at once. Try a shorter one.';
 
 /**
  * @typedef {'download'|'cache'|'shaders'|'init'|'done'} LoadPhase
@@ -159,9 +160,10 @@ export function describeProgress(progress) {
  * never on a class.
  *
  * @param {{ name?: string, message?: string } | null | undefined} error
+ * @param {import('./webllmConfig.js').WebLLMModel} [model] the model being run, named in the advice
  * @returns {ClassifiedError}
  */
-export function classifyError(error) {
+export function classifyError(error, model = WEBLLM_MODELS.llama) {
     const name = `${error?.name || ''}`;
     const detail = `${error?.message || error || ''}`;
     const text = `${name} ${detail}`;
@@ -171,8 +173,7 @@ export function classifyError(error) {
         return {
             kind: 'unsupported',
             retryable: false,
-            message:
-                'This browser only offers WebGPU emulated on the CPU, which is far too slow for Llama. Turn on hardware acceleration in the browser settings (or update the GPU driver) and reload the page.',
+            message: `This browser only offers WebGPU emulated on the CPU, which is far too slow for ${model.name}. Turn on hardware acceleration in the browser settings (or update the GPU driver) and reload the page.`,
             detail
         };
     }
@@ -184,8 +185,7 @@ export function classifyError(error) {
         return {
             kind: 'unsupported',
             retryable: false,
-            message:
-                'WebGPU is not available in this browser, so Llama cannot run here. Try a recent version of Chrome, Edge or Safari on a device with a supported GPU.',
+            message: `WebGPU is not available in this browser, so ${model.name} cannot run here. Try a recent version of Chrome, Edge or Safari on a device with a supported GPU.`,
             detail
         };
     }
@@ -202,8 +202,7 @@ export function classifyError(error) {
         return {
             kind: 'storage',
             retryable: true,
-            message:
-                'There is not enough storage space in this browser for the model (about 800 MB). Free up some space and try again.',
+            message: `There is not enough storage space in this browser for the model (about ${model.downloadLabel.replace(/^~/, '')}). Free up some space and try again.`,
             detail
         };
     }
@@ -243,7 +242,7 @@ export function classifyError(error) {
     return {
         kind: 'unknown',
         retryable: true,
-        message: 'Something went wrong while running Llama. Please try again.',
+        message: `Something went wrong while running ${model.name}. Please try again.`,
         detail
     };
 }
@@ -254,7 +253,9 @@ export function classifyError(error) {
  * The real count lives in the tokenizer, inside the engine, and is not
  * available before the request is sent. This errs high: the Llama 3 tokenizer
  * averages about four characters per token on English prose and about three on
- * code, so three characters per token never undercounts either; characters
+ * code, so three characters per token never undercounts either. SmolLM2's
+ * smaller vocabulary (49,152 tokens) can need more tokens for the same text,
+ * which is what the mobile profile's 128-token margin is for; characters
  * outside ASCII (accents, CJK, emoji) cost more and are counted at 1.5.
  *
  * @param {string} text
@@ -282,7 +283,7 @@ const messageTokens = (message) => estimateTokens(message.content) + WEBLLM_MESS
  * question is answered twice.
  *
  * Of those, only the last `limit` messages are sent — the official WebLLM
- * Chat's `historyMessageCount` of 4, i.e. the two most recent exchanges. A 1B
+ * Chat's `historyMessageCount` of 4, i.e. the two most recent exchanges. A small
  * model stays on topic far better with a short history.
  *
  * @param {{ role: string, content: string, pending?: boolean, error?: string|null,

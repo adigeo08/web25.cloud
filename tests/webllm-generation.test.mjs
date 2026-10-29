@@ -476,14 +476,26 @@ test('a failed request is shown, kept out of context, and does not poison the ne
 const MOBILE = WEBLLM_PROFILES.mobile;
 const DESKTOP = WEBLLM_PROFILES.desktop;
 
-test('mobile: the engine is initialised with a 2048-token context, sampling unchanged', async () => {
+test('mobile: the engine loads SmolLM2 360M with a 2048-token context and its own temperature', async () => {
     const { llm } = await session(() => ({ text: 'Hi!' }), { profile: MOBILE });
     assert.deepEqual(llm.state.reloads, [
-        { modelId: WEBLLM_MODEL_ID, chatOpts: { ...WEBLLM_CHAT_OPTIONS, context_window_size: 2048 } }
+        {
+            modelId: 'SmolLM2-360M-Instruct-q4f32_1-MLC',
+            chatOpts: { ...WEBLLM_CHAT_OPTIONS, temperature: 0.2, context_window_size: 2048 }
+        }
     ]);
     const [record] = llm.state.engineConfig.appConfig.model_list;
     assert.deepEqual(record.overrides, { context_window_size: 2048 });
-    assert.equal(record.model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC', 'same model');
+    assert.equal(record.model_id, 'SmolLM2-360M-Instruct-q4f32_1-MLC');
+    assert.equal(record.model, 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/');
+    assert.match(record.model_lib, /\/v0_2_84\/base\/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu\.wasm$/);
+    assert.equal(record.vram_required_MB, 579.61);
+});
+
+test('desktop: the engine still loads Llama 3.2 1B with the shared sampling', async () => {
+    const { llm } = await session(() => ({ text: 'Hi!' }), { profile: DESKTOP });
+    assert.deepEqual(llm.state.reloads, [{ modelId: WEBLLM_MODEL_ID, chatOpts: { ...WEBLLM_CHAT_OPTIONS } }]);
+    assert.equal(llm.state.engineConfig.appConfig.model_list[0].model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC');
 });
 
 test('mobile: a short request carries the shorter of its own limit and 256, and a reply that reaches it can be continued', async () => {
@@ -589,12 +601,12 @@ test('Continue picks the reply up in place: same message, no new question, the p
     const [request] = llm.state.completions;
     assert.equal(request.max_tokens, 256, 'the mobile limit applies to each continuation');
     assert.equal(request.stream, true);
-    assert.ok(request.prompt.startsWith('<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n'));
+    // The mobile model is SmolLM2: its prompt is ChatML, not the Llama 3 format.
+    assert.ok(request.prompt.startsWith('<|im_start|>system\n'));
+    assert.ok(request.prompt.includes('<|im_start|>user\nExplain closures in detail<|im_end|>\n'));
+    assert.ok(!request.prompt.includes('<|start_header_id|>'));
     assert.ok(
-        request.prompt.includes('<|start_header_id|>user<|end_header_id|>\n\nExplain closures in detail<|eot_id|>')
-    );
-    assert.ok(
-        request.prompt.endsWith(`<|start_header_id|>assistant<|end_header_id|>\n\n${cut}`),
+        request.prompt.endsWith(`<|im_start|>assistant\n${cut}`),
         'the prompt stops inside the unfinished reply, with no end-of-turn after it'
     );
     assert.equal(llm.state.requests.length, 1, 'Continue is not a chat request');

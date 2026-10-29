@@ -18,6 +18,7 @@ import {
     WEBLLM_LIBRARY_URL,
     WEBLLM_MODEL_LIB_URL,
     WEBLLM_MODEL_URL,
+    WEBLLM_MODELS,
     WEBLLM_NATIVE_CACHES,
     WEBLLM_SW_SCOPE,
     WEBLLM_SW_URL
@@ -377,14 +378,51 @@ test('the page asks for the old build in status checks, and removes it only thro
     const client = createWebLLMServiceWorkerClient({ container: { register: async () => ({ active: worker }) } });
 
     await client.status();
-    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL]);
+    // A desktop page loads Llama: the old q4f16 build and the phone's SmolLM2 are the others.
+    assert.deepEqual(posted[0].model, { modelUrl: WEBLLM_MODEL_URL, modelLibUrl: WEBLLM_MODEL_LIB_URL });
+    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL, SMOLLM]);
     assert.equal(
         posted.some((message) => message.type === 'CLEAR_MODEL'),
         false
     );
 
     await client.clearLegacyModels();
-    const clear = posted.find((message) => message.type === 'CLEAR_MODEL');
-    assert.deepEqual(clear.model, LEGACY_MODEL);
-    assert.equal(clear.includeLibrary, false);
+    const clears = posted.filter((message) => message.type === 'CLEAR_MODEL');
+    assert.deepEqual(
+        clears.map((message) => message.model),
+        [LEGACY_MODEL, SMOLLM]
+    );
+    assert.ok(clears.every((message) => message.includeLibrary === false));
+});
+
+const SMOLLM = { modelUrl: WEBLLM_MODELS.smollm.modelUrl, modelLibUrl: WEBLLM_MODELS.smollm.modelLibUrl };
+const LLAMA = { modelUrl: WEBLLM_MODEL_URL, modelLibUrl: WEBLLM_MODEL_LIB_URL };
+
+test('a phone page asks about SmolLM2, and counts Llama among the builds it does not load', async () => {
+    const posted = [];
+    const worker = {
+        postMessage(message, transfer) {
+            posted.push(message);
+            transfer[0].postMessage({ ok: true, result: {} });
+        }
+    };
+    const client = createWebLLMServiceWorkerClient({
+        container: { register: async () => ({ active: worker }) },
+        model: WEBLLM_MODELS.smollm
+    });
+    await client.status();
+    await client.clearModel();
+    assert.deepEqual(posted[0].model, SMOLLM);
+    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL, LLAMA]);
+    assert.deepEqual(posted[1].model, SMOLLM, 'only its own model is ever cleared by clearModel');
+});
+
+test('the service worker accepts SmolLM2 and keeps it apart from Llama', async () => {
+    assert.match(
+        SMOLLM.modelUrl,
+        /^https:\/\/huggingface\.co\/mlc-ai\/SmolLM2-360M-Instruct-q4f32_1-MLC\/resolve\/main\/$/
+    );
+    assert.ok(!SMOLLM.modelUrl.startsWith(LLAMA.modelUrl) && !LLAMA.modelUrl.startsWith(SMOLLM.modelUrl));
+    const status = await sw.handleRequest({ type: 'STATUS', model: SMOLLM, library: { url: WEBLLM_LIBRARY_URL } });
+    assert.ok(status.model, 'a SmolLM2 status is answered, not refused as an unknown model');
 });

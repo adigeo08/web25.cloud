@@ -694,9 +694,10 @@ wrap and by its own id in the inbox ledger — so a relay replaying it, a
 re-wrapped copy, or the same message seen live and delivered again later is
 neither shown nor counted twice.
 
-### 9) WebLLM — a local AI chat (Llama 3.2 1B)
+### 9) WebLLM — a local AI chat (Llama 3.2 1B on desktop, SmolLM2 360M on mobile)
 
-A signed-in-only **WebLLM** tab runs `Llama-3.2-1B-Instruct-q4f32_1-MLC` entirely
+A signed-in-only **WebLLM** tab runs `Llama-3.2-1B-Instruct-q4f32_1-MLC` on desktops
+and laptops, and `SmolLM2-360M-Instruct-q4f32_1-MLC` on phones and tablets, entirely
 in the browser with [MLC WebLLM](https://github.com/mlc-ai/web-llm) on WebGPU. No
 inference server, no API key, and no link to Nostr, WebRTC, the wallet or the
 Chat service.
@@ -704,7 +705,7 @@ Chat service.
 - **Lazy by construction.** Start-up loads only `src/webllm/WebLLMTab.js`, a
   gate with no imports. Opening the tab (while signed in) imports the app,
   checks WebGPU and reads the cache state; the weights download only after
-  **Install Llama 3.2 1B**. A later session finds the model cached and loads it
+  **Install Llama 3.2 1B** (**Install SmolLM2 360M** on a phone). A later session finds the model cached and loads it
   straight into the chat.
 - **Pinned library.** `@mlc-ai/web-llm@0.2.85` (`lib/index.js`) from jsDelivr,
   checked against a pinned SHA-384 before it runs, and imported from a blob URL.
@@ -731,7 +732,8 @@ Chat service.
 
 #### Model and generation settings — matched to the official WebLLM Chat
 
-WEB25 runs the same model with the same configuration as [chat.webllm.ai](https://chat.webllm.ai)
+This section describes the desktop model; the mobile one is in the next section.
+On desktop, WEB25 runs the same model with the same configuration as [chat.webllm.ai](https://chat.webllm.ai)
 ([source](https://github.com/mlc-ai/web-llm-chat)), whose defaults work on devices where
 WEB25's first configuration did not.
 
@@ -779,28 +781,44 @@ To compare with the reference on a WebGPU device, select the same model on chat.
 and try `hey`, `Hello, how are you?`, `What is JavaScript?`, `Explain WebRTC briefly.`, and a
 short multi-turn exchange in both.
 
-#### Mobile memory profile and batched streaming
+#### Mobile model, memory profile and batched streaming
 
-Phones and tablets get a smaller memory profile; desktops keep exactly the settings above.
-Both live in `WEBLLM_PROFILES` (`src/webllm/webllmConfig.js`).
+Phones and tablets run a smaller model with a smaller memory profile; desktops keep exactly
+the settings above. Both live in `WEBLLM_PROFILES` and `WEBLLM_MODELS`
+(`src/webllm/webllmConfig.js`).
 
 | Setting             | Desktop (unchanged)  | Mobile                           |
 | ------------------- | -------------------- | -------------------------------- |
-| Model               | q4f32_1              | q4f32_1                          |
-| Sampling            | 0.6 / 0.9 / 0 / 0    | same                             |
+| Model               | Llama 3.2 1B q4f32_1 | SmolLM2 360M Instruct q4f32_1    |
+| Download (approx.)  | ~800 MB              | ~250 MB                          |
+| VRAM (0.2.85 record) | 1128.82 MB          | 579.61 MB                        |
+| Conversation format | Llama 3 (`llama-3_1`) | ChatML (`<|im_start|>…<|im_end|>`) |
+| Sampling            | 0.6 / 0.9 / 0 / 0    | 0.2 / 0.9 / 0 / 0 (SmolLM2's card) |
 | Context window      | 4096                 | 2048 (set at engine `reload()`)  |
 | Max reply tokens    | none (end of turn or full context) | 256 (`max_tokens` on every request) |
 | Prompt budget       | 3072 estimated tokens | 1664 (2048 − 256 − 128 margin)  |
-| KV cache (computed) | 256 MB               | 128 MB                           |
+| KV cache (computed) | 256 MB               | 160 MB                           |
 | Streaming render    | batched              | batched                          |
+
+- **Which model.** The profile names it: `desktop` loads Llama, `mobile` loads SmolLM2. The
+  page sends the model's key with `load`, and the inference worker accepts only keys from
+  `WEBLLM_MODELS` (anything else is Llama). Install screen, chat header, status lines and
+  error messages name the model in use; the system prompt names none. Auto, Short and
+  Thinking all stay available on mobile — on Auto, SmolLM2 makes the choice.
+- **Switching device class.** Each model has its own files. A phone that downloaded Llama
+  before this change is shown the install screen for SmolLM2; the Llama files stay until the
+  browser's site data is cleared (the service worker reports them as builds the page does
+  not load, and never deletes them on its own).
 
 - **Which profile.** Mobile when User-Agent Client Hints say so, the user agent names a phone
   or tablet (Android, iPhone, iPad, …), or a "Mac" has touch points (iPadOS). Decided once
   per page.
 - **Memory.** WebLLM allocates the KV cache for the whole context window when the model
   loads. For Llama 3.2 1B (16 layers × 8 KV heads × 64 dims, keys and values, 32-bit in the
-  q4f32 build) that is 64 KB per token, so 2048 tokens saves about 128 MB of GPU memory.
-  This is computed from the model's shape, not measured on a device. The 256-token reply
+  q4f32 build) that is 64 KB per token; for SmolLM2 360M (32 layers × 5 KV heads × 64 dims)
+  80 KB per token, so 160 MB at 2048 tokens. WebLLM's own records put SmolLM2 at about half
+  Llama's VRAM. The KV figures are computed from the models' shapes, not measured on a
+  device. The 256-token reply
   limit bounds how long one generation runs and keeps prompt + reply inside the smaller
   window. A reply that reaches it offers **Continue →**, which asks for up to 256 more
   tokens of the same reply.

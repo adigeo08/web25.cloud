@@ -9,7 +9,7 @@ import { WebLLMController } from './WebLLMController.js';
 import { createEngineClient } from './WebLLMEngineClient.js';
 import { createWebLLMServiceWorkerClient } from './WebLLMServiceWorkerClient.js';
 import { detectWebGPU } from './webgpuSupport.js';
-import { resolveWebLLMProfile } from './webllmConfig.js';
+import { getWebLLMModel, resolveWebLLMProfile } from './webllmConfig.js';
 import { openWebLLMHistory } from './webllmHistoryStore.js';
 import { openWebLLMThoughts } from './webllmThoughtStore.js';
 import { loadIdbVector } from './idbVectorLoader.js';
@@ -25,10 +25,12 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
     /** @type {WebLLMProject|null} */
     let project = null;
     const nav = /** @type {any} */ (navigator);
+    // Desktop or mobile, decided once per page: Llama 3.2 1B or SmolLM2 360M.
+    const profile = resolveWebLLMProfile();
 
     const controller = new WebLLMController({
         detectWebGPU: () => detectWebGPU(),
-        swClient: createWebLLMServiceWorkerClient({ log }),
+        swClient: createWebLLMServiceWorkerClient({ log, model: getWebLLMModel(profile.model) }),
         // In the worker where it has the GPU, on the page where it does not; remembered.
         createEngine: (options) => createEngineClient(options),
         storage: nav.storage || null,
@@ -38,8 +40,7 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
             project?.handle(state, change);
         },
         log,
-        // Desktop or mobile memory profile, decided once per page.
-        profile: resolveWebLLMProfile(),
+        profile,
         // Conversations, saved per wallet in this browser.
         openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
         // The sequence thinker's thoughts, per wallet, recalled by similarity

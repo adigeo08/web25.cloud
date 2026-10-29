@@ -25,8 +25,10 @@
  * one answer in a small token window; Thinking is a plan and then one step at
  * a time, each with its own MDN lookup, each kept as a thought in the thought
  * store (webllmThoughtStore.js) from which later steps recall what they need;
- * Auto lets Llama choose per message. Llama only ever runs on the GPU; the
- * thought store and its similarity search are plain JavaScript on the CPU.
+ * Auto lets the model choose per message. The model — Llama 3.2 1B on a
+ * desktop, SmolLM2 360M on a phone or tablet (see `WEBLLM_PROFILES`) — only
+ * ever runs on the GPU; the thought store and its similarity search are plain
+ * JavaScript on the CPU.
  *
  * DOM-free: the panel renders `state`, the tests drive it with doubles.
  */
@@ -37,10 +39,10 @@ import {
     WEBLLM_DEFAULT_RETENTION,
     WEBLLM_REPLY_MODES,
     WEBLLM_MESSAGE_FRAMING_TOKENS,
-    WEBLLM_MODEL_DOWNLOAD_BYTES,
     WEBLLM_PROFILES,
     WEBLLM_SYSTEM_PROMPT,
-    WEBLLM_THINKING
+    WEBLLM_THINKING,
+    getWebLLMModel
 } from './webllmConfig.js';
 import {
     CONTINUE_EXHAUSTED_NOTICE,
@@ -112,7 +114,7 @@ export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
  *   docContext   the documentation excerpt it was given, kept so Continue sees it too
  *   lookupNote   why no documentation was used, when a lookup was tried and failed
  *   mode         how the reply was written: short, or thinking in steps
- *   autoMode     whether Llama chose that mode (the Auto setting)
+ *   autoMode     whether the model chose that mode (the Auto setting)
  *   steps        how many planned steps a thinking reply was written in (0: no plan)
  *   sequenceId   the thought sequence a thinking reply was kept as
  */
@@ -233,8 +235,10 @@ export class WebLLMController {
         this.activeReply = null;
         /** @type {AbortController|null} an MDN lookup Stop can cancel */
         this.lookupAbort = null;
-        /** Memory profile: context window, reply limit and prompt budget. Fixed for the page's lifetime. */
+        /** Memory profile: model, context window, reply limit and prompt budget. Fixed for the page's lifetime. */
         this.profile = profile;
+        /** @type {import('./webllmConfig.js').WebLLMModel} the model the profile runs */
+        this.model = getWebLLMModel(profile.model);
         /** Reply limits and step counts for the profile's sequential thinking. */
         this.thinking = WEBLLM_THINKING[profile.id] || WEBLLM_THINKING.desktop;
         /** Set by Stop; a thinking reply checks it between its steps. */
@@ -455,7 +459,7 @@ export class WebLLMController {
     }
 
     /**
-     * How replies are written: 'short', 'thinking', or 'auto' (Llama chooses).
+     * How replies are written: 'short', 'thinking', or 'auto' (the model chooses).
      * @param {string} mode one of WEBLLM_REPLY_MODES
      */
     async setReplyMode(mode) {
@@ -534,7 +538,7 @@ export class WebLLMController {
                 this.update({
                     status: 'unsupported',
                     gpu,
-                    error: { ...classifyError({ name: gpuErrorName(gpu), message: gpu.reason || '' }) }
+                    error: { ...classifyError({ name: gpuErrorName(gpu), message: gpu.reason || '' }, this.model) }
                 });
                 return;
             }
@@ -553,7 +557,7 @@ export class WebLLMController {
         })()
             .catch((error) => {
                 if (epoch !== this.epoch) return;
-                this.update({ status: 'error', error: classifyError(error) });
+                this.update({ status: 'error', error: classifyError(error, this.model) });
             })
             .finally(() => {
                 // Only this session's check: a lock may have started another.
@@ -612,7 +616,7 @@ export class WebLLMController {
                 this.update({
                     status: 'unsupported',
                     gpu,
-                    error: classifyError({ name: gpuErrorName(gpu), message: gpu.reason || '' })
+                    error: classifyError({ name: gpuErrorName(gpu), message: gpu.reason || '' }, this.model)
                 });
                 return;
             }
@@ -652,7 +656,8 @@ export class WebLLMController {
                     this.update({ progress: parseInitProgress(report) }, { type: 'progress' });
                 }, this.profile);
                 this.log(
-                    `Loaded with the ${this.profile.id} profile: ${this.profile.contextWindow}-token context, ` +
+                    `Loaded ${this.model.modelId} with the ${this.profile.id} profile: ` +
+                        `${this.profile.contextWindow}-token context, ` +
                         `${this.profile.maxTokens ? `${this.profile.maxTokens}-token replies` : 'no reply limit'}.`
                 );
             });
@@ -675,7 +680,7 @@ export class WebLLMController {
         } catch (error) {
             if (stale()) return;
             this.releaseEngine();
-            const classified = classifyError(error);
+            const classified = classifyError(error, this.model);
             this.log(`WebLLM install failed: ${classified.detail}`);
             // What survived of the download decides what the retry will say.
             const cache = await this.readCache();
@@ -699,7 +704,7 @@ export class WebLLMController {
         }
         if (!estimate?.quota) return;
         const already = Number(this.state.cache?.bytesCached) || 0;
-        const needed = Math.max(0, WEBLLM_MODEL_DOWNLOAD_BYTES - already);
+        const needed = Math.max(0, this.model.downloadBytes - already);
         const free = estimate.quota - (Number(estimate.usage) || 0);
         if (free < needed) {
             throw Object.assign(new Error(`Not enough storage: ${Math.floor(free / 1048576)} MB free`), {
@@ -812,7 +817,7 @@ export class WebLLMController {
                         : await engine.chat(sent, onDelta);
                 return { result, system };
             } catch (error) {
-                if (stale() || classifyError(error).kind !== 'context') throw error;
+                if (stale() || classifyError(error, this.model).kind !== 'context') throw error;
                 lastError = error;
             }
         }
@@ -926,7 +931,7 @@ export class WebLLMController {
         this.activeReply = { conversationId, reply };
 
         try {
-            // First, how to write it: the setting, or Llama's own choice.
+            // First, how to write it: the setting, or the model's own choice.
             const { mode, auto } = await this.chooseMode(engine, prior, content, stale);
             if (stale()) return false;
             /** @type {any} */
@@ -944,7 +949,7 @@ export class WebLLMController {
             this.finishReply(reply, result);
         } catch (error) {
             if (stale()) return false;
-            const classified = classifyError(error);
+            const classified = classifyError(error, this.model);
             reply.finishReason = 'error';
             reply.error = error?.name === 'MessageTooLong' ? error.message : classified.message;
             this.log(`WebLLM generation failed: ${classified.detail}`);
@@ -985,7 +990,7 @@ export class WebLLMController {
 
     /**
      * The reply mode for this message. Short and Thinking are the user's
-     * choice; on Auto, Llama answers {"mode": …} in a few tokens — on the GPU,
+     * choice; on Auto, the model answers {"mode": …} in a few tokens — on the GPU,
      * constrained to a JSON schema — and anything else is taken as Short.
      *
      * @param {any} engine
@@ -1176,7 +1181,7 @@ export class WebLLMController {
                 maxTokens: this.thinking.stepContinueTokens
             });
         } catch (error) {
-            if (!stale()) this.log(`WebLLM step continuation failed: ${classifyError(error).detail}`);
+            if (!stale()) this.log(`WebLLM step continuation failed: ${classifyError(error, this.model).detail}`);
             return null;
         }
     }
@@ -1450,7 +1455,7 @@ export class WebLLMController {
             this.finishReply(reply, result);
         } catch (error) {
             if (stale()) return false;
-            const classified = classifyError(error);
+            const classified = classifyError(error, this.model);
             // What was already written stays; the reply just cannot go further now.
             reply.finishReason = 'length';
             reply.continuable = classified.kind !== 'context';

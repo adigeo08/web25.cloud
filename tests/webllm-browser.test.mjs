@@ -152,6 +152,8 @@ async function openWebLLMTab(page, viewport = DESKTOP, { scripted = false } = {}
  * `wallet` turns on the real history store, in this browser's IndexedDB.
  * `continueChunks` is what Continue writes. `mdn` is a scripted MDN client:
  * 'ok' answers with a Clipboard API page, 'offline' fails like a dead network.
+ * `profile` ('desktop' or 'mobile') is the profile the controller runs; by
+ * default the controller's own, desktop.
  */
 async function startScriptedChat(
     page,
@@ -164,7 +166,8 @@ async function startScriptedChat(
         mdn = null,
         decision = 'short',
         plan = null,
-        project = false
+        project = false,
+        profile = null
     } = {}
 ) {
     await page.evaluate(
@@ -177,12 +180,14 @@ async function startScriptedChat(
             mdn: mdnMode,
             decision: autoMode,
             plan: planSteps,
-            project: withProject
+            project: withProject,
+            profile: profileId
         }) => {
             const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
             const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
             const { openWebLLMThoughts } = await import('/src/webllm/webllmThoughtStore.js');
             const { openWebLLMHistory } = await import('/src/webllm/webllmHistoryStore.js');
+            const { WEBLLM_PROFILES } = await import('/src/webllm/webllmConfig.js');
             const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
             const play = async (parts, onDelta, outcome) => {
                 window.__interrupted = false;
@@ -196,7 +201,8 @@ async function startScriptedChat(
             window.__sent = [];
             const engine = {
                 kind: 'worker',
-                async load(onProgress) {
+                async load(onProgress, loadProfile) {
+                    window.__loadedProfile = loadProfile;
                     onProgress({ progress: 0.5, text: 'Fetching param cache[1/2]: 300MB fetched. 50% completed' });
                     await tick();
                     return { alreadyLoaded: false };
@@ -254,6 +260,7 @@ async function startScriptedChat(
                     }
                 },
                 createEngine: async () => engine,
+                profile: profileId ? { ...WEBLLM_PROFILES[profileId] } : undefined,
                 openHistory: (walletAddress) => openWebLLMHistory({ walletAddress }),
                 // The real thought store, in this browser; no CDN here, so recall runs without idb-vector.
                 openThoughts: (walletAddress) => openWebLLMThoughts({ walletAddress }),
@@ -301,7 +308,7 @@ async function startScriptedChat(
             controller.setAllowed(true, { walletAddress: address });
             await controller.activate();
         },
-        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan, project }
+        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan, project, profile }
     );
 }
 
@@ -482,7 +489,7 @@ test(
             {
                 chunks: ['Hello there. ', 'Hello there. ', 'Hello there. '],
                 result: { finishReason: 'loop', keepChars: 12 },
-                note: /Stopped automatically: Llama started repeating itself/,
+                note: /Stopped automatically: the model started repeating itself/,
                 looped: true,
                 more: false
             },
@@ -687,6 +694,59 @@ test('Stop mid-stream shows everything generated so far, and New chat clears it'
         // Nothing from the old reply is drawn after New chat.
         await page.waitForTimeout(200);
         assert.equal(await page.$('#webllm-messages .webllm-message'), null);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by it', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: PHONE });
+    try {
+        await openWebLLMTab(page, PHONE, { scripted: true });
+        await startScriptedChat(page, ['Closures keep their scope.'], { finishReason: 'stop' }, { profile: 'mobile' });
+        await page.waitForSelector('#webllm-install-btn:not([disabled])');
+
+        const install = await page.evaluate(() => ({
+            title: document.getElementById('webllm-install-title').textContent.trim(),
+            lede: document.querySelector('.webllm-install-lede').textContent.trim(),
+            size: document.querySelector('.webllm-facts li:first-child b').textContent,
+            button: document.getElementById('webllm-install-btn').textContent.trim(),
+            footer: document.querySelector('.webllm-footer').textContent.replace(/\s+/g, ' ').trim(),
+            license: document.getElementById('webllm-license-link').getAttribute('href')
+        }));
+        assert.deepEqual(install, {
+            title: 'Install SmolLM in Your Browser',
+            lede: install.lede,
+            size: '~250 MB',
+            button: 'Install SmolLM2 360M',
+            footer: 'SmolLM2 by Hugging Face · Apache License 2.0',
+            license: 'https://www.apache.org/licenses/LICENSE-2.0'
+        });
+        assert.match(install.lede, /^Download SmolLM directly into your browser/);
+        assert.doesNotMatch(await page.textContent('#webllm-install'), /Llama/);
+
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        assert.equal(
+            await page.evaluate(() => window.__loadedProfile.model),
+            'smollm',
+            'the engine is asked for SmolLM2'
+        );
+        assert.equal((await page.textContent('#webllm-chat .dm-peer-label')).trim(), 'SmolLM2 360M · Local AI');
+        assert.equal((await page.textContent('.webllm-empty-title')).trim(), 'SmolLM is ready');
+
+        await page.fill('#webllm-input', 'What is a closure?');
+        await page.press('#webllm-input', 'Enter');
+        await page.waitForFunction(() => window.__controller.state.generating === false && window.__sent.length >= 2);
+        assert.equal(await page.inputValue('#webllm-reply-mode'), 'auto', 'Auto stays the default on a phone');
+        assert.deepEqual(
+            await page.evaluate(() => window.__sent.map((entry) => entry.kind)),
+            ['decide', 'chat'],
+            "on Auto the phone's model decides how to answer"
+        );
+        assert.equal((await page.textContent('.webllm-mode')).trim(), 'Short · chosen by SmolLM');
+        assert.doesNotMatch(await page.textContent('#webllm-chat'), /Llama/);
         assert.deepEqual(problems, []);
     } finally {
         await context.close();

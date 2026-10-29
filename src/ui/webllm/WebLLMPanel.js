@@ -12,6 +12,7 @@
  */
 
 import { describeProgress } from '../../webllm/webllmProgress.js';
+import { WEBLLM_MODELS } from '../../webllm/webllmConfig.js';
 import { copyToClipboard } from '../ClipboardButton.js';
 import { codeForCopyButton, renderReply } from './replyFormat.js';
 import { createStreamBatcher } from './streamBatcher.js';
@@ -43,7 +44,9 @@ function scrollToBottom(el) {
 }
 
 /**
- * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null, project?: boolean }} BubbleContext
+ * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null, project?: boolean,
+ *             modelName?: string }} BubbleContext
+ *   modelName  how the chat names the model it runs (Llama, SmolLM)
  */
 
 /**
@@ -107,7 +110,9 @@ function updateBubble(item, message, context) {
         dots.className = 'webllm-typing';
         dots.setAttribute(
             'aria-label',
-            context.lookup === 'searching' ? 'Checking MDN documentation' : 'Llama is thinking'
+            context.lookup === 'searching'
+                ? 'Checking MDN documentation'
+                : `${context.modelName || 'The model'} is thinking`
         );
         for (let i = 0; i < 3; i += 1) dots.appendChild(document.createElement('span'));
         body.appendChild(dots);
@@ -127,7 +132,7 @@ function updateBubble(item, message, context) {
     }
 
     // How the reply was written: a short answer, or a plan written in steps.
-    const mode = message.role === 'assistant' && !message.error ? modeLabel(message) : '';
+    const mode = message.role === 'assistant' && !message.error ? modeLabel(message, context.modelName) : '';
     const modeEl = slot(item, 'webllm-mode', Boolean(mode));
     if (modeEl) {
         modeEl.dataset.mode = `${message.mode}`;
@@ -169,9 +174,12 @@ function updateBubble(item, message, context) {
     }
 }
 
-/** @param {import('../../webllm/WebLLMController.js').ChatMessage} message */
-function modeLabel(message) {
-    const chosen = message.autoMode ? ' · chosen by Llama' : '';
+/**
+ * @param {import('../../webllm/WebLLMController.js').ChatMessage} message
+ * @param {string} [modelName]
+ */
+function modeLabel(message, modelName = 'the model') {
+    const chosen = message.autoMode ? ` · chosen by ${modelName}` : '';
     if (message.mode === 'short') return `Short${chosen}`;
     if (message.mode === 'thinking') {
         return `${message.steps > 1 ? `Thinking · ${message.steps} steps` : 'Thinking'}${chosen}`;
@@ -217,12 +225,16 @@ export function relativeTime(timestamp, now = Date.now()) {
     return new Date(timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-function renderEmptyThread(list) {
+/**
+ * @param {Element} list
+ * @param {string} modelName
+ */
+function renderEmptyThread(list, modelName) {
     const empty = document.createElement('div');
     empty.className = 'webllm-empty';
     const title = document.createElement('p');
     title.className = 'webllm-empty-title';
-    title.textContent = 'Llama is ready';
+    title.textContent = `${modelName} is ready`;
     const sub = document.createElement('p');
     sub.className = 'webllm-empty-sub';
     sub.textContent =
@@ -230,6 +242,43 @@ function renderEmptyThread(list) {
     empty.appendChild(title);
     empty.appendChild(sub);
     list.appendChild(empty);
+}
+
+/**
+ * Name the model this page runs wherever the markup names one. The markup
+ * names Llama 3.2 1B, the desktop model; a phone runs SmolLM2 360M instead
+ * (see `WEBLLM_PROFILES`), and there every mention in the tab — text and
+ * labels — is rewritten here, the credit line and the licence first. All of
+ * it is text: nothing is parsed as markup.
+ *
+ * @param {import('../../webllm/webllmConfig.js').WebLLMModel} model
+ */
+export function nameModel(model) {
+    const tab = document.getElementById('tab-webllm');
+    if (!tab || model.key === WEBLLM_MODELS.llama.key) return;
+
+    const license = document.getElementById('webllm-license-link');
+    if (license) {
+        license.textContent = model.license.label;
+        license.setAttribute('href', model.license.url);
+        const credit = license.previousSibling;
+        if (credit && credit.nodeType === Node.TEXT_NODE) credit.textContent = `${model.credit} `;
+    }
+    const size = tab.querySelector('.webllm-facts li:first-child b');
+    if (size) size.textContent = model.downloadLabel;
+    tab.querySelectorAll('.webllm-install-art, .webllm-avatar').forEach((el) => (el.textContent = model.icon));
+
+    const rename = (text) => text.replace(/Llama 3\.2 1B/g, model.label).replace(/\bLlama\b/g, model.name);
+    const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.nodeValue?.includes('Llama')) node.nodeValue = rename(node.nodeValue);
+    }
+    tab.querySelectorAll('[aria-label*="Llama"], [title*="Llama"], [placeholder*="Llama"]').forEach((el) => {
+        for (const name of ['aria-label', 'title', 'placeholder']) {
+            const value = el.getAttribute(name);
+            if (value?.includes('Llama')) el.setAttribute(name, rename(value));
+        }
+    });
 }
 
 /**
@@ -246,6 +295,9 @@ export function bindWebLLMPanel(
     controller,
     { confirm = (message) => window.confirm(message), project = null, onOpenCanvas = null } = {}
 ) {
+    /** @type {import('../../webllm/webllmConfig.js').WebLLMModel} the model this page runs */
+    const model = controller.model || WEBLLM_MODELS.llama;
+    nameModel(model);
     const installBtn = byId('webllm-install-btn');
     const composer = byId('webllm-composer');
     const input = /** @type {HTMLTextAreaElement|null} */ (byId('webllm-input'));
@@ -393,7 +445,7 @@ export function bindWebLLMPanel(
         setHidden(error, !showError);
 
         if (installBtn) {
-            installBtn.textContent = state.status === 'error' ? 'Retry' : 'Install Llama 3.2 1B';
+            installBtn.textContent = state.status === 'error' ? 'Retry' : `Install ${model.label}`;
             /** @type {any} */ (installBtn).disabled =
                 busy || state.status === 'unsupported' || state.status === 'locked';
             installBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
@@ -422,13 +474,13 @@ export function bindWebLLMPanel(
             case 'checking':
                 return 'Checking your device for WebGPU support…';
             case 'unsupported':
-                return 'This device cannot run Llama in the browser.';
+                return `This device cannot run ${model.name} in the browser.`;
             case 'installing':
                 if (state.waitingForOtherTab) {
-                    return 'Another WEB25 tab is downloading Llama. This tab continues when it finishes.';
+                    return `Another WEB25 tab is downloading ${model.name}. This tab continues when it finishes.`;
                 }
                 return state.fromCache
-                    ? 'Loading Llama from this browser’s cache…'
+                    ? `Loading ${model.name} from this browser’s cache…`
                     : 'Installing — keep this tab open.';
             case 'not-installed':
             case 'error': {
@@ -533,7 +585,7 @@ export function bindWebLLMPanel(
         const follow = isNearBottom(messages);
         messages.textContent = '';
         if (state.messages.length === 0) {
-            renderEmptyThread(messages);
+            renderEmptyThread(messages, model.name);
         } else {
             const last = state.messages.length - 1;
             state.messages.forEach((message, index) =>
@@ -542,7 +594,8 @@ export function bindWebLLMPanel(
                         isLast: index === last,
                         generating: state.generating,
                         lookup: state.lookup,
-                        project: Boolean(project?.state.available)
+                        project: Boolean(project?.state.available),
+                        modelName: model.name
                     })
                 )
             );
@@ -589,7 +642,7 @@ export function bindWebLLMPanel(
         if (input) {
             input.disabled = !ready;
             input.placeholder = state.generating
-                ? 'Llama is replying…'
+                ? `${model.name} is replying…`
                 : 'Ask about JavaScript, HTML, CSS or anything else…';
         }
         const send = /** @type {any} */ (byId('webllm-send-btn'));

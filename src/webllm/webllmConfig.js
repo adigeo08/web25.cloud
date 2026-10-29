@@ -2,12 +2,14 @@
 /**
  * Everything the local AI chat is pinned to, in one place.
  *
- * One library version and one model. The model record is spelled out here
- * instead of being taken from WebLLM's `prebuiltAppConfig`, so the URLs WebLLM
- * caches under are known before the 6 MB library is ever fetched: the WebLLM
- * service worker reads them to say whether the model is already in this
+ * One library version and one model per kind of device: Llama 3.2 1B on
+ * desktops and laptops, SmolLM2 360M on phones and tablets (see
+ * `WEBLLM_MODELS` and `WEBLLM_PROFILES`). The model records are spelled out
+ * here instead of being taken from WebLLM's `prebuiltAppConfig`, so the URLs
+ * WebLLM caches under are known before the 6 MB library is ever fetched: the
+ * WebLLM service worker reads them to say whether the model is already in this
  * browser, and the engine is handed this exact record to load. The values are
- * the ones `@mlc-ai/web-llm@0.2.85` ships for this model.
+ * the ones `@mlc-ai/web-llm@0.2.85` ships for these models.
  */
 
 export const WEBLLM_VERSION = '0.2.85';
@@ -107,31 +109,35 @@ export const WEBLLM_REQUEST_FRAMING_TOKENS = 24;
 export const WEBLLM_PROMPT_TOKEN_BUDGET = WEBLLM_CONTEXT_WINDOW - WEBLLM_REPLY_RESERVE_TOKENS;
 
 /**
- * Memory profiles. Same model, same sampling; what differs is how much memory
- * the engine reserves and how long a reply may run.
+ * Memory profiles: which model runs, how much memory the engine reserves and
+ * how long a reply may run. Sampling belongs to the model (`chatOptionsFor`).
  *
  * The KV cache is allocated for the whole context window when the model loads.
  * For Llama 3.2 1B (16 layers × 8 KV heads × 64 dims, keys and values, 32-bit in
- * the q4f32 build) that is 64 KB per token: 256 MB at 4096 tokens, 128 MB at
- * 2048 — computed from the model shape, not measured on a device.
+ * the q4f32 build) that is 64 KB per token: 256 MB at 4096 tokens. For SmolLM2
+ * 360M (32 layers × 5 KV heads × 64 dims, 32-bit) it is 80 KB per token: 160 MB
+ * at 2048 — computed from the model shapes, not measured on a device.
  *
- *   desktop  4096 context, no reply limit, 3072-token prompt budget. Unchanged.
- *   mobile   2048 context set at engine initialisation, `max_tokens: 256` on every
- *            request, and a prompt budget that leaves those 256 tokens plus a
- *            margin free: 2048 − 256 − 128 = 1664 estimated tokens.
+ *   desktop  Llama 3.2 1B, 4096 context, no reply limit, 3072-token prompt budget.
+ *   mobile   SmolLM2 360M, 2048 context set at engine initialisation,
+ *            `max_tokens: 256` on every request, and a prompt budget that leaves
+ *            those 256 tokens plus a margin free: 2048 − 256 − 128 = 1664
+ *            estimated tokens.
  *
- * @typedef {{ id: 'desktop'|'mobile', contextWindow: number, maxTokens: number|null,
- *             promptTokenBudget: number }} WebLLMProfile
+ * @typedef {{ id: 'desktop'|'mobile', model: WebLLMModelKey, contextWindow: number,
+ *             maxTokens: number|null, promptTokenBudget: number }} WebLLMProfile
  */
 export const WEBLLM_PROFILES = Object.freeze({
     desktop: Object.freeze({
         id: 'desktop',
+        model: 'llama',
         contextWindow: WEBLLM_CONTEXT_WINDOW,
         maxTokens: null,
         promptTokenBudget: WEBLLM_PROMPT_TOKEN_BUDGET
     }),
     mobile: Object.freeze({
         id: 'mobile',
+        model: 'smollm',
         contextWindow: 2048,
         maxTokens: 256,
         promptTokenBudget: 2048 - 256 - 128
@@ -198,6 +204,107 @@ export function resolveWebLLMProfile({ navigator: nav = globalThis.navigator, lo
 export const LLAMA_LICENSE_URL = 'https://www.llama.com/llama3_2/license/';
 
 /**
+ * SmolLM2 360M Instruct, for phones and tablets: the q4f32_1 build, for the
+ * same reason as Llama's — no `shader-f16`, 32-bit activations. 579.61 MB of
+ * VRAM in the 0.2.85 prebuilt record, against Llama's 1128.82.
+ */
+export const SMOLLM_MODEL_ID = 'SmolLM2-360M-Instruct-q4f32_1-MLC';
+export const SMOLLM_MODEL_URL = 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/';
+export const SMOLLM_MODEL_LIB_URL =
+    'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu.wasm';
+export const SMOLLM_LICENSE_URL = 'https://www.apache.org/licenses/LICENSE-2.0';
+
+/**
+ * The models WEB25 can run, by the key a profile names them with.
+ *
+ *   modelId, modelUrl, modelLibUrl, vramMB   the WebLLM record
+ *   downloadBytes   roughly what the weights take on disk, for the storage check:
+ *                   at 4 bits plus a 32-bit scale per group of 32, Llama's 1.24
+ *                   billion parameters are about 775 MB and SmolLM2's 362 million
+ *                   about 230 MB, each rounded up
+ *   downloadLabel   the same, for people
+ *   name, label     how the chat refers to it, briefly and in full
+ *   chatTemplate    the conversation format of its MLC build (webllmPromptFormat.js)
+ *   sampling        replaces the shared chat options' sampling, where the model's
+ *                   own recommendation differs: SmolLM2's card uses temperature 0.2
+ *   credit, license what the install screen names
+ *
+ * @typedef {'llama'|'smollm'} WebLLMModelKey
+ * @typedef {{ key: WebLLMModelKey, modelId: string, modelUrl: string, modelLibUrl: string,
+ *             vramMB: number, downloadBytes: number, downloadLabel: string, name: string, label: string,
+ *             icon: string, chatTemplate: 'llama3'|'chatml', sampling: Record<string, number>,
+ *             credit: string, license: { label: string, url: string } }} WebLLMModel
+ */
+export const WEBLLM_MODELS = Object.freeze({
+    llama: Object.freeze({
+        key: 'llama',
+        modelId: WEBLLM_MODEL_ID,
+        modelUrl: WEBLLM_MODEL_URL,
+        modelLibUrl: WEBLLM_MODEL_LIB_URL,
+        vramMB: WEBLLM_MODEL_VRAM_MB,
+        downloadBytes: WEBLLM_MODEL_DOWNLOAD_BYTES,
+        downloadLabel: '~800 MB',
+        name: 'Llama',
+        label: WEBLLM_MODEL_LABEL,
+        icon: '🦙',
+        chatTemplate: 'llama3',
+        sampling: Object.freeze({}),
+        credit: 'Llama 3.2 by Meta · © Meta Platforms, Inc. ·',
+        license: Object.freeze({ label: 'Llama 3.2 Community License', url: LLAMA_LICENSE_URL })
+    }),
+    smollm: Object.freeze({
+        key: 'smollm',
+        modelId: SMOLLM_MODEL_ID,
+        modelUrl: SMOLLM_MODEL_URL,
+        modelLibUrl: SMOLLM_MODEL_LIB_URL,
+        vramMB: 579.61,
+        downloadBytes: 260 * 1024 * 1024,
+        downloadLabel: '~250 MB',
+        name: 'SmolLM',
+        label: 'SmolLM2 360M',
+        icon: '🤖',
+        chatTemplate: 'chatml',
+        sampling: Object.freeze({ temperature: 0.2 }),
+        credit: 'SmolLM2 by Hugging Face ·',
+        license: Object.freeze({ label: 'Apache License 2.0', url: SMOLLM_LICENSE_URL })
+    })
+});
+
+/**
+ * The model a profile names; anything unknown is Llama, the desktop default.
+ * @param {any} key
+ * @returns {WebLLMModel}
+ */
+export function getWebLLMModel(key) {
+    return typeof key === 'string' && Object.hasOwn(WEBLLM_MODELS, key)
+        ? /** @type {any} */ (WEBLLM_MODELS)[key]
+        : WEBLLM_MODELS.llama;
+}
+
+/**
+ * The chat options a model is loaded with: the shared ones, with the model's
+ * own sampling where it has one.
+ * @param {WebLLMModel} model
+ */
+export function chatOptionsFor(model) {
+    return { ...WEBLLM_CHAT_OPTIONS, ...model.sampling };
+}
+
+/**
+ * Builds this page does not load: the older Llama build, and the other
+ * device's model, which a browser may hold from before — a phone that
+ * downloaded Llama, say. Only ever looked for, and removed on the user's own
+ * request; nothing removes them on its own.
+ * @param {WebLLMModel} model the one this page loads
+ * @returns {{ modelId: string, modelUrl: string, modelLibUrl: string }[]}
+ */
+export function otherWebLLMModels(model) {
+    return [...WEBLLM_LEGACY_MODELS, ...Object.values(WEBLLM_MODELS).filter((entry) => entry.key !== model.key)].map(
+        ({ modelId, modelUrl, modelLibUrl }) => ({ modelId, modelUrl, modelLibUrl })
+    );
+}
+
+/**
  * WebLLM's own Cache Storage buckets (`cacheBackend: 'cache'`). The weights
  * live here and nowhere else: nothing in WEB25 copies them.
  */
@@ -220,16 +327,17 @@ export const WEBLLM_ASSET_CACHE = 'web25-webllm-assets-v1';
  * with a smaller window sets it here too, so the record and the chat options agree.
  *
  * @param {number} [contextWindow]
+ * @param {WebLLMModel} [model]
  */
-export function createAppConfig(contextWindow = WEBLLM_CONTEXT_WINDOW) {
+export function createAppConfig(contextWindow = WEBLLM_CONTEXT_WINDOW, model = WEBLLM_MODELS.llama) {
     return {
         cacheBackend: 'cache',
         model_list: [
             {
-                model: WEBLLM_MODEL_URL,
-                model_id: WEBLLM_MODEL_ID,
-                model_lib: WEBLLM_MODEL_LIB_URL,
-                vram_required_MB: WEBLLM_MODEL_VRAM_MB,
+                model: model.modelUrl,
+                model_id: model.modelId,
+                model_lib: model.modelLibUrl,
+                vram_required_MB: model.vramMB,
                 low_resource_required: true,
                 overrides: { context_window_size: contextWindow }
             }
@@ -238,13 +346,14 @@ export function createAppConfig(contextWindow = WEBLLM_CONTEXT_WINDOW) {
 }
 
 /**
- * The developer-focused system prompt. Short on purpose: it is sent with every
- * request, and on a phone the whole prompt has 1664 estimated tokens.
+ * The developer-focused system prompt, the same for every model, so it names
+ * none. Short on purpose: it is sent with every request, and on a phone the
+ * whole prompt has 1664 estimated tokens.
  * Documentation, when a lookup found some, is appended below it by
  * `buildSystemPrompt` — never claimed when there was none.
  */
 export const WEBLLM_SYSTEM_PROMPT = [
-    'You are Llama, a local web-development assistant running in the user’s browser.',
+    'You are a local web-development assistant running in the user’s browser.',
     'You specialize in JavaScript, HTML, CSS, Web APIs and browser compatibility, and you also help with general questions.',
     'Give accurate, practical answers, with short code examples when they help.',
     'When you write a whole file, put its file name after the language on the opening fence, for example ```html index.html.',
@@ -283,7 +392,7 @@ export const MDN_CONTEXT_TOKENS = Object.freeze({ desktop: 900, mobile: 420 });
 /**
  * How a reply is written (see webllmThinking.js), chosen in the chat settings:
  *
- *   auto      Llama decides, per message, with a one-word structured answer
+ *   auto      the model decides, per message, with a one-word structured answer
  *   short     one short answer: a small reply window
  *   thinking  a plan, then one step at a time: a large reply window in total
  */

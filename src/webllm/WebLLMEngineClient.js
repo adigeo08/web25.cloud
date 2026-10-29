@@ -192,13 +192,21 @@ export class WebLLMEngineClient {
 
     /**
      * @param {(report: { progress: number, text: string, timeElapsed: number }) => void} onProgress
-     * @param {{ contextWindow: number, maxTokens: number|null }} [profile] the memory profile to load with
+     * @param {{ model?: string, contextWindow: number, maxTokens: number|null }} [profile] the model and memory profile to load with
      */
     load(onProgress, profile) {
         this.onProgress = onProgress;
         return this.request(
             'load',
-            profile ? { profile: { contextWindow: profile.contextWindow, maxTokens: profile.maxTokens } } : {}
+            profile
+                ? {
+                      profile: {
+                          model: profile.model,
+                          contextWindow: profile.contextWindow,
+                          maxTokens: profile.maxTokens
+                      }
+                  }
+                : {}
         );
     }
 
