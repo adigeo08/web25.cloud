@@ -913,6 +913,53 @@ the public endpoint and the model itself could not be reached from the test envi
   **Copy** button, and inline code, bold and headings are formatted
   (`src/ui/webllm/replyFormat.js`). Everything is built from text nodes: model output is never
   parsed as HTML.
+- **Code as a project.** Each finished code block has a file-name field and **Save to project**.
+  A block that names its file — on the fence (```` ```html index.html ````), in a first-line
+  comment (`<!-- index.html -->`, `// app.js`) or on the line just above it (`**style.css**:`) —
+  is saved automatically when the reply ends. The conversation's files are a git repository in
+  OPFS (see §10), listed in a bar over the chat, and **🚀 Deploy project** hands them to the
+  Deploy tab as a folder (`<conversation-title>/index.html`, …), exactly as if it had been picked
+  from the device. From there the deploy is the ordinary one. Deleting a conversation, or its
+  expiry under the retention setting, removes its project too (`src/webllm/chatProject.js`).
+
+---
+
+### 10) OPFS workspace + isomorphic-git
+
+The bytes Web25 keeps — sites it hosts, sites it has loaded, Llama's code — are files in the
+**Origin Private File System**, and the ones that are projects are **git repositories**, through
+[isomorphic-git](https://isomorphic-git.org/) imported from `esm.sh` (pinned,
+`ISOMORPHIC_GIT_VERSION`) on first use, never at start-up. `src/storage/OpfsFs.js` is the
+`fs.promises` isomorphic-git runs on, written directly against OPFS handles;
+`src/storage/GitWorkspace.js` is the service on top of it.
+
+```text
+/web25/pages/<hash>/          git repo per site in Pages — the payload as it travels:
+                              .torrentchain + site.bundle.json.gz (or the files, in files mode)
+/web25/sites/<hash>/          unpacked files of a loaded, cached site — a plain tree
+/web25/payloads/<hash>/       the payload kept so a cached site can be reseeded — a plain tree
+/web25/chats/<wallet>/<id>/   git repo per Llama conversation — the code it wrote
+```
+
+- **Deploy** is unchanged — same in-memory bundle, same gzip + `.torrentchain`, same signature
+  and seeding. Only where the result is kept changed: the seeding session's payload is written to
+  `/web25/pages/<hash>` and committed (`Deploy <site> (<hash>)`), and the IndexedDB record keeps
+  the ordered file list, types and sizes (`payloadStorage: 'opfs'`). The Pages card shows the
+  repository and its commit.
+- **Loading** over WebTorrent or a GoFile mirror caches the site's files under `/web25/sites` and
+  its payload under `/web25/payloads` instead of inside IndexedDB rows. The render never waits on
+  OPFS: the row is written as before, and its files are moved out of it right after. These are trees, not
+  repositories: a loaded site becomes a repository only when it is **reseeded**, which puts it in
+  Pages and commits it (`Reseed <site> (<hash>)`) like anything else there.
+- **Migration** is automatic: seeding sessions stored inline move into their repositories on the
+  next start, and a cached site moves to OPFS the next time it is read.
+- **Fallbacks.** Without writable OPFS, for a payload with a path that cannot be a file of its
+  own, or when a write fails, the bytes stay inline in IndexedDB exactly as before. Files are
+  written before they are committed, and the commit runs in the background (with a timeout on the
+  CDN), so an unreachable `esm.sh` costs the git history — never the data, a deployment or a reseed.
+- **Safety.** Paths from torrents and from Llama are normalised and refused if they climb out
+  (`..`) or touch a `.git` directory; a payload can never rewrite the repository that holds it.
+  Each repository's writes are serialised (OPFS allows one writer per file).
 
 ---
 
@@ -951,6 +998,9 @@ src/
 ├── cache/
 │   ├── PeerWebCache.js
 │   └── SiteLibraryIndex.js
+├── storage/
+│   ├── OpfsFs.js                    # fs.promises over OPFS, for isomorphic-git
+│   └── GitWorkspace.js              # OPFS trees + git repos (pages, sites, payloads, chats)
 ├── channels/
 │   ├── ChannelsService.js
 │   ├── ConversationRoom.js
@@ -993,6 +1043,7 @@ src/
 │   ├── WebLLMTab.js                 # start-up gate (no imports)
 │   ├── WebLLMApp.js                 # loaded when the tab is opened
 │   ├── WebLLMController.js
+│   ├── chatProject.js               # code blocks as files, per-conversation repo, Deploy project
 │   ├── WebLLMEngineClient.js
 │   ├── WebLLMServiceWorkerClient.js
 │   ├── webllm-worker.js             # dedicated inference worker
@@ -1110,6 +1161,7 @@ In short: we borrowed the direct-messaging interaction model and upgraded it to 
   — used only as the browser-to-GoFile transport adapter; torrent verification remains client-side
 - WebLLM (only after the WebLLM tab is opened): the library from `cdn.jsdelivr.net`, model weights from
   `huggingface.co/mlc-ai`, the compiled model library from `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`
+- isomorphic-git (only when a deployment, a reseed or a Llama project is committed): `esm.sh`
 - MDN MCP server (only for web-development questions in the WebLLM chat, and only while enabled in its
   settings): `https://mcp.mdn.mozilla.net/` — receives a few search keywords, never wallet data
 

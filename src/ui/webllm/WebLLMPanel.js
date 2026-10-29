@@ -15,6 +15,7 @@ import { describeProgress } from '../../webllm/webllmProgress.js';
 import { copyToClipboard } from '../ClipboardButton.js';
 import { codeForCopyButton, renderReply } from './replyFormat.js';
 import { createStreamBatcher } from './streamBatcher.js';
+import { extractCodeFiles } from '../../webllm/chatProject.js';
 
 const STEP_ORDER = ['download', 'cache', 'shaders'];
 
@@ -42,7 +43,7 @@ function scrollToBottom(el) {
 }
 
 /**
- * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null }} BubbleContext
+ * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null, project?: boolean }} BubbleContext
  */
 
 /**
@@ -117,7 +118,12 @@ function updateBubble(item, message, context) {
             body.appendChild(label);
         }
     } else {
-        renderReply(body, message.content);
+        // A finished reply's code can be named and saved to the project.
+        const files =
+            context.project && message.role === 'assistant' && !message.pending && !message.error
+                ? extractCodeFiles(message.content)
+                : null;
+        renderReply(body, message.content, { files });
     }
 
     // How the reply was written: a short answer, or a plan written in steps.
@@ -230,9 +236,10 @@ function renderEmptyThread(list) {
  * Bind the tab's controls to a controller and return the renderer.
  *
  * @param {import('../../webllm/WebLLMController.js').WebLLMController} controller
- * @param {{ confirm?: (message: string) => boolean }} [options]
+ * @param {{ confirm?: (message: string) => boolean,
+ *           project?: import('../../webllm/chatProject.js').WebLLMProject|null }} [options]
  */
-export function bindWebLLMPanel(controller, { confirm = (message) => window.confirm(message) } = {}) {
+export function bindWebLLMPanel(controller, { confirm = (message) => window.confirm(message), project = null } = {}) {
     const installBtn = byId('webllm-install-btn');
     const composer = byId('webllm-composer');
     const input = /** @type {HTMLTextAreaElement|null} */ (byId('webllm-input'));
@@ -291,6 +298,11 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
         const copy = /** @type {any} */ (event.target)?.closest?.('[data-copy-code]');
         if (copy) {
             void copyCode(copy);
+            return;
+        }
+        const save = /** @type {any} */ (event.target)?.closest?.('[data-save-code]');
+        if (save) {
+            if (project) void saveCode(project, save);
             return;
         }
         const button = /** @type {any} */ (event.target)?.closest?.('[data-continue]');
@@ -520,7 +532,8 @@ export function bindWebLLMPanel(controller, { confirm = (message) => window.conf
                     createBubble(message, {
                         isLast: index === last,
                         generating: state.generating,
-                        lookup: state.lookup
+                        lookup: state.lookup,
+                        project: Boolean(project?.state.available)
                     })
                 )
             );
@@ -600,6 +613,90 @@ async function copyCode(button) {
     setTimeout(() => {
         button.textContent = 'Copy';
     }, 1500);
+}
+
+/**
+ * Save a code block to the conversation's project under the name typed next
+ * to it (or the one suggested), and say how that went on the button.
+ * @param {import('../../webllm/chatProject.js').WebLLMProject} project
+ * @param {any} button
+ */
+async function saveCode(project, button) {
+    const block = button.closest('.webllm-code');
+    const input = block?.querySelector('[data-code-name]');
+    const name = `${input?.value || ''}`.trim() || `${input?.placeholder || ''}`.trim();
+    const messageId = button.closest('[data-message-id]')?.dataset?.messageId;
+    button.disabled = true;
+    let label = 'Saved ✓';
+    try {
+        const path = await project.saveBlock(messageId, Number(button.dataset.saveCode), name);
+        if (input) input.value = path;
+    } catch (error) {
+        label = 'Not saved';
+        button.title = `${error?.message || error}`;
+    }
+    button.textContent = label;
+    setTimeout(() => {
+        button.textContent = 'Save to project';
+        button.disabled = false;
+    }, 1500);
+}
+
+/**
+ * Bind the project bar over the chat — the open conversation's files, its git
+ * history, and Deploy project — and return its renderer.
+ * @param {import('../../webllm/chatProject.js').WebLLMProject} project
+ */
+export function bindWebLLMProjectBar(project) {
+    const deploy = /** @type {any} */ (byId('webllm-deploy-project-btn'));
+    deploy?.addEventListener('click', () => {
+        void project.deploy().catch(() => {});
+    });
+
+    byId('webllm-project-files')?.addEventListener('click', (event) => {
+        const remove = /** @type {any} */ (event.target)?.closest?.('[data-remove-file]');
+        if (remove) void project.removeFile(remove.dataset.removeFile).catch(() => {});
+    });
+
+    /** @param {import('../../webllm/chatProject.js').ProjectState} state */
+    return function renderProject(state) {
+        const bar = byId('webllm-project');
+        const show = state.available && Boolean(state.conversationId) && state.files.length > 0;
+        setHidden(bar, !show);
+        const count = byId('webllm-project-count');
+        if (count) count.textContent = `${state.files.length} ${state.files.length === 1 ? 'file' : 'files'}`;
+        const git = byId('webllm-project-git');
+        if (git) {
+            git.textContent = state.commit
+                ? `git ${state.commit.slice(0, 7)} · ${state.commits} ${state.commits === 1 ? 'commit' : 'commits'}`
+                : '';
+        }
+        const list = byId('webllm-project-files');
+        if (list) {
+            list.textContent = '';
+            for (const path of state.files) {
+                const item = document.createElement('li');
+                item.className = 'webllm-project-file';
+                const name = document.createElement('code');
+                name.textContent = path;
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'webllm-project-remove';
+                remove.dataset.removeFile = path;
+                remove.textContent = '×';
+                remove.setAttribute('aria-label', `Remove ${path} from the project`);
+                item.append(name, remove);
+                list.appendChild(item);
+            }
+        }
+        if (deploy) {
+            deploy.disabled = state.busy || state.files.length === 0;
+            deploy.setAttribute('aria-busy', state.busy ? 'true' : 'false');
+        }
+        const notice = byId('webllm-project-notice');
+        if (notice) notice.textContent = state.notice || '';
+        setHidden(notice, !state.notice);
+    };
 }
 
 /** Grow the textarea with its content, up to the CSS max-height. */

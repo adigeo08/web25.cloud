@@ -7211,6 +7211,145 @@ select,
     cursor: pointer;
 }
 
+/* A code block's file name and Save to project (see chatProject.js). */
+.webllm-code-head {
+    flex-wrap: wrap;
+}
+
+.webllm-code-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex: 1 1 10rem;
+    min-width: 0;
+    justify-content: flex-end;
+}
+
+.webllm-code-head .webllm-code-name {
+    flex: 1 1 8rem;
+    width: auto;
+    min-width: 0;
+    max-width: 16rem;
+    height: auto;
+    margin: 0;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+/* On a phone the name gets a row of its own under the language and Copy. */
+@media (max-width: 520px) {
+    .webllm-code-file {
+        order: 3;
+        flex-basis: 100%;
+        padding-bottom: 0.15rem;
+    }
+
+    .webllm-code-head .webllm-code-name {
+        max-width: none;
+    }
+}
+
+.webllm-code-save {
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--accent-line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--accent-hi);
+    font-size: 0.72rem;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.webllm-code-save:disabled {
+    opacity: 0.7;
+    cursor: default;
+}
+
+/* The open conversation's project: its files, git history and Deploy. */
+.webllm-project {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.5rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+    font-size: 0.8rem;
+}
+
+.webllm-project-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.webllm-project-title {
+    font-weight: 600;
+}
+
+.webllm-project-git {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+
+.webllm-deploy-project-btn {
+    margin-left: auto;
+}
+
+.webllm-project-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.webllm-project-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    max-width: 100%;
+    padding: 0.05rem 0.2rem 0.05rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+}
+
+.webllm-project-file code {
+    padding: 0;
+    border: none;
+    background: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+}
+
+.webllm-project-remove {
+    padding: 0 0.3rem;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.webllm-project-notice {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
 .webllm-code pre {
     margin: 0;
     padding: 0.6rem 0.75rem;

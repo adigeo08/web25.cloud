@@ -163,7 +163,8 @@ async function startScriptedChat(
         continueResult = { finishReason: 'stop' },
         mdn = null,
         decision = 'short',
-        plan = null
+        plan = null,
+        project = false
     } = {}
 ) {
     await page.evaluate(
@@ -175,7 +176,8 @@ async function startScriptedChat(
             continueResult: moreResult,
             mdn: mdnMode,
             decision: autoMode,
-            plan: planSteps
+            plan: planSteps,
+            project: withProject
         }) => {
             const { WebLLMController } = await import('/src/webllm/WebLLMController.js');
             const { bindWebLLMPanel } = await import('/src/ui/webllm/WebLLMPanel.js');
@@ -256,14 +258,38 @@ async function startScriptedChat(
                 // The real thought store, in this browser; no CDN here, so recall runs without idb-vector.
                 openThoughts: (walletAddress) => openWebLLMThoughts({ walletAddress }),
                 mdnClient,
-                onChange: (state, change) => render(state, change)
+                onChange: (state, change) => {
+                    render(state, change);
+                    window.__project?.handle(state, change);
+                }
             });
-            render = bindWebLLMPanel(controller);
+            // The conversation's project, as WebLLMApp wires it: this browser's
+            // real OPFS, with no CDN for git, so files are saved uncommitted.
+            let project = null;
+            if (withProject) {
+                const { WebLLMProject } = await import('/src/webllm/chatProject.js');
+                const { bindWebLLMProjectBar } = await import('/src/ui/webllm/WebLLMPanel.js');
+                let renderProject = () => {};
+                let available = false;
+                project = new WebLLMProject({
+                    controller,
+                    onChange: (state) => {
+                        renderProject(state);
+                        if (state.available !== available) {
+                            available = state.available;
+                            render(controller.state);
+                        }
+                    }
+                });
+                renderProject = bindWebLLMProjectBar(project);
+                window.__project = project;
+            }
+            render = bindWebLLMPanel(controller, { project });
             window.__controller = controller;
             controller.setAllowed(true, { walletAddress: address });
             await controller.activate();
         },
-        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan }
+        { chunks, result, wallet, continueChunks, continueResult, mdn, decision, plan, project }
     );
 }
 
@@ -887,6 +913,56 @@ test('code in a reply is drawn as a code block with a Copy button, never as mark
             scripts: 0
         });
         assert.equal(await page.evaluate(() => window.__pwned), undefined);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test('code a reply names goes into the conversation’s project, and Deploy project sends it to Deploy', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: DESKTOP });
+    try {
+        await openWebLLMTab(page, DESKTOP, { scripted: true });
+        await startScriptedChat(
+            page,
+            ['```html index.html\n<h1>Hi</h1>\n```\n', 'Then:\n```css\nh1 { color: red; }\n```'],
+            undefined,
+            { wallet: '0xcdcd', project: true }
+        );
+        await page.waitForFunction(() => window.__controller.state.history === 'ready');
+        await page.waitForFunction(() => window.__project.state.available);
+        await ask(page, 'Make a page');
+
+        await page.waitForSelector('#webllm-project:not(.hidden)');
+        const chips = () => page.$$eval('#webllm-project-files code', (items) => items.map((el) => el.textContent));
+        assert.deepEqual(await chips(), ['index.html']);
+        const names = await page.$$eval('#webllm-messages [data-code-name]', (inputs) =>
+            inputs.map((input) => [input.value, input.placeholder])
+        );
+        assert.deepEqual(names, [
+            ['index.html', 'index.html'],
+            ['', 'style.css']
+        ]);
+        // The fence line's file name is a label, not a line of code.
+        assert.equal(await page.textContent('#webllm-messages .webllm-code pre code'), '<h1>Hi</h1>');
+
+        // The unnamed block, saved under the name it suggests.
+        await page.click('#webllm-messages [data-save-code="1"]');
+        await page.waitForFunction(() => document.querySelectorAll('#webllm-project-files code').length === 2);
+        assert.deepEqual(await chips(), ['index.html', 'style.css']);
+
+        await page.evaluate(() => {
+            window.addEventListener('web25:stage-deploy', (event) => {
+                window.__staged = event.detail.files.map((file) => [file.webkitRelativePath, file.type]);
+            });
+        });
+        await page.click('#webllm-deploy-project-btn');
+        await page.waitForFunction(() => Array.isArray(window.__staged));
+        assert.deepEqual(await page.evaluate(() => window.__staged), [
+            ['make-a-page/index.html', 'text/html'],
+            ['make-a-page/style.css', 'text/css']
+        ]);
+        assert.equal(await page.textContent('#webllm-project-notice'), 'Sent 2 files to Deploy.');
         assert.deepEqual(problems, []);
     } finally {
         await context.close();
