@@ -23,10 +23,6 @@ import {
     WEBLLM_REQUEST_FRAMING_TOKENS
 } from './webllmConfig.js';
 
-/** Shown under a reply the loop guard cut off. */
-export const LOOP_NOTICE =
-    'Stopped automatically: the model started repeating itself. Try rephrasing, or start a new chat.';
-
 /**
  * Shown under a reply that stopped at the length limit and cannot be continued:
  * the question, the reply so far and the room for more no longer fit the
@@ -276,9 +272,9 @@ const messageTokens = (message) => estimateTokens(message.content) + WEBLLM_MESS
  * What of the conversation the model is shown.
  *
  * Only exchanges whose reply finished — it ended on its own, or at the length
- * limit — are passed back. A reply that failed, that the user stopped, or that
- * the loop guard cut off is not context, it is the problem: handing a looping
- * answer back is the quickest way to get another one. Its question goes with
+ * limit — are passed back. A reply that failed or that the user stopped is not
+ * context, it is the problem: handing a broken answer back is the quickest way
+ * to get another one. Its question goes with
  * it, so what the model sees still alternates user and assistant and no
  * question is answered twice.
  *

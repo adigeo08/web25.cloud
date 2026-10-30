@@ -485,28 +485,28 @@ for (const [name, viewport] of [
 }
 
 test(
-    'a reply stopped by the loop guard says why, a cut-off one offers Continue, and a normal one says nothing',
+    'a repeating reply is shown whole, a cut-off one offers Continue, and a normal one says nothing',
     { skip: SKIP },
     async () => {
         const cases = [
-            { chunks: ['Hello', ' there.'], result: { finishReason: 'stop' }, note: null, looped: false, more: false },
+            { chunks: ['Hello', ' there.'], result: { finishReason: 'stop' }, note: null, more: false },
             {
-                chunks: ['Hello there. ', 'Hello there. ', 'Hello there. '],
-                result: { finishReason: 'loop', keepChars: 12 },
-                note: /Stopped automatically: the model started repeating itself/,
-                looped: true,
-                more: false
+                // No loop guard: repeats are the model's, shown as written.
+                chunks: ['Hello there. ', 'Hello there. ', 'Hello there.'],
+                result: { finishReason: 'stop' },
+                note: null,
+                more: false,
+                body: 'Hello there. Hello there. Hello there.'
             },
             {
                 chunks: ['A long answer that goes on and'],
                 result: { finishReason: 'length' },
                 note: null,
-                looped: false,
                 more: true
             },
-            { chunks: ['Partial'], result: { finishReason: 'abort' }, note: /^Stopped\.$/, looped: false, more: false }
+            { chunks: ['Partial'], result: { finishReason: 'abort' }, note: /^Stopped\.$/, more: false }
         ];
-        for (const { chunks, result, note, looped, more } of cases) {
+        for (const { chunks, result, note, more, body } of cases) {
             const { page, context, problems } = await openApp();
             try {
                 await openWebLLMTab(page, DESKTOP, { scripted: true });
@@ -516,14 +516,12 @@ test(
                 const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
                     body: item.querySelector('.channels-message-body').textContent,
                     note: item.querySelector('.webllm-message-note')?.textContent ?? null,
-                    looped: item.classList.contains('is-looped'),
                     more: Boolean(item.querySelector('.webllm-continue-btn'))
                 }));
                 if (note) assert.match(reply.note, note);
                 else assert.equal(reply.note, null);
-                assert.equal(reply.looped, looped);
                 assert.equal(reply.more, more);
-                if (result.finishReason === 'loop') assert.equal(reply.body, 'Hello there.', 'the repeats are cut');
+                if (body) assert.equal(reply.body, body, 'nothing is cut');
                 assert.deepEqual(problems, []);
             } finally {
                 await context.close();

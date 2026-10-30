@@ -763,16 +763,14 @@ WEB25's first configuration did not.
   (`max_tokens` is not a chat-config field, so `reload()` ignores it). With no reply limit,
   WEB25's budget leaves the reply room in the same window: 3072 estimated tokens for the
   prompt, at least 1024 for the reply. One difference: only exchanges whose reply finished
-  are passed back — a failed, stopped or loop-cut reply is not.
+  are passed back — a failed or stopped reply is not.
 - **Inference path.** The official app uses `WebWorkerMLCEngine` with a
   `WebWorkerMLCEngineHandler`, which runs an `MLCEngine` in a worker. WEB25's inference
   worker runs the same `MLCEngine` from the same library behind its own small protocol; the
   tokenizer, prompt formatting, sampling, streaming and stop handling are all WebLLM's.
-- **Loop guard** (`src/webllm/webllmLoopGuard.js`) stays as a secondary safety net only: it
-  ends a reply whose sentences repeat as a cycle (3×), whose long sentence keeps recurring (6×),
-  or whose text ends in a repeating stretch of characters. It ignores lists, short words,
-  table rules and code, and relaxes when the user asks for repetition. The reply is cut back
-  to its first occurrence and labelled.
+- **No loop guard.** A reply is never cut by WEB25 for repeating itself — the earlier
+  detector was removed for its false positives. Only the model's end-of-turn token, the reply
+  limit or **Stop** ends a reply; a reply that does run on can be stopped by hand.
 - **The earlier q4f16 install.** Its files are different, so a browser that has it is shown
   the install screen for the new model. Nothing is downloaded until **Install** is pressed,
   and the old files are never deleted by the app.

@@ -96,8 +96,7 @@ function updateBubble(item, message, context) {
         'webllm-message',
         message.role === 'user' ? 'is-own' : 'is-assistant',
         message.pending ? 'is-streaming' : '',
-        message.error ? 'is-error' : '',
-        message.finishReason === 'loop' ? 'is-looped' : ''
+        message.error ? 'is-error' : ''
     ]
         .filter(Boolean)
         .join(' ');

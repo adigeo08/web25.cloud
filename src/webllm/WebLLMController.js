@@ -46,7 +46,6 @@ import {
 } from './webllmConfig.js';
 import {
     CONTINUE_EXHAUSTED_NOTICE,
-    LOOP_NOTICE,
     MDN_UNAVAILABLE_NOTE,
     MESSAGE_TOO_LONG,
     classifyError,
@@ -75,10 +74,6 @@ import {
     stepStatus
 } from './webllmThinking.js';
 
-/** Said under a Thinking reply when one of its steps was cut for repeating itself. */
-export const STEP_LOOP_NOTICE =
-    'A step started repeating itself and was cut short; the remaining steps were still written.';
-
 /**
  * Said under a Thinking reply with steps that did not finish. Each such step
  * also carries its own line in the reply; the next steps are not shown its code.
@@ -101,7 +96,8 @@ export const WEBLLM_INSTALL_LOCK = 'web25-webllm-install';
  *   stop    the model ended its reply
  *   length  it hit the reply length limit (or the context window)
  *   abort   the user pressed Stop
- *   loop    the loop guard ended a repeating reply
+ *   loop    only in conversations saved while a loop guard still cut replies;
+ *           such a reply is never passed back as context
  *   error   no reply: the request failed
  * @typedef {{ id: string, role: 'user'|'assistant', content: string, pending: boolean, error: string|null,
  *             stopped: boolean, finishReason: FinishReason|null, notice: string|null,
@@ -861,7 +857,7 @@ export class WebLLMController {
     /**
      * Record how a reply ended.
      * @param {ChatMessage} reply
-     * @param {{ finishReason?: string|null, keepChars?: number, usage?: any }|undefined} result
+     * @param {{ finishReason?: string|null, usage?: any }|undefined} result
      */
     finishReply(reply, result) {
         const reason = result?.finishReason || 'stop';
@@ -878,13 +874,6 @@ export class WebLLMController {
         reply.continuable = false;
         if (reason === 'abort') {
             reply.stopped = true;
-        } else if (reason === 'loop') {
-            // The repeats were streamed before they were recognised; keep the first.
-            if (typeof result?.keepChars === 'number') {
-                reply.content = reply.content.slice(0, result.keepChars).trimEnd();
-            }
-            reply.notice = LOOP_NOTICE;
-            this.log('WebLLM reply stopped: it was repeating itself.');
         } else if (reason === 'length') {
             // Cut at the reply limit (or a full window): Continue picks it up —
             // if there is still room to.
@@ -1281,7 +1270,6 @@ export class WebLLMController {
 
         /** @type {any} */
         let last = { finishReason: 'stop' };
-        let looped = false;
         /** @type {{ title: string, url: string }[]} */
         const sources = [];
         /** Zero-based steps that did not finish; they are not built on. @type {number[]} */
@@ -1364,14 +1352,6 @@ export class WebLLMController {
             }
 
             const stopped = result?.finishReason === 'abort' || this.stopRequested;
-            if (result?.finishReason === 'loop') {
-                // Keep this step's first pass (a continuation counts from the
-                // step's start too) and go on with the next one.
-                if (typeof result.keepChars === 'number') {
-                    reply.content = reply.content.slice(0, start + result.keepChars).trimEnd();
-                }
-                looped = true;
-            }
             // Judged on the text as the model wrote it, before any fence is
             // closed for the screen: a closed fence is not finished code.
             const status = stepStatus(result?.finishReason, reply.content.slice(start), { stopped });
@@ -1415,11 +1395,10 @@ export class WebLLMController {
                 confirmed.push(plan.length > 0 ? `${stepHeading(index, total, steps[index])}\n\n${text}` : text);
             }
             if (stopped) return { ...result, finishReason: 'abort' };
-            last = result?.finishReason === 'loop' ? { ...result, finishReason: 'stop' } : result;
+            last = result;
         }
         const marked = incomplete.filter((index) => !(index === total - 1 && last?.finishReason === 'length'));
         if (marked.length > 0) reply.notice = stepIncompleteNotice(marked.map((index) => index + 1));
-        else if (looped) reply.notice = STEP_LOOP_NOTICE;
         return last;
     }
 
