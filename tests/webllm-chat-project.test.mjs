@@ -92,6 +92,54 @@ test('a block still being written is not a file yet', () => {
     assert.deepEqual(extractCodeFiles(`${fence}html index.html\n<h1>`), []);
 });
 
+test('in a finished reply, a block left open is a file too, marked incomplete', () => {
+    const reply = `Here:\n${fence}css style.css\nh1{}\n${fence}\n${fence}html index.html\n<h1>Hi</h1>\n<p>more`;
+    const files = extractCodeFiles(reply, { finished: true });
+    assert.deepEqual(
+        files.map((file) => [file.index, file.filename, file.complete]),
+        [
+            [0, 'style.css', true],
+            [1, 'index.html', false]
+        ]
+    );
+    assert.equal(files[1].code, '<h1>Hi</h1>\n<p>more');
+    // While it is still being written, only the closed block is.
+    assert.deepEqual(
+        extractCodeFiles(reply).map((file) => file.index),
+        [0]
+    );
+});
+
+test('a cut-off block is not saved by itself, but can be saved by hand; one the model left open is', async () => {
+    const { store: projects } = store();
+    const controller = fakeController();
+    const project = new WebLLMProject({ controller, store: projects });
+    await settle(project);
+    const finish = async (content, finishReason) => {
+        Object.assign(controller.state, { activeConversationId: 'conv-1', generating: true });
+        project.handle(controller.state, { type: 'state' });
+        controller.state.messages = [
+            { id: 1, role: 'user', content: 'Make a page' },
+            { id: 2, role: 'assistant', content, finishReason }
+        ];
+        controller.state.generating = false;
+        project.handle(controller.state, { type: 'state' });
+        return settle(project);
+    };
+
+    // Cut by the phone's 256-token limit: nothing is saved by itself.
+    let state = await finish(`${fence}html index.html\n<h1>Hi</h1>\n<p>more`, 'length');
+    assert.deepEqual(state.files, []);
+    // Save to project still works on it.
+    assert.equal(await project.saveBlock(2, 0, 'index.html'), 'index.html');
+    state = await settle(project);
+    assert.deepEqual(state.files, ['index.html']);
+
+    // The model ended the reply without closing the fence: the file is saved.
+    state = await finish(`${fence}css style.css\nh1{}`, 'stop');
+    assert.deepEqual(state.files, ['index.html', 'style.css']);
+});
+
 test('names from the model are made safe or refused', () => {
     assert.equal(projectPath('./index.html'), 'index.html');
     assert.equal(projectPath('js/app.js'), 'js/app.js');

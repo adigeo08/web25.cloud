@@ -957,7 +957,10 @@ the public endpoint and the model itself could not be reached from the test envi
 - **Code as a project.** Each finished code block has a file-name field, **▶ Preview** and
   **Save to project**. A block that names its file — on the fence (```` ```html index.html ````),
   in a first-line comment (`<!-- index.html -->`, `// app.js`) or on the line just above it
-  (`**style.css**:`) — is saved automatically when the reply ends. The conversation's files are a
+  (`**style.css**:`) — is saved automatically when the reply ends. A block left open when the reply
+  ends — cut by the length limit, as often on a phone with its 256-token replies — still gets the
+  file-name field, **▶ Preview** and **Save to project**; it is saved by itself only if the model
+  ended the reply there, and otherwise waits for **Continue →** or a Save. The conversation's files are a
   git repository in OPFS (see §10). Every commit in it — files saved from a reply, Project panel
   changes, removals — is authored by the signed-in user's Nostr address (npub; the wallet address
   if Nostr is off for it), never by the model, whose name is only shown in the chat. Deleting a

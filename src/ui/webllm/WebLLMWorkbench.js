@@ -668,7 +668,9 @@ export function bindWebLLMWorkbench({
         const message = (controller.state.messages || []).find(
             (/** @type {any} */ entry) => `${entry.id}` === `${messageId}`
         );
-        const block = message ? extractCodeFiles(message.content).find((file) => file.index === index) : null;
+        const block = message
+            ? extractCodeFiles(message.content, { finished: !message.pending }).find((file) => file.index === index)
+            : null;
         if (!block) return false;
         const path = projectPath(name) || block.suggested || 'snippet.txt';
         let saved = null;

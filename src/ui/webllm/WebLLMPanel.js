@@ -126,7 +126,7 @@ function updateBubble(item, message, context) {
         // A finished reply's code can be named and saved to the project.
         const files =
             context.project && message.role === 'assistant' && !message.pending && !message.error
-                ? extractCodeFiles(message.content)
+                ? extractCodeFiles(message.content, { finished: true })
                 : null;
         renderReply(body, message.content, { files });
     }

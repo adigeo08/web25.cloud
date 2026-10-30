@@ -775,6 +775,41 @@ test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by 
     }
 });
 
+test('on a phone, code cut by the reply limit can still be named, previewed and saved', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: PHONE });
+    try {
+        await openWebLLMTab(page, PHONE, { scripted: true });
+        await startScriptedChat(
+            page,
+            ['Here:\n\n```html index.html\n<h1>Hi</h1>\n<p>more'],
+            { finishReason: 'length' },
+            {
+                profile: 'mobile',
+                project: true,
+                wallet: '0x00000000000000000000000000000000000000c1',
+                decision: 'short'
+            }
+        );
+        await page.waitForSelector('#webllm-install-btn:not([disabled])');
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        await page.fill('#webllm-input', 'Make a page');
+        await page.press('#webllm-input', 'Enter');
+        await page.waitForSelector('.webllm-code [data-save-code]');
+
+        assert.equal(await page.inputValue('.webllm-code .webllm-code-name'), 'index.html');
+        assert.equal(await page.isVisible('.webllm-code [data-open-canvas]'), true, 'Preview is offered');
+        assert.equal(await page.isVisible('.webllm-continue button, [aria-label="Continue this reply"]'), true);
+        assert.deepEqual(await page.evaluate(() => window.__project.state.files), [], 'not saved by itself');
+
+        await page.click('.webllm-code [data-save-code]');
+        await page.waitForFunction(() => window.__project.state.files.includes('index.html'));
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
 test('the dev profile override is named in the chat, on a development host only', { skip: SKIP }, async () => {
     const { page, context } = await openApp();
     try {
