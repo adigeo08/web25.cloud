@@ -8,8 +8,9 @@
  * same messages — so the controller never knows or cares which it got.
  *
  * Inbound (all carry a `requestId` the reply echoes):
- *   { type: 'load', profile? }           download if needed, then initialise with
- *                                        the profile's context window and reply limit
+ *   { type: 'load', profile? }           download if needed, then initialise the
+ *                                        profile's model with its context window and
+ *                                        reply limit
  *   { type: 'chat', messages, maxTokens?, schema? }   one streamed chat completion;
  *                                        with a JSON schema, constrained to it
  *   { type: 'continue', messages, partial, maxTokens? }  more of a reply cut at
@@ -34,12 +35,12 @@
 
 import {
     WEBLLM_ASSET_CACHE,
-    WEBLLM_CHAT_OPTIONS,
     WEBLLM_CONTEXT_WINDOW,
     WEBLLM_LIBRARY_INTEGRITY,
     WEBLLM_LIBRARY_URL,
-    WEBLLM_MODEL_ID,
-    createAppConfig
+    chatOptionsFor,
+    createAppConfig,
+    getWebLLMModel
 } from './webllmConfig.js';
 import { asksForRepetition, createLoopGuard } from './webllmLoopGuard.js';
 import { formatContinuationPrompt } from './webllmPromptFormat.js';
@@ -120,11 +121,12 @@ function serializeError(error) {
 }
 
 /**
- * The memory settings a `load` asked for, reduced to values WebLLM accepts. A
- * missing or malformed profile is the desktop one: the default never shrinks.
+ * The model and memory settings a `load` asked for, reduced to values WebLLM
+ * accepts. A missing or malformed profile is the desktop one: the default never
+ * shrinks, and a model that is not in `WEBLLM_MODELS` is Llama.
  *
  * @param {any} profile
- * @returns {{ contextWindow: number, maxTokens: number|null }}
+ * @returns {{ model: import('./webllmConfig.js').WebLLMModelKey, contextWindow: number, maxTokens: number|null }}
  */
 export function sanitizeProfile(profile) {
     const window = Number(profile?.contextWindow);
@@ -132,7 +134,7 @@ export function sanitizeProfile(profile) {
         Number.isInteger(window) && window >= 512 && window <= WEBLLM_CONTEXT_WINDOW ? window : WEBLLM_CONTEXT_WINDOW;
     const tokens = Number(profile?.maxTokens);
     const maxTokens = Number.isInteger(tokens) && tokens > 0 && tokens < contextWindow ? tokens : null;
-    return { contextWindow, maxTokens };
+    return { model: getWebLLMModel(profile?.model).key, contextWindow, maxTokens };
 }
 
 /**
@@ -163,16 +165,18 @@ export function jsonResponseFormat(schema) {
 /**
  * @param {{ post: (message: any) => void,
  *           loadLibrary?: () => Promise<any>,
- *           modelId?: string,
+ *           modelId?: string|null,
  *           appConfig?: any,
- *           chatOptions?: Record<string, number> }} options
+ *           chatOptions?: Record<string, number>|null }} options
+ *   `modelId`, `appConfig` and `chatOptions` replace what the profile's model
+ *   would use; by default they are that model's own.
  */
 export function createEngineHost({
     post,
     loadLibrary = () => loadWebLLMLibrary(),
-    modelId = WEBLLM_MODEL_ID,
+    modelId = null,
     appConfig = null,
-    chatOptions = WEBLLM_CHAT_OPTIONS
+    chatOptions = null
 }) {
     /** The profile the engine was loaded with; fixed until it is unloaded. */
     let limits = sanitizeProfile(null);
@@ -201,10 +205,11 @@ export function createEngineHost({
         // every shard twice and fight over the GPU.
         if (!loading) {
             limits = sanitizeProfile(profile);
+            const model = getWebLLMModel(limits.model);
             loading = (async () => {
                 const webllm = await loadLibrary();
                 const candidate = new webllm.MLCEngine({
-                    appConfig: appConfig || createAppConfig(limits.contextWindow),
+                    appConfig: appConfig || createAppConfig(limits.contextWindow, model),
                     initProgressCallback: (report) =>
                         post({
                             type: 'progress',
@@ -219,7 +224,10 @@ export function createEngineHost({
                     // model's chat config here, once, instead of riding on each request.
                     // The context window is set here, at initialisation: the KV
                     // cache is allocated for it, so a smaller one is less memory.
-                    await candidate.reload(modelId, { ...chatOptions, context_window_size: limits.contextWindow });
+                    await candidate.reload(modelId || model.modelId, {
+                        ...(chatOptions || chatOptionsFor(model)),
+                        context_window_size: limits.contextWindow
+                    });
                 } finally {
                     loadingEngine = null;
                 }
@@ -330,7 +338,7 @@ export function createEngineHost({
         try {
             const maxTokens = replyLimit(limits.maxTokens, requestedMax);
             const stream = await engine.completions.create({
-                prompt: formatContinuationPrompt(messages, partial),
+                prompt: formatContinuationPrompt(messages, partial, getWebLLMModel(limits.model).chatTemplate),
                 stream: true,
                 stream_options: { include_usage: true },
                 ...(maxTokens ? { max_tokens: maxTokens } : {})

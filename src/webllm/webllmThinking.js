@@ -3,8 +3,8 @@
  * How a reply is written: short, or thinking in steps.
  *
  * The mode is a chat setting (see WEBLLM_REPLY_MODES): the user picks Short
- * or Thinking, or leaves it on Auto and Llama picks per message. Nothing here
- * guesses from keywords. Where Llama decides, it answers in a JSON schema, so
+ * or Thinking, or leaves it on Auto and the model picks per message. Nothing here
+ * guesses from keywords. Where the model decides, it answers in a JSON schema, so
  * the answer is read with `JSON.parse` rather than parsed out of prose:
  *
  *   Auto      {"mode": "short"|"thinking"}  — a few tokens, before the reply
@@ -35,7 +35,7 @@ export const SHORT_INSTRUCTION =
 /** The system prompt a short answer is written under. */
 export const SHORT_SYSTEM_PROMPT = `${WEBLLM_SYSTEM_PROMPT}\n\n${SHORT_INSTRUCTION}`;
 
-/** Auto: the shape of Llama's decision. */
+/** Auto: the shape of the model’s decision. */
 export const MODE_SCHEMA = Object.freeze({
     type: 'object',
     properties: { mode: { type: 'string', enum: ['short', 'thinking'] } },

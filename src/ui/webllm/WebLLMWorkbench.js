@@ -10,7 +10,7 @@
  *   Canvas          one file, previewed and edited. Preview puts the project's
  *                   page together and runs it in a sandboxed frame, with its
  *                   console underneath; Code is CodeMirror 6. Save writes the
- *                   file to the project and to Llama's memory.
+ *                   file to the project and to the model's memory.
  *
  * File names and code come from the model or the user and are untrusted: they
  * are only ever set as text, and code only ever runs in the preview frame,
@@ -81,6 +81,8 @@ export function bindWebLLMWorkbench({
     confirm = (message) => window.confirm(message),
     loadEditor
 }) {
+    /** How the chat names the model this page runs. */
+    const modelName = controller?.model?.name || 'Llama';
     const layout = byId('webllm-layout');
 
     // ── the Project panel ───────────────────────────────────────────────────
@@ -251,8 +253,8 @@ export function bindWebLLMWorkbench({
         const emptyText = empty?.lastElementChild;
         if (emptyText) {
             emptyText.textContent = state.conversationId
-                ? 'Ask Llama for code, save a snippet, or create a file.'
-                : 'Send Llama a message first: a project belongs to a conversation.';
+                ? `Ask ${modelName} for code, save a snippet, or create a file.`
+                : `Send ${modelName} a message first: a project belongs to a conversation.`;
         }
         const ready = Boolean(state.conversationId && state.available);
         for (const id of ['webllm-tree-new-file', 'webllm-tree-new-folder']) {

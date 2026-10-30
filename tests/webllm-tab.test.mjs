@@ -272,9 +272,12 @@ test('the tab gate loads the app only when a signed-in user opens the tab, and l
 
     const gate = await import('../src/webllm/WebLLMTab.js');
     gate.resetWebLLMTabForTests();
-    const calls = { loads: 0, allowed: [], activations: 0 };
+    const calls = { loads: 0, allowed: [], identities: [], activations: 0 };
     const controller = {
-        setAllowed: (allowed) => calls.allowed.push(allowed),
+        setAllowed: (allowed, identity) => {
+            calls.allowed.push(allowed);
+            calls.identities.push(identity);
+        },
         activate: async () => {
             calls.activations += 1;
         }
@@ -292,7 +295,7 @@ test('the tab gate loads the app only when a signed-in user opens the tab, and l
         await flush();
         assert.equal(calls.loads, 0, 'nothing loads for a signed-out click');
 
-        gate.setWebLLMAccess(true);
+        gate.setWebLLMAccess(true, { walletAddress: '0xabc', npub: 'npub1me' });
         await flush();
         assert.equal(calls.loads, 0, 'signing in alone loads nothing');
 
@@ -303,10 +306,13 @@ test('the tab gate loads the app only when a signed-in user opens the tab, and l
         assert.equal(calls.loads, 1, 'the app is imported once');
         assert.equal(calls.activations, 2);
         assert.deepEqual(calls.allowed, [true, true]);
+        // The npub goes with the wallet: it authors the project commits.
+        assert.deepEqual(calls.identities[0], { walletAddress: '0xabc', npub: 'npub1me' });
 
         gate.setWebLLMAccess(false);
         await flush();
         assert.deepEqual(calls.allowed, [true, true, false]);
+        assert.deepEqual(calls.identities[2], { walletAddress: null, npub: null });
     } finally {
         gate.resetWebLLMTabForTests();
         dom.restore();

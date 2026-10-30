@@ -15,13 +15,13 @@
  */
 
 import {
-    WEBLLM_LEGACY_MODELS,
     WEBLLM_LIBRARY_INTEGRITY,
     WEBLLM_LIBRARY_URL,
-    WEBLLM_MODEL_LIB_URL,
-    WEBLLM_MODEL_URL,
+    WEBLLM_MODELS,
     WEBLLM_SW_SCOPE,
-    WEBLLM_SW_URL
+    WEBLLM_SW_URL,
+    otherWebLLMModels,
+    replacedWebLLMModels
 } from './webllmConfig.js';
 
 export const WEBLLM_SW_PROTOCOL = 'web25-webllm/1';
@@ -49,10 +49,13 @@ function activeWorker(registration, timeoutMs = ACTIVATION_TIMEOUT_MS) {
 
 /**
  * @param {{ container?: ServiceWorkerContainer|null, scriptUrl?: string, scope?: string,
- *           timeoutMs?: number, log?: (message: string) => void }} [options]
+ *           timeoutMs?: number, log?: (message: string) => void,
+ *           model?: import('./webllmConfig.js').WebLLMModel }} [options]
+ *   `model` is the one this page loads; every other known build counts as legacy.
  */
 export function createWebLLMServiceWorkerClient({
     container = typeof navigator !== 'undefined' ? navigator.serviceWorker || null : null,
+    model: activeModel = WEBLLM_MODELS.llama,
     scriptUrl = WEBLLM_SW_URL,
     scope = WEBLLM_SW_SCOPE,
     timeoutMs = 15000,
@@ -109,24 +112,45 @@ export function createWebLLMServiceWorkerClient({
         });
     }
 
-    const model = { modelUrl: WEBLLM_MODEL_URL, modelLibUrl: WEBLLM_MODEL_LIB_URL };
+    const model = { modelUrl: activeModel.modelUrl, modelLibUrl: activeModel.modelLibUrl };
     const library = { url: WEBLLM_LIBRARY_URL, integrity: WEBLLM_LIBRARY_INTEGRITY };
-    const legacy = WEBLLM_LEGACY_MODELS.map(({ modelUrl, modelLibUrl }) => ({ modelUrl, modelLibUrl }));
+    const legacy = otherWebLLMModels(activeModel).map(({ modelUrl, modelLibUrl }) => ({ modelUrl, modelLibUrl }));
+    const replaced = replacedWebLLMModels(activeModel);
 
     return {
         register,
         ping: () => request('PING'),
-        /** Model cache state, library cache state, the storage estimate, and any older build still stored. */
+        /** Model cache state, library cache state, the storage estimate, and any other build still stored. */
         status: () => request('STATUS', { model, library, legacy }),
         /** Download and verify the WebLLM library into the worker's cache. */
         prepareLibrary: () => request('PREPARE_LIBRARY', { library }),
         /** Delete the model from WebLLM's caches, and the cached library. */
         clearModel: () => request('CLEAR_MODEL', { model, includeLibrary: true }),
         /**
-         * Delete older builds the page no longer loads. Only ever called from the
+         * Delete builds this page does not load. Only ever called from the
          * user's own click; the library cache is shared and left alone.
          */
         clearLegacyModels: () =>
-            Promise.all(legacy.map((entry) => request('CLEAR_MODEL', { model: entry, includeLibrary: false })))
+            Promise.all(legacy.map((entry) => request('CLEAR_MODEL', { model: entry, includeLibrary: false }))),
+        /**
+         * Delete the builds this page's model replaces — on a phone, Llama, to
+         * make room for SmolLM2 — and say which of them had anything stored.
+         * The shared library cache is left alone. On a desktop there is
+         * nothing to delete and nothing is asked.
+         * @returns {Promise<{ modelId: string, label: string, removed: number }[]|null>}
+         */
+        clearReplacedModels: async () => {
+            if (replaced.length === 0) return [];
+            const results = [];
+            for (const { modelId, label, modelUrl, modelLibUrl } of replaced) {
+                const result = await request('CLEAR_MODEL', {
+                    model: { modelUrl, modelLibUrl },
+                    includeLibrary: false
+                });
+                if (result === null) return null;
+                results.push({ modelId, label, removed: Number(result?.removed) || 0 });
+            }
+            return results;
+        }
     };
 }
