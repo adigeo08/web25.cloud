@@ -1,8 +1,8 @@
 /**
  * How a reply is generated, ended and remembered — end to end.
  *
- * The real controller, the real engine client and host, and the real loop
- * guard, with only the WebLLM module replaced by a scripted one: it streams
+ * The real controller, the real engine client and host, with only the
+ * WebLLM module replaced by a scripted one: it streams
  * whatever a test says the model would say and records exactly what it was
  * asked. That makes these tests about the pipeline — the request WebLLM
  * receives, the finish reasons that come back, what is shown, what is passed
@@ -33,7 +33,6 @@ import { openWebLLMThoughts } from '../src/webllm/webllmThoughtStore.js';
 import { installFakeIndexedDb } from './helpers/fake-indexeddb.mjs';
 import {
     CONTINUE_EXHAUSTED_NOTICE,
-    LOOP_NOTICE,
     MDN_UNAVAILABLE_NOTE,
     MESSAGE_TOO_LONG,
     estimateTokens
@@ -41,7 +40,7 @@ import {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const rep = (text, times, separator = ' ') => Array(times).fill(text).join(separator);
-/** Varied filler of about `chars` characters — repetition would (rightly) be stopped as a loop. */
+/** Varied filler of about `chars` characters. */
 const filler = (seed, chars) => {
     let text = '';
     for (let i = 0; text.length < chars; i += 1) text += `${seed}${i} `;
@@ -270,47 +269,37 @@ test('a longer explanation cut by the length limit offers Continue and is still 
     assert.equal(turns(llm.state.requests.at(-1).messages)[1].content, cut, 'a cut-off answer is still context');
 });
 
-// ── loops ───────────────────────────────────────────────────────────────────
+// ── no loop guard ───────────────────────────────────────────────────────────
 
 const LOOPING_HEY =
     "Hey! How's it going? " + rep("Hey! How's it going? I'm here to help you with anything you need.", 40);
 
-test('the reported regression: "hey" answered with the same sentence forever is stopped, trimmed and explained', async () => {
+test('a reply that repeats itself is never cut: every token is shown, up to the reply limit', async () => {
     const { controller, llm } = await session(() => ({ text: LOOPING_HEY }));
-    const pieces = Math.ceil(LOOPING_HEY.length / 5);
-
     await controller.send('hey');
 
     const reply = lastReply(controller);
-    assert.equal(reply.finishReason, 'loop');
-    assert.equal(reply.notice, LOOP_NOTICE);
-    assert.equal(reply.stopped, false, 'it was not the user who stopped it');
-    assert.equal(reply.pending, false);
-    assert.equal(controller.state.generating, false);
-    assert.equal(llm.state.interrupts, 1, 'the engine was told to stop');
-    assert.ok(llm.state.emitted < pieces / 4, `${llm.state.emitted} of ${pieces} pieces were generated`);
-    // One answer is kept; the repeats are not shown.
-    assert.equal(
-        reply.content,
-        "Hey! How's it going? Hey! How's it going? I'm here to help you with anything you need."
-    );
+    // Only the reply limit ends it — as for any long reply — and Continue is offered.
+    assert.equal(reply.finishReason, 'length');
+    assert.equal(reply.continuable, true);
+    assert.equal(reply.notice, null);
+    assert.equal(reply.stopped, false);
+    assert.equal(llm.state.interrupts, 0, 'the engine is never told to stop');
+    assert.equal(llm.state.emitted, WEBLLM_THINKING.desktop.shortMaxTokens);
+    assert.equal(reply.content, LOOPING_HEY.slice(0, llm.state.emitted * 5), 'every streamed token is kept');
 });
 
-test('a reply that looped is not passed back, and chat carries on normally', async () => {
-    const { controller, llm } = await session((messages) =>
-        messages.at(-1).content === 'hey' ? { text: LOOPING_HEY } : { text: 'Paris.' }
-    );
-    await controller.send('hey');
-    await controller.send('What is the capital of France?');
+test('a short repeating reply the model ends itself is shown whole', async () => {
+    const hellos = rep('Hello world today friend.', 5);
+    const { controller, llm } = await session(() => ({ text: hellos }));
+    await controller.send('hi');
 
-    assert.deepEqual(turns(llm.state.requests.at(-1).messages), [
-        { role: 'user', content: 'What is the capital of France?' }
-    ]);
-    assert.equal(lastReply(controller).content, 'Paris.');
     assert.equal(lastReply(controller).finishReason, 'stop');
+    assert.equal(lastReply(controller).content, hellos);
+    assert.equal(llm.state.interrupts, 0);
 });
 
-test('the user pressing Stop is "abort", never "loop", and is not passed back either', async () => {
+test('the user pressing Stop is "abort", and the stopped reply is not passed back', async () => {
     const { controller, llm } = await session((messages) =>
         messages.at(-1).content === 'Tell me about space'
             ? { text: 'Space is vast and mostly empty. '.repeat(40) }
@@ -371,16 +360,6 @@ test('streaming still shows text as it arrives, and a healthy reply is never int
         'text only ever grows'
     );
     assert.equal(lastReply(controller).content, reply);
-    assert.equal(llm.state.interrupts, 0);
-});
-
-test('asking for repetition is respected: five hellos are not a loop', async () => {
-    const hellos = rep('Hello world today friend.', 5);
-    const { controller, llm } = await session(() => ({ text: hellos }));
-    await controller.send('Say hello world today friend five times');
-
-    assert.equal(lastReply(controller).finishReason, 'stop');
-    assert.equal(lastReply(controller).content, hellos);
     assert.equal(llm.state.interrupts, 0);
 });
 
@@ -476,20 +455,39 @@ test('a failed request is shown, kept out of context, and does not poison the ne
 const MOBILE = WEBLLM_PROFILES.mobile;
 const DESKTOP = WEBLLM_PROFILES.desktop;
 
-test('mobile: the engine loads SmolLM2 360M with a 2048-token context and its own temperature', async () => {
+test('mobile: the engine loads Qwen3 0.6B with a 2048-token context and its non-thinking sampling', async () => {
     const { llm } = await session(() => ({ text: 'Hi!' }), { profile: MOBILE });
     assert.deepEqual(llm.state.reloads, [
         {
-            modelId: 'SmolLM2-360M-Instruct-q4f32_1-MLC',
-            chatOpts: { ...WEBLLM_CHAT_OPTIONS, temperature: 0.2, context_window_size: 2048 }
+            modelId: 'Qwen3-0.6B-q4f32_1-MLC',
+            chatOpts: { ...WEBLLM_CHAT_OPTIONS, temperature: 0.7, top_p: 0.8, context_window_size: 2048 }
         }
     ]);
     const [record] = llm.state.engineConfig.appConfig.model_list;
     assert.deepEqual(record.overrides, { context_window_size: 2048 });
-    assert.equal(record.model_id, 'SmolLM2-360M-Instruct-q4f32_1-MLC');
-    assert.equal(record.model, 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/');
-    assert.match(record.model_lib, /\/v0_2_84\/base\/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu\.wasm$/);
-    assert.equal(record.vram_required_MB, 579.61);
+    assert.equal(record.model_id, 'Qwen3-0.6B-q4f32_1-MLC');
+    assert.equal(record.model, 'https://huggingface.co/mlc-ai/Qwen3-0.6B-q4f32_1-MLC/resolve/main/');
+    assert.match(record.model_lib, /\/v0_2_84\/base\/Qwen3-0.6B-q4f32_1_cs1k-webgpu\.wasm$/);
+    assert.equal(record.vram_required_MB, 1924.98);
+});
+
+test('mobile: every chat request asks Qwen3 for its non-thinking mode; desktop requests do not', async () => {
+    const phone = await session(() => ({ text: 'Hi!' }), { profile: MOBILE });
+    await phone.controller.send('hey');
+    assert.deepEqual(phone.llm.state.requests[0].extra_body, { enable_thinking: false });
+
+    const desktop = await session(() => ({ text: 'Hi!' }), { profile: DESKTOP });
+    await desktop.controller.send('hey');
+    assert.equal(desktop.llm.state.requests[0].extra_body, undefined);
+});
+
+test('mobile: a thinking block at the start of a reply is never shown', async () => {
+    const { controller } = await session(
+        () => ({ text: '<think>\nThe user greets me.\n</think>\n\nHello! How can I help?', size: 4 }),
+        { profile: MOBILE }
+    );
+    await controller.send('hey');
+    assert.equal(lastReply(controller).content, 'Hello! How can I help?');
 });
 
 test('desktop: the engine still loads Llama 3.2 1B with the shared sampling', async () => {
@@ -506,7 +504,7 @@ test('mobile: a short request carries the shorter of its own limit and 256, and 
     const cap = Math.min(256, WEBLLM_THINKING.mobile.shortMaxTokens);
     const [request] = llm.state.requests;
     assert.equal(request.max_tokens, cap);
-    assert.deepEqual(Object.keys(request).sort(), ['max_tokens', 'messages', 'stream', 'stream_options']);
+    assert.deepEqual(Object.keys(request).sort(), ['extra_body', 'max_tokens', 'messages', 'stream', 'stream_options']);
     const reply = lastReply(controller);
     assert.equal(reply.finishReason, 'length');
     assert.equal(reply.continuable, true);
@@ -601,12 +599,12 @@ test('Continue picks the reply up in place: same message, no new question, the p
     const [request] = llm.state.completions;
     assert.equal(request.max_tokens, 256, 'the mobile limit applies to each continuation');
     assert.equal(request.stream, true);
-    // The mobile model is SmolLM2: its prompt is ChatML, not the Llama 3 format.
+    // The mobile model is Qwen3: its prompt is ChatML with an empty thinking block, not the Llama 3 format.
     assert.ok(request.prompt.startsWith('<|im_start|>system\n'));
     assert.ok(request.prompt.includes('<|im_start|>user\nExplain closures in detail<|im_end|>\n'));
     assert.ok(!request.prompt.includes('<|start_header_id|>'));
     assert.ok(
-        request.prompt.endsWith(`<|im_start|>assistant\n${cut}`),
+        request.prompt.endsWith(`<|im_start|>assistant\n<think>\n\n</think>\n\n${cut}`),
         'the prompt stops inside the unfinished reply, with no end-of-turn after it'
     );
     assert.equal(llm.state.requests.length, 1, 'Continue is not a chat request');

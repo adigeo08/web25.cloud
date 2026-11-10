@@ -4716,7 +4716,7 @@ li[data-state='active'] .dm-connect-text small {
 
 .lp-hero-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 136px), 1fr));
     gap: 0.75rem;
     max-width: 780px;
     margin: clamp(1.75rem, 4vw, 2.5rem) auto 0;
@@ -5046,7 +5046,7 @@ li[data-state='active'] .dm-connect-text small {
 /* Widget: three pillar boxes */
 .lp-pillars {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.85rem;
 }
 
@@ -6542,21 +6542,125 @@ select,
     }
 }
 
+/* The "Built on" band: eight technologies, four to a row (two on a phone).
+   Each is a button that opens its explanation in #lp-tech-dialog. */
 .lp-logos-row {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 16px;
     width: 100%;
 }
 
 .lp-logo {
+    width: 100%;
     min-width: 0;
+    margin: 0;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+}
+
+.lp-logo:focus-visible {
+    border-color: var(--accent-hi);
+    outline: 2px solid var(--accent-hi);
+    outline-offset: 2px;
 }
 
 @media (max-width: 768px) {
     .lp-logos-row {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
     }
+}
+
+/* The explanation a technology opens: the messenger's sheet, with its own card. */
+.lp-tech-dialog {
+    width: min(520px, calc(100vw - 2rem));
+}
+
+.lp-tech-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1.25rem 1.25rem 1.4rem;
+}
+
+.lp-tech-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.lp-tech-mark {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface-2);
+    color: var(--accent-hi);
+}
+
+.lp-tech-mark .lp-logo-mark {
+    opacity: 1;
+}
+
+.lp-tech-heading {
+    min-width: 0;
+    flex: 1;
+}
+
+.lp-tech-heading h3 {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.lp-tech-role {
+    margin: 0.1rem 0 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.lp-tech-close {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.lp-tech-close:hover,
+.lp-tech-close:focus-visible {
+    color: var(--text);
+    background: var(--surface-2);
+}
+
+.lp-tech-body {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    line-height: 1.6;
+}
+
+.lp-tech-body p {
+    margin: 0 0 0.75rem;
+}
+
+.lp-tech-points {
+    display: grid;
+    gap: 0.4rem;
+    margin: 0;
+    padding-left: 1.2rem;
+}
+
+.lp-tech-link {
+    align-self: flex-start;
 }
 
 /* ── 14 WebLLM · local AI ────────────────────────────────────────────────
@@ -7005,11 +7109,6 @@ select,
 
 .webllm-message.is-error .webllm-message-note {
     color: #ff8a92;
-}
-
-/* A reply the loop guard cut off: not an error, but not a finished answer. */
-.webllm-message.is-looped .webllm-message-note {
-    color: var(--warn);
 }
 
 /* A reply still being written: dots before the first token, a caret after. */

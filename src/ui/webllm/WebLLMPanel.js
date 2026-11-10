@@ -46,7 +46,7 @@ function scrollToBottom(el) {
 /**
  * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null, project?: boolean,
  *             modelName?: string }} BubbleContext
- *   modelName  how the chat names the model it runs (Llama, SmolLM)
+ *   modelName  how the chat names the model it runs (Llama, Qwen)
  */
 
 /**
@@ -96,8 +96,7 @@ function updateBubble(item, message, context) {
         'webllm-message',
         message.role === 'user' ? 'is-own' : 'is-assistant',
         message.pending ? 'is-streaming' : '',
-        message.error ? 'is-error' : '',
-        message.finishReason === 'loop' ? 'is-looped' : ''
+        message.error ? 'is-error' : ''
     ]
         .filter(Boolean)
         .join(' ');
@@ -126,7 +125,7 @@ function updateBubble(item, message, context) {
         // A finished reply's code can be named and saved to the project.
         const files =
             context.project && message.role === 'assistant' && !message.pending && !message.error
-                ? extractCodeFiles(message.content)
+                ? extractCodeFiles(message.content, { finished: true })
                 : null;
         renderReply(body, message.content, { files });
     }
@@ -246,7 +245,7 @@ function renderEmptyThread(list, modelName) {
 
 /**
  * Name the model this page runs wherever the markup names one. The markup
- * names Llama 3.2 1B, the desktop model; a phone runs SmolLM2 360M instead
+ * names Llama 3.2 1B, the desktop model; a phone runs Qwen3 0.6B instead
  * (see `WEBLLM_PROFILES`), and there every mention in the tab — text and
  * labels — is rewritten here, the credit line and the licence first. All of
  * it is text: nothing is parsed as markup.

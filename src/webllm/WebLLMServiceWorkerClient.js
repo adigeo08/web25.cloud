@@ -134,7 +134,7 @@ export function createWebLLMServiceWorkerClient({
             Promise.all(legacy.map((entry) => request('CLEAR_MODEL', { model: entry, includeLibrary: false }))),
         /**
          * Delete the builds this page's model replaces — on a phone, Llama, to
-         * make room for SmolLM2 — and say which of them had anything stored.
+         * make room for Qwen3 — and say which of them had anything stored.
          * The shared library cache is left alone. On a desktop there is
          * nothing to delete and nothing is asked.
          * @returns {Promise<{ modelId: string, label: string, removed: number }[]|null>}

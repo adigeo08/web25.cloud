@@ -1,7 +1,7 @@
 /**
  * The mobile model and memory profile, and batched streaming.
  *
- * A phone or tablet runs SmolLM2 360M with a 2048-token context and 256-token
+ * A phone or tablet runs Qwen3 0.6B, thinking off, with a 2048-token context and 256-token
  * replies; a desktop or laptop keeps Llama 3.2 1B and exactly what it had. The
  * reply is drawn in batches instead of once per token. The override that
  * switches profiles for testing works on development hosts only.
@@ -45,7 +45,7 @@ const at = (hostname, search = '') => ({ hostname, search });
 
 // ── the profiles ────────────────────────────────────────────────────────────
 
-test('desktop keeps Llama and the configuration it had; mobile runs SmolLM2, halves the context and caps replies', () => {
+test('desktop keeps Llama and the configuration it had; mobile runs Qwen3, halves the context and caps replies', () => {
     assert.deepEqual(
         { ...WEBLLM_PROFILES.desktop },
         {
@@ -60,7 +60,7 @@ test('desktop keeps Llama and the configuration it had; mobile runs SmolLM2, hal
     assert.equal(WEBLLM_CONTEXT_WINDOW, 4096);
     assert.deepEqual(
         { ...WEBLLM_PROFILES.mobile },
-        { id: 'mobile', model: 'smollm', contextWindow: 2048, maxTokens: 256, promptTokenBudget: 1664 }
+        { id: 'mobile', model: 'qwen', contextWindow: 2048, maxTokens: 256, promptTokenBudget: 1664 }
     );
     // The prompt, the reply and a margin fit in the mobile window.
     const mobile = WEBLLM_PROFILES.mobile;
@@ -71,31 +71,35 @@ test('desktop keeps Llama and the configuration it had; mobile runs SmolLM2, hal
         { temperature: 0.6, top_p: 0.9, presence_penalty: 0, frequency_penalty: 0, context_window_size: 4096 }
     );
     assert.deepEqual(chatOptionsFor(WEBLLM_MODELS.llama), { ...WEBLLM_CHAT_OPTIONS });
-    assert.deepEqual(chatOptionsFor(WEBLLM_MODELS.smollm), { ...WEBLLM_CHAT_OPTIONS, temperature: 0.2 });
+    // Qwen3's non-thinking mode, as its card recommends it.
+    assert.deepEqual(chatOptionsFor(WEBLLM_MODELS.qwen), { ...WEBLLM_CHAT_OPTIONS, temperature: 0.7, top_p: 0.8 });
     assert.deepEqual(createAppConfig().model_list[0].overrides, { context_window_size: 4096 });
     assert.deepEqual(createAppConfig(2048).model_list[0].overrides, { context_window_size: 2048 });
     assert.equal(createAppConfig().model_list[0].model_id, 'Llama-3.2-1B-Instruct-q4f32_1-MLC');
 });
 
-test('the two models: Llama 3.2 1B for desktops, SmolLM2 360M q4f32_1 for phones', () => {
-    const smol = createAppConfig(2048, WEBLLM_MODELS.smollm).model_list[0];
-    assert.deepEqual(smol, {
-        model: 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/',
-        model_id: 'SmolLM2-360M-Instruct-q4f32_1-MLC',
+test('the two models: Llama 3.2 1B for desktops, Qwen3 0.6B q4f32_1 for phones', () => {
+    const qwen = createAppConfig(2048, WEBLLM_MODELS.qwen).model_list[0];
+    assert.deepEqual(qwen, {
+        model: 'https://huggingface.co/mlc-ai/Qwen3-0.6B-q4f32_1-MLC/resolve/main/',
+        model_id: 'Qwen3-0.6B-q4f32_1-MLC',
         model_lib:
-            'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu.wasm',
-        vram_required_MB: 579.61,
+            'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Qwen3-0.6B-q4f32_1_cs1k-webgpu.wasm',
+        vram_required_MB: 1924.98,
         low_resource_required: true,
         overrides: { context_window_size: 2048 }
     });
     // q4f32_1, like Llama: no shader-f16 needed.
-    assert.match(WEBLLM_MODELS.smollm.modelId, /q4f32_1/);
-    assert.equal(WEBLLM_MODELS.smollm.chatTemplate, 'chatml');
+    assert.match(WEBLLM_MODELS.qwen.modelId, /q4f32_1/);
+    assert.equal(WEBLLM_MODELS.qwen.chatTemplate, 'qwen3');
+    assert.equal(WEBLLM_MODELS.qwen.thinking, false, 'run in its non-thinking mode');
     assert.equal(WEBLLM_MODELS.llama.chatTemplate, 'llama3');
-    assert.ok(WEBLLM_MODELS.smollm.downloadBytes < WEBLLM_MODELS.llama.downloadBytes);
+    assert.equal(WEBLLM_MODELS.llama.thinking, true, 'Llama has no thinking mode to turn off');
+    assert.ok(WEBLLM_MODELS.qwen.downloadBytes < WEBLLM_MODELS.llama.downloadBytes);
+    assert.deepEqual(Object.keys(WEBLLM_MODELS), ['llama', 'qwen'], 'SmolLM2 is no longer offered');
 
-    assert.equal(getWebLLMModel('smollm'), WEBLLM_MODELS.smollm);
-    for (const key of ['llama', undefined, null, '', 'gpt', '__proto__', 'toString', 42]) {
+    assert.equal(getWebLLMModel('qwen'), WEBLLM_MODELS.qwen);
+    for (const key of ['llama', 'smollm', undefined, null, '', 'gpt', '__proto__', 'toString', 42]) {
         assert.equal(getWebLLMModel(key), WEBLLM_MODELS.llama, `${key}`);
     }
 
@@ -103,10 +107,12 @@ test('the two models: Llama 3.2 1B for desktops, SmolLM2 360M q4f32_1 for phones
     const ids = (model) => otherWebLLMModels(model).map((entry) => entry.modelId);
     assert.deepEqual(ids(WEBLLM_MODELS.llama), [
         'Llama-3.2-1B-Instruct-q4f16_1-MLC',
-        'SmolLM2-360M-Instruct-q4f32_1-MLC'
+        'SmolLM2-360M-Instruct-q4f32_1-MLC',
+        'Qwen3-0.6B-q4f32_1-MLC'
     ]);
-    assert.deepEqual(ids(WEBLLM_MODELS.smollm), [
+    assert.deepEqual(ids(WEBLLM_MODELS.qwen), [
         'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+        'SmolLM2-360M-Instruct-q4f32_1-MLC',
         'Llama-3.2-1B-Instruct-q4f32_1-MLC'
     ]);
 });
@@ -114,7 +120,7 @@ test('the two models: Llama 3.2 1B for desktops, SmolLM2 360M q4f32_1 for phones
 test('phones and tablets get the mobile profile; desktops do not', () => {
     const profile = (nav) => resolveWebLLMProfile({ navigator: nav, location: at('web25.cloud') });
     assert.equal(profile({ userAgent: UA.iPhone15, maxTouchPoints: 5 }).id, 'mobile');
-    assert.equal(profile({ userAgent: UA.iPhone15, maxTouchPoints: 5 }).model, 'smollm');
+    assert.equal(profile({ userAgent: UA.iPhone15, maxTouchPoints: 5 }).model, 'qwen');
     assert.equal(profile({ userAgent: UA.windowsEdge }).model, 'llama');
     assert.equal(profile({ userAgent: UA.galaxyS22, userAgentData: { mobile: true } }).id, 'mobile');
     assert.equal(profile({ userAgent: UA.iPadDesktopMode, maxTouchPoints: 5 }).id, 'mobile', 'iPadOS poses as a Mac');
@@ -182,7 +188,7 @@ test('a profile from the page is reduced to safe values; anything odd is the des
     assert.deepEqual(sanitizeProfile({ contextWindow: 2048, maxTokens: -1 }), llama(2048, null));
     // The model: only one WEB25 knows, else Llama.
     assert.deepEqual(sanitizeProfile({ ...WEBLLM_PROFILES.mobile }), {
-        model: 'smollm',
+        model: 'qwen',
         contextWindow: 2048,
         maxTokens: 256
     });
@@ -211,13 +217,13 @@ test('the engine keeps the profile it was first loaded with', async () => {
     await host.handle({ type: 'load', requestId: 2, profile: { ...WEBLLM_PROFILES.desktop } });
 
     assert.equal(reloads.length, 1);
-    assert.equal(reloads[0].modelId, 'SmolLM2-360M-Instruct-q4f32_1-MLC');
+    assert.equal(reloads[0].modelId, 'Qwen3-0.6B-q4f32_1-MLC');
     assert.equal(reloads[0].chatOpts.context_window_size, 2048);
     assert.deepEqual(reloads[0].overrides, { context_window_size: 2048 });
     const results = posted.filter((message) => message.type === 'result').map((message) => message.value);
     assert.deepEqual(results, [
-        { alreadyLoaded: false, model: 'smollm', contextWindow: 2048, maxTokens: 256 },
-        { alreadyLoaded: true, model: 'smollm', contextWindow: 2048, maxTokens: 256 }
+        { alreadyLoaded: false, model: 'qwen', contextWindow: 2048, maxTokens: 256 },
+        { alreadyLoaded: true, model: 'qwen', contextWindow: 2048, maxTokens: 256 }
     ]);
 });
 
@@ -320,19 +326,17 @@ test('flushNow draws immediately, cancel drops what is waiting, and a new reply 
     assert.deepEqual(drawn, [1, 2, 3]);
 });
 
-test('SmolLM2 replaces every Llama build on a phone; Llama replaces nothing on a desktop', () => {
+test('Qwen3 replaces every Llama build and SmolLM2 on a phone; Llama replaces nothing on a desktop', () => {
     assert.deepEqual(
-        replacedWebLLMModels(WEBLLM_MODELS.smollm).map((entry) => [entry.modelId, entry.label]),
+        replacedWebLLMModels(WEBLLM_MODELS.qwen).map((entry) => [entry.modelId, entry.label]),
         [
             ['Llama-3.2-1B-Instruct-q4f32_1-MLC', 'Llama 3.2 1B'],
-            ['Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Llama 3.2 1B (q4f16)']
+            ['Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Llama 3.2 1B (q4f16)'],
+            ['SmolLM2-360M-Instruct-q4f32_1-MLC', 'SmolLM2 360M']
         ]
     );
     assert.deepEqual(replacedWebLLMModels(WEBLLM_MODELS.llama), []);
-    for (const entry of replacedWebLLMModels(WEBLLM_MODELS.smollm)) {
-        assert.ok(
-            !WEBLLM_MODELS.smollm.modelUrl.startsWith(entry.modelUrl),
-            'never a prefix of what it makes room for'
-        );
+    for (const entry of replacedWebLLMModels(WEBLLM_MODELS.qwen)) {
+        assert.ok(!WEBLLM_MODELS.qwen.modelUrl.startsWith(entry.modelUrl), 'never a prefix of what it makes room for');
     }
 });

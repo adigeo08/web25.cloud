@@ -26,9 +26,8 @@
  *   { type: 'delta', requestId, text }
  *   { type: 'result', requestId, ok: true, value } | { …, ok: false, error: { name, message } }
  *
- * A chat result's `finishReason` is WebLLM's (`stop`, `length`, or `abort` for
- * the user's Stop) or `loop`, when the loop guard ended the reply itself — with
- * `keepChars`, how much of the text to keep.
+ * A chat result's `finishReason` is WebLLM's: `stop`, `length`, or `abort` for
+ * the user's Stop. Nothing here cuts a reply on its own.
  *
  * Never imported by a service worker: inference does not run there.
  */
@@ -42,8 +41,7 @@ import {
     createAppConfig,
     getWebLLMModel
 } from './webllmConfig.js';
-import { asksForRepetition, createLoopGuard } from './webllmLoopGuard.js';
-import { formatContinuationPrompt } from './webllmPromptFormat.js';
+import { createThinkingFilter, formatContinuationPrompt } from './webllmPromptFormat.js';
 
 /**
  * Compare bytes against an SRI string (`sha384-…`).
@@ -241,54 +239,33 @@ export function createEngineHost({
     }
 
     /**
-     * Stream one reply: post its text as it comes, stop it if it loops, and
-     * report how it ended. `partial` is text the reply already had (a
-     * continuation): the loop guard reads it too, so a continuation that
-     * starts repeating the reply is caught, but it is never cut.
+     * Stream one reply: post its text as it comes, and report how it ended.
+     * Every token the model writes is shown; only the model's end-of-turn,
+     * the reply limit or the user's Stop ends a reply. A model run without
+     * thinking (Qwen3) has a `<think>` block at the start kept off the screen.
      *
      * @param {number} requestId
      * @param {AsyncIterable<any>} stream
-     * @param {{ allowRepeats: boolean, partial?: string }} options
+     * @param {{ hideThinking?: boolean }} [options]
      */
-    async function streamReply(requestId, stream, { allowRepeats, partial = '' }) {
-        const guard = createLoopGuard({ allowRepeats });
-        if (partial) guard.push(partial);
-
+    async function streamReply(requestId, stream, { hideThinking = false } = {}) {
+        const filter = hideThinking ? createThinkingFilter() : null;
         let finishReason = null;
         let usage = null;
-        /** @type {import('./webllmLoopGuard.js').LoopVerdict|null} */
-        let loop = null;
         for await (const chunk of stream) {
             if (interruptRequested) void engine.interruptGenerate();
             const choice = chunk?.choices?.[0];
             // Chat chunks carry `delta.content`; text-completion chunks carry `text`.
-            const text = choice?.delta?.content ?? choice?.text;
-            // After a loop is found the stream is only drained: WebLLM ends
-            // it once the interrupt lands, and nothing more is shown.
-            if (text && !loop) {
-                loop = guard.push(text);
-                if (loop) void engine.interruptGenerate();
-                else post({ type: 'delta', requestId, text });
-            }
+            const raw = choice?.delta?.content ?? choice?.text;
+            const text = filter && raw ? filter.push(raw) : raw;
+            if (text) post({ type: 'delta', requestId, text });
             if (choice?.finish_reason) finishReason = choice.finish_reason;
             if (chunk?.usage) usage = chunk.usage;
         }
-
-        // The engine reports its own interrupt as `abort`, which is what a
-        // user pressing Stop gets too; `loop` is how the page tells them apart.
-        if (loop) {
-            return {
-                finishReason: 'loop',
-                keepChars: Math.max(loop.keepChars, partial.length),
-                loopKind: loop.reason,
-                usage
-            };
-        }
+        const rest = filter?.flush();
+        if (rest) post({ type: 'delta', requestId, text: rest });
         return { finishReason, usage };
     }
-
-    /** @param {{ role: string, content: string }[]} messages */
-    const lastUserText = (messages) => [...messages].reverse().find((message) => message.role === 'user')?.content;
 
     async function chat(requestId, messages, requestedMax, schema) {
         if (!engine) throw new Error('The model is not loaded.');
@@ -302,18 +279,18 @@ export function createEngineHost({
             // token — unless the request itself asks for a short reply.
             const maxTokens = replyLimit(limits.maxTokens, requestedMax);
             const responseFormat = jsonResponseFormat(schema);
+            // A reasoning model run without its reasoning (Qwen3 on a phone):
+            // WebLLM starts the reply with an empty thinking block instead.
+            const noThinking = !getWebLLMModel(limits.model).thinking;
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
                 stream_options: { include_usage: true },
                 ...(maxTokens ? { max_tokens: maxTokens } : {}),
-                ...(responseFormat ? { response_format: responseFormat } : {})
+                ...(responseFormat ? { response_format: responseFormat } : {}),
+                ...(noThinking ? { extra_body: { enable_thinking: false } } : {})
             });
-            // Somebody asking for the same line five times is not a loop; nor
-            // is a grammar-constrained answer, which is short and structured.
-            return await streamReply(requestId, stream, {
-                allowRepeats: Boolean(responseFormat) || asksForRepetition(lastUserText(messages))
-            });
+            return await streamReply(requestId, stream, { hideThinking: noThinking });
         } finally {
             generating = false;
         }
@@ -343,10 +320,7 @@ export function createEngineHost({
                 stream_options: { include_usage: true },
                 ...(maxTokens ? { max_tokens: maxTokens } : {})
             });
-            return await streamReply(requestId, stream, {
-                allowRepeats: asksForRepetition(lastUserText(messages)),
-                partial
-            });
+            return await streamReply(requestId, stream);
         } finally {
             generating = false;
         }

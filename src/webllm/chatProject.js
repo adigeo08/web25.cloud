@@ -101,18 +101,24 @@ function nameFromText(text) {
 
 /**
  * @typedef {{ index: number, lang: string, code: string, filename: string|null,
- *             explicit: boolean, suggested: string|null }} CodeFile
+ *             explicit: boolean, suggested: string|null, complete: boolean }} CodeFile
+ *   complete  its fence was closed. A block left open in a finished reply is the
+ *             reply's last one, cut by the length limit (common on a phone, with
+ *             its 256-token replies) or never closed by the model.
  */
 
 /**
  * The code blocks of a reply as files: the name each one gives itself, or the
  * name it would get. `index` counts code blocks in the reply, in the order they
- * are drawn. Blocks still being streamed are left out.
+ * are drawn. A block still open is left out while the reply is being written;
+ * once it has `finished`, nothing more will come, so the open block is a file
+ * too — one that can be named, previewed, edited and saved, marked incomplete.
  *
  * @param {string} content
+ * @param {{ finished?: boolean }} [options]
  * @returns {CodeFile[]}
  */
-export function extractCodeFiles(content) {
+export function extractCodeFiles(content, { finished = false } = {}) {
     /** @type {CodeFile[]} */
     const files = [];
     const blocks = splitReply(content);
@@ -120,7 +126,7 @@ export function extractCodeFiles(content) {
     blocks.forEach((block, position) => {
         if (block.type !== 'code') return;
         index += 1;
-        if (!block.closed) return;
+        if (!block.closed && !finished) return;
         let { lang, code } = block;
         let name = null;
 
@@ -152,7 +158,8 @@ export function extractCodeFiles(content) {
             code,
             filename,
             explicit: Boolean(filename),
-            suggested: filename || SUGGESTED_NAMES[/** @type {keyof typeof SUGGESTED_NAMES} */ (lang)] || null
+            suggested: filename || SUGGESTED_NAMES[/** @type {keyof typeof SUGGESTED_NAMES} */ (lang)] || null,
+            complete: Boolean(block.closed)
         });
     });
     return files;
@@ -475,7 +482,12 @@ export class WebLLMProject {
         const key = `${conversationId}:${reply.id}:${`${reply.content || ''}`.length}`;
         if (this._saved.has(key)) return;
         this._saved.add(key);
-        const named = extractCodeFiles(reply.content).filter((file) => file.explicit && file.filename);
+        // A block left open is saved by itself only when the model ended the
+        // reply there; one cut by the length limit waits for Continue, or for
+        // the user's own Save.
+        const named = extractCodeFiles(reply.content, { finished: true }).filter(
+            (file) => file.explicit && file.filename && (file.complete || reply.finishReason === 'stop')
+        );
         if (named.length === 0) return;
         // The last block for a name is the one that counts.
         const byName = new Map(named.map((file) => [/** @type {string} */ (file.filename), file.code]));
@@ -499,7 +511,11 @@ export class WebLLMProject {
         const path = projectPath(filename);
         if (!path) throw new Error('Use a file name like index.html, style.css or js/app.js.');
         const message = (chat.messages || []).find((/** @type {any} */ entry) => `${entry.id}` === `${messageId}`);
-        const block = message ? extractCodeFiles(message.content).find((file) => file.index === blockIndex) : null;
+        const block = message
+            ? extractCodeFiles(message.content, { finished: !message.pending }).find(
+                  (file) => file.index === blockIndex
+              )
+            : null;
         if (!block) throw new Error('That code block is no longer in the conversation.');
         await this.save(conversationId, [{ path, code: block.code }], `Save ${path}`);
         return path;

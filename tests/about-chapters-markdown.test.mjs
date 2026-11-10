@@ -2,10 +2,12 @@
  * The About page's Deep dive chapters live in content/about/*.md.
  *
  * What is checked here, with no browser:
- *   - the six files render, through the real renderer, to exactly the markup
- *     they replaced (tests/fixtures/about-chapters.legacy.html) — nothing
- *     rewritten, shortened or dropped, feature grids included;
- *   - index.html is only the frame: six stable article shells, no chapter copy;
+ *   - the six original files render, through the real renderer, to exactly the
+ *     markup they replaced (tests/fixtures/about-chapters.legacy.html) — nothing
+ *     rewritten, shortened or dropped, feature grids included — and the two
+ *     written as Markdown from the start (Local AI, Code workspace) render to
+ *     a title and one feature grid like the rest;
+ *   - index.html is only the frame: eight stable article shells, no chapter copy;
  *   - the Markdown flavour the chapters rely on (heading offset, feature grids,
  *     link policy) behaves as documented;
  *   - the loader degrades one chapter at a time and never inserts HTML that did
@@ -40,8 +42,19 @@ const CHAPTERS = [
     },
     { slug: 'consent', label: 'Consent', title: '🤝 Cryptographic validity is not consent', features: 7 },
     { slug: 'nostr', label: 'Nostr relay', title: '🛰️ Nostr relay: browser to relay, directly', features: 4 },
-    { slug: 'security', label: 'Security profile', title: '🛡️ Security profile', features: 4 }
+    { slug: 'security', label: 'Security profile', title: '🛡️ Security profile', features: 4 },
+    { slug: 'ai', label: 'Local AI', title: '🤖 Local AI: a model on your own GPU', features: 7, written: true },
+    {
+        slug: 'workspace',
+        label: 'Code workspace',
+        title: '🧰 Code workspace: git in the browser',
+        features: 7,
+        written: true
+    }
 ];
+
+/** The chapters that were hardcoded before, in the fixture's order. */
+const LEGACY_CHAPTERS = CHAPTERS.filter((chapter) => !chapter.written);
 
 /** Collapse source formatting so the comparison sees content and structure only. */
 function normalize(html) {
@@ -59,19 +72,22 @@ const legacyArticles = LEGACY.match(/<article\b[\s\S]*?<\/article>/g);
 
 // ── the Markdown files are the chapters ─────────────────────────────────────
 
-test('content/about holds the six chapter files and nothing else is expected there', () => {
+test('content/about holds the eight chapter files and nothing else is expected there', () => {
     assert.equal(legacyArticles.length, 6, 'fixture holds the six original chapters');
+    assert.equal(LEGACY_CHAPTERS.length, 6);
     for (const { slug } of CHAPTERS) {
         assert.ok(existsSync(new URL(`../content/about/${slug}.md`, import.meta.url)), `${slug}.md exists`);
     }
 });
 
-for (const [index, chapter] of CHAPTERS.entries()) {
+for (const [index, chapter] of LEGACY_CHAPTERS.entries()) {
     test(`${chapter.slug}.md renders to exactly the markup of the chapter it replaced`, () => {
         const rendered = `<article class="about-card lp-reveal">${renderChapterMarkdown(read(`content/about/${chapter.slug}.md`))}</article>`;
         assert.equal(normalize(rendered), normalize(legacyArticles[index]));
     });
+}
 
+for (const chapter of CHAPTERS) {
     test(`${chapter.slug}.md keeps its title, emoji and ${chapter.features} feature items`, () => {
         const html = renderChapterMarkdown(read(`content/about/${chapter.slug}.md`));
         assert.ok(html.startsWith(`<h3>${chapter.title}</h3>`), 'title is the first element, as an <h3>');
@@ -107,9 +123,9 @@ const CARDS = INDEX_HTML.slice(
     INDEX_HTML.indexOf('<!-- Status -->')
 );
 
-test('index.html keeps six stable chapter articles inside .lp-showcase-cards', () => {
+test('index.html keeps eight stable chapter articles inside .lp-showcase-cards', () => {
     const articles = CARDS.match(/<article\b[^>]*>/g);
-    assert.equal(articles.length, 6);
+    assert.equal(articles.length, CHAPTERS.length);
     for (const [index, { slug }] of CHAPTERS.entries()) {
         assert.match(articles[index], /^<article class="about-card lp-reveal"/);
         assert.match(articles[index], new RegExp(`id="about-${slug}"`));
@@ -318,7 +334,7 @@ test('every chapter is fetched, rendered, sanitized and announced', async () => 
     }
     assert.deepEqual(
         doc.events.map((e) => e.type),
-        Array(6).fill(ABOUT_CHAPTERS_RENDERED_EVENT)
+        Array(CHAPTERS.length).fill(ABOUT_CHAPTERS_RENDERED_EVENT)
     );
 });
 
@@ -350,8 +366,8 @@ test('a chapter that fails to load shows its name, its source and a retry — an
         assert.equal(retry.dataset.aboutRetry, '');
     }
     const ready = doc.articles.filter((a) => a.dataset.aboutState === 'ready');
-    assert.equal(ready.length, 4);
-    assert.equal(doc.events.length, 4);
+    assert.equal(ready.length, CHAPTERS.length - 2);
+    assert.equal(doc.events.length, CHAPTERS.length - 2);
 });
 
 test('an empty file and an HTML page served for a missing file are failures, not content', async () => {
@@ -427,4 +443,17 @@ test('Try again reloads just that chapter', async () => {
     }
     assert.equal(identityFetches, 2);
     assert.equal(doc.articles[0].dataset.aboutState, 'ready');
+});
+
+test('the Local AI and Code workspace chapters say what runs where, with links that open in a new tab', () => {
+    const ai = renderChapterMarkdown(read('content/about/ai.md'));
+    assert.match(ai, /<a href="https:\/\/webllm\.mlc\.ai" target="_blank" rel="noopener noreferrer">WebLLM<\/a>/);
+    assert.match(ai, /<strong>Llama 3\.2 1B<\/strong>/);
+    assert.match(ai, /<strong>Qwen3 0\.6B<\/strong>/);
+    assert.match(ai, /no inference\s+server/);
+
+    const workspace = renderChapterMarkdown(read('content/about/workspace.md'));
+    assert.match(workspace, /href="https:\/\/isomorphic-git\.org" target="_blank"/);
+    assert.match(workspace, /href="https:\/\/codemirror\.net" target="_blank"/);
+    assert.match(workspace, /<code>npub1…<\/code>/);
 });

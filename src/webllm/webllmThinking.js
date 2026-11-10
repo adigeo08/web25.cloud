@@ -131,7 +131,7 @@ export function stepInstruction(index, total) {
 
 /**
  * A step's text with its last code block closed, if the step ended inside one
- * — cut at the step's token limit, by the loop guard, or by Stop. Left open,
+ * — cut at the step's token limit, or by Stop. Left open,
  * that block would take in the next step's heading and code, and every
  * snippet after it would be drawn as one broken block.
  * @param {string} text
@@ -148,11 +148,10 @@ export function closeOpenFence(text) {
  *   complete    the model ended it, and its code holds together
  *   truncated   it reached the step's token limit (after the one continuation
  *               it may get)
- *   looped      the loop guard cut it; the first pass was kept
  *   stopped     the user pressed Stop
  *   malformed   the model ended it, but its code does not hold together
  *
- * @typedef {'complete'|'truncated'|'looped'|'stopped'|'malformed'} StepStatus
+ * @typedef {'complete'|'truncated'|'stopped'|'malformed'} StepStatus
  */
 
 /** Languages whose brackets are checked. */
@@ -277,17 +276,16 @@ export function stepStatus(finishReason, text, { stopped = false } = {}) {
     if (stopped || finishReason === 'abort') return 'stopped';
     if (finishReason === 'length') return 'truncated';
     const { whole } = stepStructure(text);
-    if (finishReason === 'loop') return whole ? 'looped' : 'malformed';
     return whole ? 'complete' : 'malformed';
 }
 
 /**
  * Whether a step's text can be built on as earlier work: written to the end,
- * or cut by the loop guard after a first pass that holds together.
+ * with code that holds together.
  * @param {StepStatus} status
  */
 export function stepConfirmed(status) {
-    return status === 'complete' || status === 'looped';
+    return status === 'complete';
 }
 
 /**

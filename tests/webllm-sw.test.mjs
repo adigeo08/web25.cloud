@@ -378,9 +378,9 @@ test('the page asks for the old build in status checks, and removes it only thro
     const client = createWebLLMServiceWorkerClient({ container: { register: async () => ({ active: worker }) } });
 
     await client.status();
-    // A desktop page loads Llama: the old q4f16 build and the phone's SmolLM2 are the others.
+    // A desktop page loads Llama: the old q4f16 build, the old SmolLM2 and the phone's Qwen3 are the others.
     assert.deepEqual(posted[0].model, { modelUrl: WEBLLM_MODEL_URL, modelLibUrl: WEBLLM_MODEL_LIB_URL });
-    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL, SMOLLM]);
+    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL, SMOLLM, QWEN]);
     assert.equal(
         posted.some((message) => message.type === 'CLEAR_MODEL'),
         false
@@ -390,15 +390,19 @@ test('the page asks for the old build in status checks, and removes it only thro
     const clears = posted.filter((message) => message.type === 'CLEAR_MODEL');
     assert.deepEqual(
         clears.map((message) => message.model),
-        [LEGACY_MODEL, SMOLLM]
+        [LEGACY_MODEL, SMOLLM, QWEN]
     );
     assert.ok(clears.every((message) => message.includeLibrary === false));
 });
 
-const SMOLLM = { modelUrl: WEBLLM_MODELS.smollm.modelUrl, modelLibUrl: WEBLLM_MODELS.smollm.modelLibUrl };
+const SMOLLM = {
+    modelUrl: WEBLLM_LEGACY_MODELS[1].modelUrl,
+    modelLibUrl: WEBLLM_LEGACY_MODELS[1].modelLibUrl
+};
+const QWEN = { modelUrl: WEBLLM_MODELS.qwen.modelUrl, modelLibUrl: WEBLLM_MODELS.qwen.modelLibUrl };
 const LLAMA = { modelUrl: WEBLLM_MODEL_URL, modelLibUrl: WEBLLM_MODEL_LIB_URL };
 
-test('a phone page asks about SmolLM2, and counts Llama among the builds it does not load', async () => {
+test('a phone page asks about Qwen3, and counts Llama and SmolLM2 among the builds it does not load', async () => {
     const posted = [];
     const worker = {
         postMessage(message, transfer) {
@@ -408,26 +412,25 @@ test('a phone page asks about SmolLM2, and counts Llama among the builds it does
     };
     const client = createWebLLMServiceWorkerClient({
         container: { register: async () => ({ active: worker }) },
-        model: WEBLLM_MODELS.smollm
+        model: WEBLLM_MODELS.qwen
     });
     await client.status();
     await client.clearModel();
-    assert.deepEqual(posted[0].model, SMOLLM);
-    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL, LLAMA]);
-    assert.deepEqual(posted[1].model, SMOLLM, 'only its own model is ever cleared by clearModel');
+    assert.deepEqual(posted[0].model, QWEN);
+    assert.deepEqual(posted[0].legacy, [LEGACY_MODEL, SMOLLM, LLAMA]);
+    assert.deepEqual(posted[1].model, QWEN, 'only its own model is ever cleared by clearModel');
 });
 
-test('the service worker accepts SmolLM2 and keeps it apart from Llama', async () => {
-    assert.match(
-        SMOLLM.modelUrl,
-        /^https:\/\/huggingface\.co\/mlc-ai\/SmolLM2-360M-Instruct-q4f32_1-MLC\/resolve\/main\/$/
-    );
-    assert.ok(!SMOLLM.modelUrl.startsWith(LLAMA.modelUrl) && !LLAMA.modelUrl.startsWith(SMOLLM.modelUrl));
-    const status = await sw.handleRequest({ type: 'STATUS', model: SMOLLM, library: { url: WEBLLM_LIBRARY_URL } });
-    assert.ok(status.model, 'a SmolLM2 status is answered, not refused as an unknown model');
+test('the service worker accepts Qwen3 and keeps it apart from Llama and SmolLM2', async () => {
+    assert.match(QWEN.modelUrl, /^https:\/\/huggingface\.co\/mlc-ai\/Qwen3-0\.6B-q4f32_1-MLC\/resolve\/main\/$/);
+    for (const other of [LLAMA, SMOLLM]) {
+        assert.ok(!QWEN.modelUrl.startsWith(other.modelUrl) && !other.modelUrl.startsWith(QWEN.modelUrl));
+    }
+    const status = await sw.handleRequest({ type: 'STATUS', model: QWEN, library: { url: WEBLLM_LIBRARY_URL } });
+    assert.ok(status.model, 'a Qwen3 status is answered, not refused as an unknown model');
 });
 
-test('a phone deletes every Llama build to make room for SmolLM2; a desktop deletes nothing', async () => {
+test('a phone deletes every Llama build and SmolLM2 to make room for Qwen3; a desktop deletes nothing', async () => {
     const make = (model) => {
         const posted = [];
         const worker = {
@@ -435,7 +438,14 @@ test('a phone deletes every Llama build to make room for SmolLM2; a desktop dele
                 posted.push(message);
                 transfer[0].postMessage({
                     ok: true,
-                    result: { removed: message.model.modelUrl === LLAMA.modelUrl ? 5 : 0 }
+                    result: {
+                        removed:
+                            message.model.modelUrl === QWEN.modelUrl
+                                ? 99
+                                : message.model.modelUrl === LLAMA.modelUrl
+                                  ? 5
+                                  : 2
+                    }
                 });
             }
         };
@@ -446,16 +456,18 @@ test('a phone deletes every Llama build to make room for SmolLM2; a desktop dele
         return { client, posted };
     };
 
-    const phone = make(WEBLLM_MODELS.smollm);
+    const phone = make(WEBLLM_MODELS.qwen);
     assert.deepEqual(await phone.client.clearReplacedModels(), [
         { modelId: 'Llama-3.2-1B-Instruct-q4f32_1-MLC', label: 'Llama 3.2 1B', removed: 5 },
-        { modelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B (q4f16)', removed: 0 }
+        { modelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B (q4f16)', removed: 2 },
+        { modelId: 'SmolLM2-360M-Instruct-q4f32_1-MLC', label: 'SmolLM2 360M', removed: 2 }
     ]);
     assert.deepEqual(
         phone.posted.map((message) => [message.type, message.model, message.includeLibrary]),
         [
             ['CLEAR_MODEL', LLAMA, false],
-            ['CLEAR_MODEL', LEGACY_MODEL, false]
+            ['CLEAR_MODEL', LEGACY_MODEL, false],
+            ['CLEAR_MODEL', SMOLLM, false]
         ],
         'the library cache is shared and stays'
     );
@@ -465,23 +477,24 @@ test('a phone deletes every Llama build to make room for SmolLM2; a desktop dele
     assert.deepEqual(desktop.posted, [], 'a desktop asks the worker nothing');
 });
 
-test('deleting Llama from a phone leaves SmolLM2 and the library where they are', async () => {
+test('deleting Llama and SmolLM2 from a phone leaves Qwen3 and the library where they are', async () => {
     const at = (base, file) => new URL(file, base).href;
     const merge = (name, entries) =>
         storage.seed(name, { ...Object.fromEntries(storage.stores.get(name)?.entries || []), ...entries });
-    for (const entry of [LLAMA, SMOLLM]) {
+    for (const entry of [LLAMA, SMOLLM, QWEN]) {
         merge(WEBLLM_NATIVE_CACHES.config, { [at(entry.modelUrl, 'mlc-chat-config.json')]: CHAT_CONFIG });
         merge(WEBLLM_NATIVE_CACHES.wasm, { [entry.modelLibUrl]: 'wasm' });
         merge(WEBLLM_NATIVE_CACHES.model, { [at(entry.modelUrl, 'params_shard_0.bin')]: 'weights' });
     }
     await sw.handleRequest({ type: 'CLEAR_MODEL', model: LLAMA, includeLibrary: false });
+    await sw.handleRequest({ type: 'CLEAR_MODEL', model: SMOLLM, includeLibrary: false });
     const keys = (name) => [...(storage.stores.get(name)?.entries.keys() || [])];
     const all = [WEBLLM_NATIVE_CACHES.model, WEBLLM_NATIVE_CACHES.config, WEBLLM_NATIVE_CACHES.wasm].flatMap(keys);
     assert.ok(all.length > 0);
     assert.ok(
-        all.every((url) => !url.includes('Llama-3.2-1B')),
-        'no Llama file is left'
+        all.every((url) => !url.includes('Llama-3.2-1B') && !url.includes('SmolLM2')),
+        'no Llama or SmolLM2 file is left'
     );
-    assert.ok(keys(WEBLLM_NATIVE_CACHES.model).includes(at(SMOLLM.modelUrl, 'params_shard_0.bin')));
-    assert.ok(keys(WEBLLM_NATIVE_CACHES.wasm).includes(SMOLLM.modelLibUrl));
+    assert.ok(keys(WEBLLM_NATIVE_CACHES.model).includes(at(QWEN.modelUrl, 'params_shard_0.bin')));
+    assert.ok(keys(WEBLLM_NATIVE_CACHES.wasm).includes(QWEN.modelLibUrl));
 });

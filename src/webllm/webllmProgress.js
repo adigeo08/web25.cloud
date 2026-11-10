@@ -23,10 +23,6 @@ import {
     WEBLLM_REQUEST_FRAMING_TOKENS
 } from './webllmConfig.js';
 
-/** Shown under a reply the loop guard cut off. */
-export const LOOP_NOTICE =
-    'Stopped automatically: the model started repeating itself. Try rephrasing, or start a new chat.';
-
 /**
  * Shown under a reply that stopped at the length limit and cannot be continued:
  * the question, the reply so far and the room for more no longer fit the
@@ -253,9 +249,9 @@ export function classifyError(error, model = WEBLLM_MODELS.llama) {
  * The real count lives in the tokenizer, inside the engine, and is not
  * available before the request is sent. This errs high: the Llama 3 tokenizer
  * averages about four characters per token on English prose and about three on
- * code, so three characters per token never undercounts either. SmolLM2's
- * smaller vocabulary (49,152 tokens) can need more tokens for the same text,
- * which is what the mobile profile's 128-token margin is for; characters
+ * code, so three characters per token never undercounts either. Qwen3's
+ * tokenizer (151,936 tokens) is in the same range, and the mobile profile keeps
+ * a 128-token margin besides; characters
  * outside ASCII (accents, CJK, emoji) cost more and are counted at 1.5.
  *
  * @param {string} text
@@ -276,9 +272,9 @@ const messageTokens = (message) => estimateTokens(message.content) + WEBLLM_MESS
  * What of the conversation the model is shown.
  *
  * Only exchanges whose reply finished — it ended on its own, or at the length
- * limit — are passed back. A reply that failed, that the user stopped, or that
- * the loop guard cut off is not context, it is the problem: handing a looping
- * answer back is the quickest way to get another one. Its question goes with
+ * limit — are passed back. A reply that failed or that the user stopped is not
+ * context, it is the problem: handing a broken answer back is the quickest way
+ * to get another one. Its question goes with
  * it, so what the model sees still alternates user and assistant and no
  * question is answered twice.
  *

@@ -260,7 +260,7 @@ async function startScriptedChat(
                         window.__modelCleared = true;
                         return {};
                     },
-                    // What a phone deleted to make room for SmolLM2, when scripted.
+                    // What a phone deleted to make room for Qwen3, when scripted.
                     ...(replacedModels ? { clearReplacedModels: async () => replacedModels } : {})
                 },
                 createEngine: async () => engine,
@@ -485,28 +485,28 @@ for (const [name, viewport] of [
 }
 
 test(
-    'a reply stopped by the loop guard says why, a cut-off one offers Continue, and a normal one says nothing',
+    'a repeating reply is shown whole, a cut-off one offers Continue, and a normal one says nothing',
     { skip: SKIP },
     async () => {
         const cases = [
-            { chunks: ['Hello', ' there.'], result: { finishReason: 'stop' }, note: null, looped: false, more: false },
+            { chunks: ['Hello', ' there.'], result: { finishReason: 'stop' }, note: null, more: false },
             {
-                chunks: ['Hello there. ', 'Hello there. ', 'Hello there. '],
-                result: { finishReason: 'loop', keepChars: 12 },
-                note: /Stopped automatically: the model started repeating itself/,
-                looped: true,
-                more: false
+                // No loop guard: repeats are the model's, shown as written.
+                chunks: ['Hello there. ', 'Hello there. ', 'Hello there.'],
+                result: { finishReason: 'stop' },
+                note: null,
+                more: false,
+                body: 'Hello there. Hello there. Hello there.'
             },
             {
                 chunks: ['A long answer that goes on and'],
                 result: { finishReason: 'length' },
                 note: null,
-                looped: false,
                 more: true
             },
-            { chunks: ['Partial'], result: { finishReason: 'abort' }, note: /^Stopped\.$/, looped: false, more: false }
+            { chunks: ['Partial'], result: { finishReason: 'abort' }, note: /^Stopped\.$/, more: false }
         ];
-        for (const { chunks, result, note, looped, more } of cases) {
+        for (const { chunks, result, note, more, body } of cases) {
             const { page, context, problems } = await openApp();
             try {
                 await openWebLLMTab(page, DESKTOP, { scripted: true });
@@ -516,14 +516,12 @@ test(
                 const reply = await page.$eval('#webllm-messages .webllm-message:not(.is-own)', (item) => ({
                     body: item.querySelector('.channels-message-body').textContent,
                     note: item.querySelector('.webllm-message-note')?.textContent ?? null,
-                    looped: item.classList.contains('is-looped'),
                     more: Boolean(item.querySelector('.webllm-continue-btn'))
                 }));
                 if (note) assert.match(reply.note, note);
                 else assert.equal(reply.note, null);
-                assert.equal(reply.looped, looped);
                 assert.equal(reply.more, more);
-                if (result.finishReason === 'loop') assert.equal(reply.body, 'Hello there.', 'the repeats are cut');
+                if (body) assert.equal(reply.body, body, 'nothing is cut');
                 assert.deepEqual(problems, []);
             } finally {
                 await context.close();
@@ -704,7 +702,7 @@ test('Stop mid-stream shows everything generated so far, and New chat clears it'
     }
 });
 
-test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by it', { skip: SKIP }, async () => {
+test('on a phone the tab installs and names Qwen3 0.6B, and Auto is chosen by it', { skip: SKIP }, async () => {
     const { page, context, problems } = await openApp({ viewport: PHONE });
     try {
         await openWebLLMTab(page, PHONE, { scripted: true });
@@ -721,7 +719,7 @@ test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by 
         // The Llama this phone held is gone, and the install screen says why.
         assert.match(
             await page.textContent('#webllm-device'),
-            /^Llama 3\.2 1B was removed from this device to make room for SmolLM2 360M\. WebGPU ready/
+            /^Llama 3\.2 1B was removed from this device to make room for Qwen3 0\.6B\. WebGPU ready/
         );
         const deviceLine = await page.textContent('#webllm-device');
 
@@ -734,29 +732,25 @@ test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by 
             license: document.getElementById('webllm-license-link').getAttribute('href')
         }));
         assert.deepEqual(install, {
-            title: 'Install SmolLM in Your Browser',
+            title: 'Install Qwen in Your Browser',
             lede: install.lede,
-            size: '~250 MB',
-            button: 'Install SmolLM2 360M',
-            footer: 'SmolLM2 by Hugging Face · Apache License 2.0',
+            size: '~400 MB',
+            button: 'Install Qwen3 0.6B',
+            footer: 'Qwen3 by the Qwen team, Alibaba Cloud · Apache License 2.0',
             license: 'https://www.apache.org/licenses/LICENSE-2.0'
         });
-        assert.match(install.lede, /^Download SmolLM directly into your browser/);
+        assert.match(install.lede, /^Download Qwen directly into your browser/);
         assert.doesNotMatch(
             (await page.textContent('#webllm-install')).replace(deviceLine, ''),
             /Llama/,
-            'apart from the removal note, the install screen is SmolLM2’s'
+            'apart from the removal note, the install screen is Qwen3’s'
         );
 
         await page.click('#webllm-install-btn');
         await page.waitForSelector('#webllm-chat:not(.hidden)');
-        assert.equal(
-            await page.evaluate(() => window.__loadedProfile.model),
-            'smollm',
-            'the engine is asked for SmolLM2'
-        );
-        assert.equal((await page.textContent('#webllm-chat .dm-peer-label')).trim(), 'SmolLM2 360M · Local AI');
-        assert.equal((await page.textContent('.webllm-empty-title')).trim(), 'SmolLM is ready');
+        assert.equal(await page.evaluate(() => window.__loadedProfile.model), 'qwen', 'the engine is asked for Qwen3');
+        assert.equal((await page.textContent('#webllm-chat .dm-peer-label')).trim(), 'Qwen3 0.6B · Local AI');
+        assert.equal((await page.textContent('.webllm-empty-title')).trim(), 'Qwen is ready');
 
         await page.fill('#webllm-input', 'What is a closure?');
         await page.press('#webllm-input', 'Enter');
@@ -767,8 +761,43 @@ test('on a phone the tab installs and names SmolLM2 360M, and Auto is chosen by 
             ['decide', 'chat'],
             "on Auto the phone's model decides how to answer"
         );
-        assert.equal((await page.textContent('.webllm-mode')).trim(), 'Short · chosen by SmolLM');
+        assert.equal((await page.textContent('.webllm-mode')).trim(), 'Short · chosen by Qwen');
         assert.doesNotMatch(await page.textContent('#webllm-chat'), /Llama/);
+        assert.deepEqual(problems, []);
+    } finally {
+        await context.close();
+    }
+});
+
+test('on a phone, code cut by the reply limit can still be named, previewed and saved', { skip: SKIP }, async () => {
+    const { page, context, problems } = await openApp({ viewport: PHONE });
+    try {
+        await openWebLLMTab(page, PHONE, { scripted: true });
+        await startScriptedChat(
+            page,
+            ['Here:\n\n```html index.html\n<h1>Hi</h1>\n<p>more'],
+            { finishReason: 'length' },
+            {
+                profile: 'mobile',
+                project: true,
+                wallet: '0x00000000000000000000000000000000000000c1',
+                decision: 'short'
+            }
+        );
+        await page.waitForSelector('#webllm-install-btn:not([disabled])');
+        await page.click('#webllm-install-btn');
+        await page.waitForSelector('#webllm-chat:not(.hidden)');
+        await page.fill('#webllm-input', 'Make a page');
+        await page.press('#webllm-input', 'Enter');
+        await page.waitForSelector('.webllm-code [data-save-code]');
+
+        assert.equal(await page.inputValue('.webllm-code .webllm-code-name'), 'index.html');
+        assert.equal(await page.isVisible('.webllm-code [data-open-canvas]'), true, 'Preview is offered');
+        assert.equal(await page.isVisible('.webllm-continue button, [aria-label="Continue this reply"]'), true);
+        assert.deepEqual(await page.evaluate(() => window.__project.state.files), [], 'not saved by itself');
+
+        await page.click('.webllm-code [data-save-code]');
+        await page.waitForFunction(() => window.__project.state.files.includes('index.html'));
         assert.deepEqual(problems, []);
     } finally {
         await context.close();
