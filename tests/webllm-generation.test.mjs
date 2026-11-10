@@ -455,20 +455,39 @@ test('a failed request is shown, kept out of context, and does not poison the ne
 const MOBILE = WEBLLM_PROFILES.mobile;
 const DESKTOP = WEBLLM_PROFILES.desktop;
 
-test('mobile: the engine loads SmolLM2 360M with a 2048-token context and its own temperature', async () => {
+test('mobile: the engine loads Qwen3 0.6B with a 2048-token context and its non-thinking sampling', async () => {
     const { llm } = await session(() => ({ text: 'Hi!' }), { profile: MOBILE });
     assert.deepEqual(llm.state.reloads, [
         {
-            modelId: 'SmolLM2-360M-Instruct-q4f32_1-MLC',
-            chatOpts: { ...WEBLLM_CHAT_OPTIONS, temperature: 0.2, context_window_size: 2048 }
+            modelId: 'Qwen3-0.6B-q4f32_1-MLC',
+            chatOpts: { ...WEBLLM_CHAT_OPTIONS, temperature: 0.7, top_p: 0.8, context_window_size: 2048 }
         }
     ]);
     const [record] = llm.state.engineConfig.appConfig.model_list;
     assert.deepEqual(record.overrides, { context_window_size: 2048 });
-    assert.equal(record.model_id, 'SmolLM2-360M-Instruct-q4f32_1-MLC');
-    assert.equal(record.model, 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/');
-    assert.match(record.model_lib, /\/v0_2_84\/base\/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu\.wasm$/);
-    assert.equal(record.vram_required_MB, 579.61);
+    assert.equal(record.model_id, 'Qwen3-0.6B-q4f32_1-MLC');
+    assert.equal(record.model, 'https://huggingface.co/mlc-ai/Qwen3-0.6B-q4f32_1-MLC/resolve/main/');
+    assert.match(record.model_lib, /\/v0_2_84\/base\/Qwen3-0.6B-q4f32_1_cs1k-webgpu\.wasm$/);
+    assert.equal(record.vram_required_MB, 1924.98);
+});
+
+test('mobile: every chat request asks Qwen3 for its non-thinking mode; desktop requests do not', async () => {
+    const phone = await session(() => ({ text: 'Hi!' }), { profile: MOBILE });
+    await phone.controller.send('hey');
+    assert.deepEqual(phone.llm.state.requests[0].extra_body, { enable_thinking: false });
+
+    const desktop = await session(() => ({ text: 'Hi!' }), { profile: DESKTOP });
+    await desktop.controller.send('hey');
+    assert.equal(desktop.llm.state.requests[0].extra_body, undefined);
+});
+
+test('mobile: a thinking block at the start of a reply is never shown', async () => {
+    const { controller } = await session(
+        () => ({ text: '<think>\nThe user greets me.\n</think>\n\nHello! How can I help?', size: 4 }),
+        { profile: MOBILE }
+    );
+    await controller.send('hey');
+    assert.equal(lastReply(controller).content, 'Hello! How can I help?');
 });
 
 test('desktop: the engine still loads Llama 3.2 1B with the shared sampling', async () => {
@@ -485,7 +504,7 @@ test('mobile: a short request carries the shorter of its own limit and 256, and 
     const cap = Math.min(256, WEBLLM_THINKING.mobile.shortMaxTokens);
     const [request] = llm.state.requests;
     assert.equal(request.max_tokens, cap);
-    assert.deepEqual(Object.keys(request).sort(), ['max_tokens', 'messages', 'stream', 'stream_options']);
+    assert.deepEqual(Object.keys(request).sort(), ['extra_body', 'max_tokens', 'messages', 'stream', 'stream_options']);
     const reply = lastReply(controller);
     assert.equal(reply.finishReason, 'length');
     assert.equal(reply.continuable, true);
@@ -580,12 +599,12 @@ test('Continue picks the reply up in place: same message, no new question, the p
     const [request] = llm.state.completions;
     assert.equal(request.max_tokens, 256, 'the mobile limit applies to each continuation');
     assert.equal(request.stream, true);
-    // The mobile model is SmolLM2: its prompt is ChatML, not the Llama 3 format.
+    // The mobile model is Qwen3: its prompt is ChatML with an empty thinking block, not the Llama 3 format.
     assert.ok(request.prompt.startsWith('<|im_start|>system\n'));
     assert.ok(request.prompt.includes('<|im_start|>user\nExplain closures in detail<|im_end|>\n'));
     assert.ok(!request.prompt.includes('<|start_header_id|>'));
     assert.ok(
-        request.prompt.endsWith(`<|im_start|>assistant\n${cut}`),
+        request.prompt.endsWith(`<|im_start|>assistant\n<think>\n\n</think>\n\n${cut}`),
         'the prompt stops inside the unfinished reply, with no end-of-turn after it'
     );
     assert.equal(llm.state.requests.length, 1, 'Continue is not a chat request');

@@ -46,7 +46,7 @@ function scrollToBottom(el) {
 /**
  * @typedef {{ isLast: boolean, generating: boolean, lookup: string|null, project?: boolean,
  *             modelName?: string }} BubbleContext
- *   modelName  how the chat names the model it runs (Llama, SmolLM)
+ *   modelName  how the chat names the model it runs (Llama, Qwen)
  */
 
 /**
@@ -245,7 +245,7 @@ function renderEmptyThread(list, modelName) {
 
 /**
  * Name the model this page runs wherever the markup names one. The markup
- * names Llama 3.2 1B, the desktop model; a phone runs SmolLM2 360M instead
+ * names Llama 3.2 1B, the desktop model; a phone runs Qwen3 0.6B instead
  * (see `WEBLLM_PROFILES`), and there every mention in the tab — text and
  * labels — is rewritten here, the credit line and the licence first. All of
  * it is text: nothing is parsed as markup.

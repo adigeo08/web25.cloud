@@ -313,5 +313,5 @@ test('every project commit is authored by the user’s npub, or the wallet witho
         log.map((entry) => entry.author),
         [NPUB, NPUB, NPUB]
     );
-    assert.ok(log.every((entry) => !/llama|smollm/i.test(`${entry.author} ${entry.message}`)));
+    assert.ok(log.every((entry) => !/llama|qwen/i.test(`${entry.author} ${entry.message}`)));
 });

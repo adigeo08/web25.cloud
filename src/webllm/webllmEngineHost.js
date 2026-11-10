@@ -41,7 +41,7 @@ import {
     createAppConfig,
     getWebLLMModel
 } from './webllmConfig.js';
-import { formatContinuationPrompt } from './webllmPromptFormat.js';
+import { createThinkingFilter, formatContinuationPrompt } from './webllmPromptFormat.js';
 
 /**
  * Compare bytes against an SRI string (`sha384-…`).
@@ -241,23 +241,29 @@ export function createEngineHost({
     /**
      * Stream one reply: post its text as it comes, and report how it ended.
      * Every token the model writes is shown; only the model's end-of-turn,
-     * the reply limit or the user's Stop ends a reply.
+     * the reply limit or the user's Stop ends a reply. A model run without
+     * thinking (Qwen3) has a `<think>` block at the start kept off the screen.
      *
      * @param {number} requestId
      * @param {AsyncIterable<any>} stream
+     * @param {{ hideThinking?: boolean }} [options]
      */
-    async function streamReply(requestId, stream) {
+    async function streamReply(requestId, stream, { hideThinking = false } = {}) {
+        const filter = hideThinking ? createThinkingFilter() : null;
         let finishReason = null;
         let usage = null;
         for await (const chunk of stream) {
             if (interruptRequested) void engine.interruptGenerate();
             const choice = chunk?.choices?.[0];
             // Chat chunks carry `delta.content`; text-completion chunks carry `text`.
-            const text = choice?.delta?.content ?? choice?.text;
+            const raw = choice?.delta?.content ?? choice?.text;
+            const text = filter && raw ? filter.push(raw) : raw;
             if (text) post({ type: 'delta', requestId, text });
             if (choice?.finish_reason) finishReason = choice.finish_reason;
             if (chunk?.usage) usage = chunk.usage;
         }
+        const rest = filter?.flush();
+        if (rest) post({ type: 'delta', requestId, text: rest });
         return { finishReason, usage };
     }
 
@@ -273,14 +279,18 @@ export function createEngineHost({
             // token — unless the request itself asks for a short reply.
             const maxTokens = replyLimit(limits.maxTokens, requestedMax);
             const responseFormat = jsonResponseFormat(schema);
+            // A reasoning model run without its reasoning (Qwen3 on a phone):
+            // WebLLM starts the reply with an empty thinking block instead.
+            const noThinking = !getWebLLMModel(limits.model).thinking;
             const stream = await engine.chat.completions.create({
                 messages,
                 stream: true,
                 stream_options: { include_usage: true },
                 ...(maxTokens ? { max_tokens: maxTokens } : {}),
-                ...(responseFormat ? { response_format: responseFormat } : {})
+                ...(responseFormat ? { response_format: responseFormat } : {}),
+                ...(noThinking ? { extra_body: { enable_thinking: false } } : {})
             });
-            return await streamReply(requestId, stream);
+            return await streamReply(requestId, stream, { hideThinking: noThinking });
         } finally {
             generating = false;
         }

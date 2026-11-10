@@ -694,10 +694,10 @@ wrap and by its own id in the inbox ledger — so a relay replaying it, a
 re-wrapped copy, or the same message seen live and delivered again later is
 neither shown nor counted twice.
 
-### 9) WebLLM — a local AI chat (Llama 3.2 1B on desktop, SmolLM2 360M on mobile)
+### 9) WebLLM — a local AI chat (Llama 3.2 1B on desktop, Qwen3 0.6B on mobile)
 
 A signed-in-only **WebLLM** tab runs `Llama-3.2-1B-Instruct-q4f32_1-MLC` on desktops
-and laptops, and `SmolLM2-360M-Instruct-q4f32_1-MLC` on phones and tablets, entirely
+and laptops, and `Qwen3-0.6B-q4f32_1-MLC` on phones and tablets, entirely
 in the browser with [MLC WebLLM](https://github.com/mlc-ai/web-llm) on WebGPU. No
 inference server, no API key, and no link to Nostr, WebRTC, the wallet or the
 Chat service.
@@ -705,7 +705,7 @@ Chat service.
 - **Lazy by construction.** Start-up loads only `src/webllm/WebLLMTab.js`, a
   gate with no imports. Opening the tab (while signed in) imports the app,
   checks WebGPU and reads the cache state; the weights download only after
-  **Install Llama 3.2 1B** (**Install SmolLM2 360M** on a phone). A later session finds the model cached and loads it
+  **Install Llama 3.2 1B** (**Install Qwen3 0.6B** on a phone). A later session finds the model cached and loads it
   straight into the chat.
 - **Pinned library.** `@mlc-ai/web-llm@0.2.85` (`lib/index.js`) from jsDelivr,
   checked against a pinned SHA-384 before it runs, and imported from a blob URL.
@@ -781,33 +781,38 @@ short multi-turn exchange in both.
 
 #### Mobile model, memory profile and batched streaming
 
-Phones and tablets run a smaller model with a smaller memory profile; desktops keep exactly
+Phones and tablets run a different model with a smaller memory profile; desktops keep exactly
 the settings above. Both live in `WEBLLM_PROFILES` and `WEBLLM_MODELS`
 (`src/webllm/webllmConfig.js`).
 
 | Setting             | Desktop (unchanged)  | Mobile                           |
 | ------------------- | -------------------- | -------------------------------- |
-| Model               | Llama 3.2 1B q4f32_1 | SmolLM2 360M Instruct q4f32_1    |
-| Download (approx.)  | ~800 MB              | ~250 MB                          |
-| VRAM (0.2.85 record) | 1128.82 MB          | 579.61 MB                        |
-| Conversation format | Llama 3 (`llama-3_1`) | ChatML (`<|im_start|>…<|im_end|>`) |
-| Sampling            | 0.6 / 0.9 / 0 / 0    | 0.2 / 0.9 / 0 / 0 (SmolLM2's card) |
+| Model               | Llama 3.2 1B q4f32_1 | Qwen3 0.6B q4f32_1, thinking off |
+| Download (approx.)  | ~800 MB              | ~400 MB                          |
+| VRAM (0.2.85 record, 4096 context) | 1128.82 MB | 1924.98 MB                  |
+| Conversation format | Llama 3 (`llama-3_1`) | `qwen3`: ChatML (`<|im_start|>…<|im_end|>`), empty `<think>` block |
+| Sampling            | 0.6 / 0.9 / 0 / 0    | 0.7 / 0.8 / 0 / 0 (Qwen3's non-thinking mode) |
 | Context window      | 4096                 | 2048 (set at engine `reload()`)  |
 | Max reply tokens    | none (end of turn or full context) | 256 (`max_tokens` on every request) |
 | Prompt budget       | 3072 estimated tokens | 1664 (2048 − 256 − 128 margin)  |
-| KV cache (computed) | 256 MB               | 160 MB                           |
+| KV cache (computed) | 256 MB               | 448 MB                           |
 | Streaming render    | batched              | batched                          |
 
-- **Which model.** The profile names it: `desktop` loads Llama, `mobile` loads SmolLM2. The
+- **Which model.** The profile names it: `desktop` loads Llama, `mobile` loads Qwen3. The
   page sends the model's key with `load`, and the inference worker accepts only keys from
   `WEBLLM_MODELS` (anything else is Llama). Install screen, chat header, status lines and
   error messages name the model in use; the system prompt names none. Auto, Short and
-  Thinking all stay available on mobile — on Auto, SmolLM2 makes the choice.
-- **A phone that held Llama.** SmolLM2 takes its place: when the tab is opened on a phone,
-  every Llama 3.2 1B build in WebLLM's caches is deleted first (`replaces` in
-  `WEBLLM_MODELS`, `clearReplacedModels` in the service-worker client), the install screen
-  is SmolLM2's — its icon, size, credit and licence — and a line says Llama was removed to
-  make room. The shared library cache stays. Nothing is downloaded until **Install**.
+  Thinking all stay available on mobile — on Auto, Qwen3 makes the choice.
+- **Qwen3 without thinking.** Qwen3 is a reasoning model. Every chat request carries
+  `extra_body: { enable_thinking: false }`, so WebLLM starts the reply with an empty
+  `<think>` block and the model answers at once instead of spending the phone's 256 tokens
+  reasoning; Continue builds the same prompt. A `<think>…</think>` block at the start of a
+  reply is never shown (`createThinkingFilter`, `src/webllm/webllmPromptFormat.js`).
+- **A phone that held Llama or SmolLM2.** Qwen3 takes its place: when the tab is opened on a
+  phone, every Llama 3.2 1B build, and SmolLM2 360M (the phone model before Qwen3), is deleted
+  from WebLLM's caches first (`replaces` in `WEBLLM_MODELS`, `clearReplacedModels` in the
+  service-worker client), the install screen is Qwen3's — its icon, size, credit and licence —
+  and a line says what was removed to make room. The shared library cache stays. Nothing is downloaded until **Install**.
   Desktops and laptops replace nothing: Llama stays, and an older build is left alone.
 
 - **Which profile.** Mobile when User-Agent Client Hints say so, the user agent names a phone
@@ -815,10 +820,12 @@ the settings above. Both live in `WEBLLM_PROFILES` and `WEBLLM_MODELS`
   per page.
 - **Memory.** WebLLM allocates the KV cache for the whole context window when the model
   loads. For Llama 3.2 1B (16 layers × 8 KV heads × 64 dims, keys and values, 32-bit in the
-  q4f32 build) that is 64 KB per token; for SmolLM2 360M (32 layers × 5 KV heads × 64 dims)
-  80 KB per token, so 160 MB at 2048 tokens. WebLLM's own records put SmolLM2 at about half
-  Llama's VRAM. The KV figures are computed from the models' shapes, not measured on a
-  device. The 256-token reply
+  q4f32 build) that is 64 KB per token; for Qwen3 0.6B (28 layers × 8 KV heads × 128 dims)
+  224 KB per token, so 448 MB at 2048 tokens, half of what its 4096-token record reserves.
+  Qwen3 0.6B in q4f32 needs more GPU memory than Llama 3.2 1B (WebLLM's records: 1924.98 MB
+  against 1128.82 MB at 4096 tokens), mostly for its 151,936-token vocabulary and wider KV
+  heads; the q4f16 build (1403.34 MB) would need `shader-f16`. The KV figures are computed
+  from the models' shapes, not measured on a device. The 256-token reply
   limit bounds how long one generation runs and keeps prompt + reply inside the smaller
   window. A reply that reaches it offers **Continue →**, which asks for up to 256 more
   tokens of the same reply.

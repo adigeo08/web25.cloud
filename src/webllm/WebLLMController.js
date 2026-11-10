@@ -26,7 +26,7 @@
  * a time, each with its own MDN lookup, each kept as a thought in the thought
  * store (webllmThoughtStore.js) from which later steps recall what they need;
  * Auto lets the model choose per message. The model — Llama 3.2 1B on a
- * desktop, SmolLM2 360M on a phone or tablet (see `WEBLLM_PROFILES`) — only
+ * desktop, Qwen3 0.6B on a phone or tablet (see `WEBLLM_PROFILES`) — only
  * ever runs on the GPU; the thought store and its similarity search are plain
  * JavaScript on the CPU.
  *
@@ -546,7 +546,7 @@ export class WebLLMController {
                 return;
             }
 
-            // On a phone, a Llama downloaded before goes first: SmolLM2 takes
+            // On a phone, a Llama or SmolLM2 downloaded before goes first: Qwen3 takes
             // its place, and the space it frees is what the storage check sees.
             await this.removeReplacedModels();
             if (epoch !== this.epoch) return;

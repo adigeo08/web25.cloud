@@ -507,7 +507,7 @@ const LLAMA_REMOVED = [
     { modelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B (q4f16)', removed: 0 }
 ];
 
-test('on a phone, Llama is removed before the cache is read, and SmolLM2 is offered in its place', async () => {
+test('on a phone, Llama is removed before the cache is read, and Qwen3 is offered in its place', async () => {
     const logs = [];
     const { controller, calls } = harness({ profile: { ...WEBLLM_PROFILES.mobile }, replaced: LLAMA_REMOVED });
     controller.log = (message) => logs.push(message);
@@ -516,10 +516,10 @@ test('on a phone, Llama is removed before the cache is read, and SmolLM2 is offe
 
     assert.deepEqual(calls.clearReplaced, [0], 'once, before the cache status is read');
     assert.equal(calls.status, 1);
-    assert.equal(controller.model.key, 'smollm');
+    assert.equal(controller.model.key, 'qwen');
     assert.equal(controller.state.status, 'not-installed');
     assert.deepEqual(controller.state.replaced, ['Llama 3.2 1B'], 'only what was actually there');
-    assert.ok(logs.some((line) => /Removed Llama-3\.2-1B-Instruct-q4f32_1-MLC .*SmolLM2-360M/.test(line)));
+    assert.ok(logs.some((line) => /Removed Llama-3\.2-1B-Instruct-q4f32_1-MLC .*Qwen3-0\.6B/.test(line)));
     assert.equal(calls.create, 0, 'nothing is downloaded without Install');
 });
 

@@ -249,9 +249,9 @@ export function classifyError(error, model = WEBLLM_MODELS.llama) {
  * The real count lives in the tokenizer, inside the engine, and is not
  * available before the request is sent. This errs high: the Llama 3 tokenizer
  * averages about four characters per token on English prose and about three on
- * code, so three characters per token never undercounts either. SmolLM2's
- * smaller vocabulary (49,152 tokens) can need more tokens for the same text,
- * which is what the mobile profile's 128-token margin is for; characters
+ * code, so three characters per token never undercounts either. Qwen3's
+ * tokenizer (151,936 tokens) is in the same range, and the mobile profile keeps
+ * a 128-token margin besides; characters
  * outside ASCII (accents, CJK, emoji) cost more and are counted at 1.5.
  *
  * @param {string} text

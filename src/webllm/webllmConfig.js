@@ -3,7 +3,7 @@
  * Everything the local AI chat is pinned to, in one place.
  *
  * One library version and one model per kind of device: Llama 3.2 1B on
- * desktops and laptops, SmolLM2 360M on phones and tablets (see
+ * desktops and laptops, Qwen3 0.6B on phones and tablets (see
  * `WEBLLM_MODELS` and `WEBLLM_PROFILES`). The model records are spelled out
  * here instead of being taken from WebLLM's `prebuiltAppConfig`, so the URLs
  * WebLLM caches under are known before the 6 MB library is ever fetched: the
@@ -51,9 +51,10 @@ export const WEBLLM_MODEL_VRAM_MB = 1128.82;
 export const WEBLLM_MODEL_DOWNLOAD_BYTES = 850 * 1024 * 1024;
 
 /**
- * The build WEB25 used before. Never loaded again; it is only looked for, so a
- * browser that still holds it can be told — and can delete it when the user
- * chooses to. Nothing removes it on its own.
+ * Builds WEB25 used before and never loads again: the first Llama build, and
+ * SmolLM2 360M, the phone model before Qwen3. They are only looked for, so a
+ * browser that still holds one can be told — and, where the model a page runs
+ * replaces it (`replaces` in `WEBLLM_MODELS`), it is deleted to make room.
  */
 export const WEBLLM_LEGACY_MODELS = Object.freeze([
     Object.freeze({
@@ -62,6 +63,13 @@ export const WEBLLM_LEGACY_MODELS = Object.freeze([
         modelUrl: 'https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/',
         modelLibUrl:
             'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Llama-3.2-1B-Instruct-q4f16_1_cs1k-webgpu.wasm'
+    }),
+    Object.freeze({
+        modelId: 'SmolLM2-360M-Instruct-q4f32_1-MLC',
+        label: 'SmolLM2 360M',
+        modelUrl: 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/',
+        modelLibUrl:
+            'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu.wasm'
     })
 ]);
 
@@ -115,12 +123,12 @@ export const WEBLLM_PROMPT_TOKEN_BUDGET = WEBLLM_CONTEXT_WINDOW - WEBLLM_REPLY_R
  *
  * The KV cache is allocated for the whole context window when the model loads.
  * For Llama 3.2 1B (16 layers × 8 KV heads × 64 dims, keys and values, 32-bit in
- * the q4f32 build) that is 64 KB per token: 256 MB at 4096 tokens. For SmolLM2
- * 360M (32 layers × 5 KV heads × 64 dims, 32-bit) it is 80 KB per token: 160 MB
- * at 2048 — computed from the model shapes, not measured on a device.
+ * the q4f32 build) that is 64 KB per token: 256 MB at 4096 tokens. For Qwen3
+ * 0.6B (28 layers × 8 KV heads × 128 dims, 32-bit) it is 224 KB per token:
+ * 448 MB at 2048 — computed from the model shapes, not measured on a device.
  *
  *   desktop  Llama 3.2 1B, 4096 context, no reply limit, 3072-token prompt budget.
- *   mobile   SmolLM2 360M, 2048 context set at engine initialisation,
+ *   mobile   Qwen3 0.6B, 2048 context set at engine initialisation,
  *            `max_tokens: 256` on every request, and a prompt budget that leaves
  *            those 256 tokens plus a margin free: 2048 − 256 − 128 = 1664
  *            estimated tokens.
@@ -138,7 +146,7 @@ export const WEBLLM_PROFILES = Object.freeze({
     }),
     mobile: Object.freeze({
         id: 'mobile',
-        model: 'smollm',
+        model: 'qwen',
         contextWindow: 2048,
         maxTokens: 256,
         promptTokenBudget: 2048 - 256 - 128
@@ -205,15 +213,18 @@ export function resolveWebLLMProfile({ navigator: nav = globalThis.navigator, lo
 export const LLAMA_LICENSE_URL = 'https://www.llama.com/llama3_2/license/';
 
 /**
- * SmolLM2 360M Instruct, for phones and tablets: the q4f32_1 build, for the
- * same reason as Llama's — no `shader-f16`, 32-bit activations. 579.61 MB of
- * VRAM in the 0.2.85 prebuilt record, against Llama's 1128.82.
+ * Qwen3 0.6B, for phones and tablets: the q4f32_1 build, for the same reason as
+ * Llama's — no `shader-f16`, 32-bit activations. 1924.98 MB of VRAM in the
+ * 0.2.85 prebuilt record, at a 4096-token window; the phone profile's 2048
+ * halves its 896 MB KV cache. Qwen3 is a reasoning model: WEB25 runs it with
+ * thinking off (`thinking: false` below), as its non-thinking mode, so a reply
+ * starts at once instead of spending the phone's 256 tokens thinking.
  */
-export const SMOLLM_MODEL_ID = 'SmolLM2-360M-Instruct-q4f32_1-MLC';
-export const SMOLLM_MODEL_URL = 'https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/';
-export const SMOLLM_MODEL_LIB_URL =
-    'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu.wasm';
-export const SMOLLM_LICENSE_URL = 'https://www.apache.org/licenses/LICENSE-2.0';
+export const QWEN_MODEL_ID = 'Qwen3-0.6B-q4f32_1-MLC';
+export const QWEN_MODEL_URL = 'https://huggingface.co/mlc-ai/Qwen3-0.6B-q4f32_1-MLC/resolve/main/';
+export const QWEN_MODEL_LIB_URL =
+    'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Qwen3-0.6B-q4f32_1_cs1k-webgpu.wasm';
+export const QWEN_LICENSE_URL = 'https://www.apache.org/licenses/LICENSE-2.0';
 
 /**
  * The models WEB25 can run, by the key a profile names them with.
@@ -221,21 +232,25 @@ export const SMOLLM_LICENSE_URL = 'https://www.apache.org/licenses/LICENSE-2.0';
  *   modelId, modelUrl, modelLibUrl, vramMB   the WebLLM record
  *   downloadBytes   roughly what the weights take on disk, for the storage check:
  *                   at 4 bits plus a 32-bit scale per group of 32, Llama's 1.24
- *                   billion parameters are about 775 MB and SmolLM2's 362 million
- *                   about 230 MB, each rounded up
+ *                   billion parameters are about 775 MB and Qwen3's 596 million
+ *                   about 375 MB, each rounded up
  *   downloadLabel   the same, for people
  *   name, label     how the chat refers to it, briefly and in full
  *   chatTemplate    the conversation format of its MLC build (webllmPromptFormat.js)
+ *   thinking        whether it reasons before it answers. False for Qwen3: every
+ *                   chat request asks for its non-thinking mode
+ *                   (`extra_body.enable_thinking: false`)
  *   sampling        replaces the shared chat options' sampling, where the model's
- *                   own recommendation differs: SmolLM2's card uses temperature 0.2
+ *                   own recommendation differs: Qwen3's card recommends temperature
+ *                   0.7 and top_p 0.8 for its non-thinking mode
  *   credit, license what the install screen names
  *   replaces        builds this model takes the place of: removed from the browser,
  *                   without asking, before it is installed (see `replacedWebLLMModels`)
  *
- * @typedef {'llama'|'smollm'} WebLLMModelKey
+ * @typedef {'llama'|'qwen'} WebLLMModelKey
  * @typedef {{ key: WebLLMModelKey, modelId: string, modelUrl: string, modelLibUrl: string,
  *             vramMB: number, downloadBytes: number, downloadLabel: string, name: string, label: string,
- *             icon: string, chatTemplate: 'llama3'|'chatml', sampling: Record<string, number>,
+ *             icon: string, chatTemplate: 'llama3'|'qwen3', thinking: boolean, sampling: Record<string, number>,
  *             credit: string, license: { label: string, url: string },
  *             replaces: readonly string[] }} WebLLMModel
  */
@@ -252,28 +267,30 @@ export const WEBLLM_MODELS = Object.freeze({
         label: WEBLLM_MODEL_LABEL,
         icon: '🦙',
         chatTemplate: 'llama3',
+        thinking: true,
         sampling: Object.freeze({}),
         credit: 'Llama 3.2 by Meta · © Meta Platforms, Inc. ·',
         license: Object.freeze({ label: 'Llama 3.2 Community License', url: LLAMA_LICENSE_URL }),
         // A desktop changes nothing: an older build it holds is left alone.
         replaces: Object.freeze([])
     }),
-    smollm: Object.freeze({
-        key: 'smollm',
-        modelId: SMOLLM_MODEL_ID,
-        modelUrl: SMOLLM_MODEL_URL,
-        modelLibUrl: SMOLLM_MODEL_LIB_URL,
-        vramMB: 579.61,
-        downloadBytes: 260 * 1024 * 1024,
-        downloadLabel: '~250 MB',
-        name: 'SmolLM',
-        label: 'SmolLM2 360M',
+    qwen: Object.freeze({
+        key: 'qwen',
+        modelId: QWEN_MODEL_ID,
+        modelUrl: QWEN_MODEL_URL,
+        modelLibUrl: QWEN_MODEL_LIB_URL,
+        vramMB: 1924.98,
+        downloadBytes: 400 * 1024 * 1024,
+        downloadLabel: '~400 MB',
+        name: 'Qwen',
+        label: 'Qwen3 0.6B',
         icon: '🤖',
-        chatTemplate: 'chatml',
-        sampling: Object.freeze({ temperature: 0.2 }),
-        credit: 'SmolLM2 by Hugging Face ·',
-        license: Object.freeze({ label: 'Apache License 2.0', url: SMOLLM_LICENSE_URL }),
-        // A phone that downloaded Llama before gets that space back for SmolLM2.
+        chatTemplate: 'qwen3',
+        thinking: false,
+        sampling: Object.freeze({ temperature: 0.7, top_p: 0.8 }),
+        credit: 'Qwen3 by the Qwen team, Alibaba Cloud ·',
+        license: Object.freeze({ label: 'Apache License 2.0', url: QWEN_LICENSE_URL }),
+        // A phone that downloaded Llama or SmolLM2 before gets that space back for Qwen3.
         replaces: Object.freeze([WEBLLM_MODEL_ID, ...WEBLLM_LEGACY_MODELS.map((entry) => entry.modelId)])
     })
 });
@@ -315,7 +332,7 @@ export function otherWebLLMModels(model) {
 
 /**
  * The builds a model replaces, with their files: what a phone deletes before it
- * installs SmolLM2. Nothing on a desktop.
+ * installs Qwen3. Nothing on a desktop.
  * @param {WebLLMModel} model
  * @returns {{ modelId: string, label: string, modelUrl: string, modelLibUrl: string }[]}
  */

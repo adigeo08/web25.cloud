@@ -25,7 +25,7 @@ export function createWebLLMApp({ log = (message) => console.debug(`[WebLLM] ${m
     /** @type {WebLLMProject|null} */
     let project = null;
     const nav = /** @type {any} */ (navigator);
-    // Desktop or mobile, decided once per page: Llama 3.2 1B or SmolLM2 360M.
+    // Desktop or mobile, decided once per page: Llama 3.2 1B or Qwen3 0.6B.
     const profile = resolveWebLLMProfile();
 
     const controller = new WebLLMController({
