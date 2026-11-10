@@ -87,11 +87,13 @@ test('the chapter index is the same numbered list, now made of anchor links', ()
         ['#about-messenger', 'Direct Messenger'],
         ['#about-consent', 'Consent'],
         ['#about-nostr', 'Nostr relay'],
-        ['#about-security', 'Security profile']
+        ['#about-security', 'Security profile'],
+        ['#about-ai', 'Local AI'],
+        ['#about-workspace', 'Code workspace']
     ]);
     // Still an <ol class="lp-showcase-index"> — the counter numbering hangs off it.
     assert.match(RAIL, /<ol class="lp-showcase-index">/);
-    assert.equal(RAIL.match(/<li>/g).length, 6);
+    assert.equal(RAIL.match(/<li>/g).length, 8);
     assert.match(RAIL, /<nav aria-label="Deep dive chapters">\s*<ol/);
 });
 
@@ -103,7 +105,7 @@ test('every index link points at a chapter article, in the same order', () => {
 });
 
 test('the rail keeps its kicker, heading and intro above the list', () => {
-    assert.match(RAIL, /<span class="section-kicker">Deep dive<\/span>\s*<h4>Six things worth knowing<\/h4>\s*<p>/);
+    assert.match(RAIL, /<span class="section-kicker">Deep dive<\/span>\s*<h4>Eight things worth knowing<\/h4>\s*<p>/);
 });
 
 // ── anchor navigation styles ────────────────────────────────────────────────
@@ -194,4 +196,70 @@ test('the scroll reveal animation still drives .lp-reveal where supported', () =
         /@supports \(animation-timeline: view\(\)\) \{\s*@media \(prefers-reduced-motion: no-preference\) \{\s*\.lp-reveal \{/
     );
     assert.match(STYLES, /animation-range: entry 0% entry 100%;/);
+});
+
+// ── the "Built on" band ─────────────────────────────────────────────────────
+
+const BAND = MARKUP.slice(MARKUP.indexOf('<section class="lp-logos"'), MARKUP.indexOf('<!-- How it works -->'));
+
+test('eight technologies, each a button that opens its explanation, none a bare link', () => {
+    const buttons = [...BAND.matchAll(/<button type="button" class="lp-logo" data-tech="([a-z-]+)"([^>]*)>/g)];
+    assert.deepEqual(
+        buttons.map((match) => match[1]),
+        ['viem', 'webauthn', 'webtorrent', 'nostr', 'gofile', 'webllm', 'isomorphic-git', 'codemirror']
+    );
+    for (const [, , attributes] of buttons) {
+        assert.match(attributes, /aria-haspopup="dialog"/);
+        assert.match(attributes, /aria-controls="lp-tech-dialog"/);
+    }
+    assert.doesNotMatch(BAND, /<a class="lp-logo"/, 'no logo links straight out any more');
+    const names = [...BAND.matchAll(/<span class="lp-logo-name">([^<]+)<\/span>/g)].map((match) => match[1]);
+    assert.deepEqual(names, [
+        'viem',
+        'WebAuthn',
+        'WebTorrent',
+        'Nostr',
+        'GoFile',
+        'WebLLM',
+        'isomorphic-git',
+        'CodeMirror'
+    ]);
+});
+
+test('every technology has its explanation and a project address, opened in a new tab', () => {
+    const templates = [
+        ...BAND.matchAll(
+            /<template id="lp-tech-([a-z-]+)" data-url="([^"]+)" data-link-label="([^"]+)">([\s\S]*?)<\/template>/g
+        )
+    ];
+    assert.equal(templates.length, 8);
+    for (const [, key, url, , body] of templates) {
+        assert.match(BAND, new RegExp(`data-tech="${key}"`), `${key} has a button`);
+        assert.match(url, /^https:\/\//, `${key} links over https`);
+        assert.match(body, /<p>[\s\S]+<\/p>/, `${key} explains itself`);
+        assert.doesNotMatch(body, /<script|on[a-z]+=/i);
+    }
+    const urls = Object.fromEntries(templates.map(([, key, url]) => [key, url]));
+    assert.equal(urls.webllm, 'https://webllm.mlc.ai');
+    assert.equal(urls['isomorphic-git'], 'https://isomorphic-git.org');
+    assert.equal(urls.codemirror, 'https://codemirror.net');
+
+    const dialog = /<dialog id="lp-tech-dialog"[\s\S]*?<\/dialog>/.exec(BAND)[0];
+    assert.match(dialog, /aria-labelledby="lp-tech-title"/);
+    assert.match(dialog, /<a\s+id="lp-tech-link"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
+    assert.match(dialog, /<form method="dialog">\s*<button type="submit" class="lp-tech-close" aria-label="Close">/);
+});
+
+test('the band is four to a row, two on a phone', () => {
+    const rules = [...STYLES.matchAll(/\.lp-logos-row \{([^}]*)\}/g)].map((match) => flat(match[1]));
+    assert.match(rules.at(-2), /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+    assert.match(rules.at(-1), /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+});
+
+test('the hero names the local AI', () => {
+    const hero = flat(
+        MARKUP.slice(MARKUP.indexOf('<section class="lp-hero">'), MARKUP.indexOf('<section class="lp-logos"'))
+    );
+    assert.match(hero, /build with a local AI that runs on your own GPU/);
+    assert.match(hero, /<div class="lp-stat"><b>AI<\/b><span>local model on your own GPU<\/span><\/div>/);
 });

@@ -1129,7 +1129,7 @@ src/
     ├── TorrentSignaturePayload.js
     └── SignedTorrentProtocol.js
 
-content/about/        # the six About "Deep dive" chapters, one Markdown file each
+content/about/        # the eight About "Deep dive" chapters, one Markdown file each
 scripts/              # locally bundled libraries: DOMPurify, WebTorrent, marked
 peerweb-sw.js         # app service worker, scope /
 webllm-sw.js          # WebLLM service worker, scope /webllm/ (registered lazily)
@@ -1137,9 +1137,9 @@ webllm-sw.js          # WebLLM service worker, scope /webllm/ (registered lazily
 
 ### About page chapters (Markdown)
 
-The six chapters under **About → Deep dive** are not in `index.html`. Each one is a Markdown file in
-`content/about/` (`identity`, `publishing`, `messenger`, `consent`, `nostr`, `security`), and
-`index.html` holds only six empty `<article class="about-card lp-reveal" id="about-…" data-about-src="…">`
+The eight chapters under **About → Deep dive** are not in `index.html`. Each one is a Markdown file in
+`content/about/` (`identity`, `publishing`, `messenger`, `consent`, `nostr`, `security`, `ai`,
+`workspace`), and `index.html` holds only eight empty `<article class="about-card lp-reveal" id="about-…" data-about-src="…">`
 frames plus the chapter index (`<a href="#about-…">`). `src/ui/about/AboutChapters.js` fetches the files,
 renders them with the bundled [`marked`](https://github.com/markedjs/marked) (`scripts/marked.esm.js`, no CDN),
 sanitizes the result with the bundled DOMPurify, and puts it straight into the article so the
@@ -1162,9 +1162,21 @@ Writing a chapter:
 - Raw HTML is allowed but sanitized (HTML only; no scripts, forms, styles or event handlers).
 
 To add a chapter, add the Markdown file, an article frame and an index link in `index.html` (the ids must
-match: `about-<name>`). `tests/about-chapters-markdown.test.mjs` pins the six current chapters to
-`tests/fixtures/about-chapters.legacy.html`, the markup they replaced; when you intentionally change a
-chapter's wording, update the matching `<article>` in that fixture in the same commit.
+match: `about-<name>`). `tests/about-chapters-markdown.test.mjs` pins the six original chapters to
+`tests/fixtures/about-chapters.legacy.html`, the markup they replaced; when you intentionally change one
+of them, update the matching `<article>` in that fixture in the same commit. **Local AI** (`ai.md`) and
+**Code workspace** (`workspace.md`) were written as Markdown from the start and have no fixture.
+
+### About page: the "Built on" band
+
+The band under the hero lists the eight projects WEB25 runs on — viem, WebAuthn, WebTorrent, Nostr,
+GoFile, WebLLM, isomorphic-git and CodeMirror — four to a row (two on a phone). Each is a
+`<button class="lp-logo" data-tech="<key>">`, not a link: it opens the native `#lp-tech-dialog` with a
+short explanation and a **Visit … ↗** link to the project that opens in a new tab
+(`src/ui/about/TechDialog.js`). The copy is in `index.html`, one
+`<template id="lp-tech-<key>" data-url="…" data-link-label="…">` per technology; the dialog clones it
+and never parses markup. Escape, the × button and a click on the backdrop close it, and focus returns
+to the button that opened it.
 
 ---
 

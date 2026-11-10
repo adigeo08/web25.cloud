@@ -3,10 +3,11 @@
  *
  * about-chapters-markdown.test.mjs and about-page-markup.test.mjs pin the
  * Markdown, the renderer and the stylesheet contracts. What only a browser can
- * show is checked here: that the six chapter files load and sanitize into the
- * page, that the page lays out exactly as it did when the chapters were
- * hardcoded, and that the chapter index navigates, scrolls and focuses the way
- * it should.
+ * show is checked here: that the eight chapter files load and sanitize into the
+ * page, that the six original ones lay out exactly as they did when they were
+ * hardcoded, that the chapter index navigates, scrolls and focuses the way it
+ * should, and that each technology in the "Built on" band opens its
+ * explanation in a dialog.
  *
  * Needs Playwright with a Chromium build (`PLAYWRIGHT_BROWSERS_PATH` or the
  * default Playwright cache). Without them every test here is skipped, with the
@@ -37,8 +38,13 @@ const CHAPTERS = [
     { slug: 'messenger', label: 'Direct Messenger', title: '💬 Direct Messenger: search an address, start a chat' },
     { slug: 'consent', label: 'Consent', title: '🤝 Cryptographic validity is not consent' },
     { slug: 'nostr', label: 'Nostr relay', title: '🛰️ Nostr relay: browser to relay, directly' },
-    { slug: 'security', label: 'Security profile', title: '🛡️ Security profile' }
+    { slug: 'security', label: 'Security profile', title: '🛡️ Security profile' },
+    { slug: 'ai', label: 'Local AI', title: '🤖 Local AI: a model on your own GPU' },
+    { slug: 'workspace', label: 'Code workspace', title: '🧰 Code workspace: git in the browser' }
 ];
+
+/** The chapters that were hardcoded before, first in the page. */
+const LEGACY_COUNT = 6;
 
 const DESKTOP = { width: 1280, height: 800 };
 const TABLET = { width: 900, height: 800 };
@@ -47,9 +53,11 @@ const PHONE = { width: 390, height: 844 };
 /** Boots just the About modules; the rest of the app needs the network. */
 const STUB_ENTRY = `
 import { installAboutChapters } from '/src/ui/about/AboutChapters.js';
+import { installTechDialogs } from '/src/ui/about/TechDialog.js';
 import { bindPublishActions } from '/src/ui/publish/PublishPanel.js';
 bindPublishActions({ onSign() {}, onPublish() {} });
 installAboutChapters();
+installTechDialogs();
 `;
 
 /** The chapters alone, without the runtime note PublishPanel adds to one of them. */
@@ -158,7 +166,7 @@ async function openAbout({ viewport = DESKTOP, reducedMotion = 'no-preference', 
     return { page, context, problems, requests };
 }
 
-const settled = (page, count = 6) =>
+const settled = (page, count = CHAPTERS.length) =>
     page.waitForFunction(
         (n) =>
             [...document.querySelectorAll('.lp-showcase-cards > article')].filter((a) =>
@@ -259,7 +267,7 @@ const measureLayout = (page) =>
 
 // ── loading and rendering ───────────────────────────────────────────────────
 
-test('all six Markdown files are fetched and rendered into the original article elements', { skip: SKIP }, async () => {
+test('all eight Markdown files are fetched and rendered into their article elements', { skip: SKIP }, async () => {
     const { page, context, problems, requests } = await openAbout();
     try {
         await settled(page);
@@ -268,7 +276,7 @@ test('all six Markdown files are fetched and rendered into the original article 
             requests.filter((p) => p.startsWith('/content/about/')).sort(),
             CHAPTERS.map((c) => `/content/about/${c.slug}.md`).sort()
         );
-        assert.deepEqual(await states(page), Array(6).fill('ready'));
+        assert.deepEqual(await states(page), Array(CHAPTERS.length).fill('ready'));
 
         const articles = await page.$$eval('.lp-showcase-cards > article', (nodes) =>
             nodes.map((a) => ({
@@ -283,7 +291,7 @@ test('all six Markdown files are fetched and rendered into the original article 
                 status: a.querySelectorAll('.about-card-status').length
             }))
         );
-        assert.equal(articles.length, 6, 'exactly six cards in the grid');
+        assert.equal(articles.length, CHAPTERS.length, 'exactly eight cards in the grid');
         for (const [index, article] of articles.entries()) {
             assert.equal(article.id, `about-${CHAPTERS[index].slug}`);
             assert.equal(article.className, 'about-card lp-reveal');
@@ -300,7 +308,7 @@ test('all six Markdown files are fetched and rendered into the original article 
         }
         assert.equal(
             articles.reduce((n, a) => n + a.features, 0),
-            33
+            33 + 7 + 7
         );
         assert.deepEqual(problems, []);
     } finally {
@@ -332,8 +340,8 @@ test('the rendered page is the original chapter markup, element for element', { 
             };
         }, LEGACY_HTML);
 
-        assert.equal(original.length, 6);
-        for (const [index, html] of rendered.entries()) {
+        assert.equal(original.length, LEGACY_COUNT);
+        for (const [index, html] of rendered.slice(0, LEGACY_COUNT).entries()) {
             assert.equal(
                 normalize(html),
                 normalize(original[index]),
@@ -356,14 +364,20 @@ for (const [name, viewport] of [
         const hardcoded = await openAbout({ viewport, reducedMotion: 'reduce', entry: '' });
         try {
             await settled(markdown.page);
+            // The six original chapters as they were hardcoded, then the two
+            // written as Markdown from the start, exactly as the page renders them.
+            const written = await markdown.page.$$eval(
+                `.lp-showcase-cards > article:nth-child(n + ${LEGACY_COUNT + 1})`,
+                (nodes) => nodes.map((node) => node.outerHTML).join('')
+            );
             await hardcoded.page.evaluate((html) => {
                 document.querySelector('.lp-showcase-cards').innerHTML = html;
-            }, LEGACY_HTML);
+            }, LEGACY_HTML + written);
 
             const actual = await measureLayout(markdown.page);
             const expected = await measureLayout(hardcoded.page);
 
-            assert.equal(actual.cards.length, 6);
+            assert.equal(actual.cards.length, CHAPTERS.length);
             assert.equal(
                 actual.cards.reduce((n, c) => n + c.descendants.length, 0),
                 expected.cards.reduce((n, c) => n + c.descendants.length, 0)
@@ -625,7 +639,7 @@ test('the index works from the keyboard: Tab order, visible focus, Enter navigat
 
         await page.focus('.lp-showcase-index a[href="#about-identity"]');
         const order = [(await active()).href];
-        for (let i = 0; i < 5; i += 1) {
+        for (let i = 0; i < CHAPTERS.length - 1; i += 1) {
             await page.keyboard.press('Tab');
             order.push((await active()).href);
         }
@@ -635,8 +649,8 @@ test('the index works from the keyboard: Tab order, visible focus, Enter navigat
             'Tab walks the chapters in order'
         );
 
-        // Back one step by keyboard, so :focus-visible applies.
-        await page.keyboard.press('Shift+Tab');
+        // Back to Nostr relay by keyboard, so :focus-visible applies.
+        for (let i = 0; i < 3; i += 1) await page.keyboard.press('Shift+Tab');
         const focus = await active();
         assert.equal(focus.href, '#about-nostr');
         assert.ok(focus.focusVisible);
@@ -674,7 +688,7 @@ test('index rows stay the height they were, with a link filling each row', { ski
                 };
             })
         );
-        assert.equal(rows.length, 6);
+        assert.equal(rows.length, CHAPTERS.length);
         for (const [index, row] of rows.entries()) {
             assert.ok(row.linkFillsRow);
             assert.equal(
@@ -711,7 +725,7 @@ test('chapters that cannot be loaded degrade one by one, and Try again recovers 
     });
     try {
         await settled(page);
-        assert.deepEqual(await states(page), ['ready', 'error', 'ready', 'error', 'error', 'error']);
+        assert.deepEqual(await states(page), ['ready', 'error', 'ready', 'error', 'error', 'error', 'ready', 'ready']);
 
         const errors = await page.$$eval('.lp-showcase-cards > article[data-about-state="error"]', (nodes) =>
             nodes.map((a) => ({
@@ -734,7 +748,7 @@ test('chapters that cannot be loaded degrade one by one, and Try again recovers 
         }
 
         // The page around the failures is intact.
-        assert.equal(await page.locator('.lp-showcase-index a').count(), 6);
+        assert.equal(await page.locator('.lp-showcase-index a').count(), CHAPTERS.length);
         assert.equal(await page.locator('#about-identity > .feature-grid').count(), 1);
         assert.equal(
             await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
@@ -745,7 +759,7 @@ test('chapters that cannot be loaded degrade one by one, and Try again recovers 
         await page.click('#about-consent [data-about-retry]');
         await page.waitForFunction(() => document.getElementById('about-consent').dataset.aboutState === 'ready');
         assert.equal(await page.textContent('#about-consent > h3'), CHAPTERS[3].title);
-        assert.deepEqual(await states(page), ['ready', 'error', 'ready', 'ready', 'error', 'error']);
+        assert.deepEqual(await states(page), ['ready', 'error', 'ready', 'ready', 'error', 'error', 'ready', 'ready']);
     } finally {
         await context.close();
     }
@@ -765,7 +779,10 @@ test('a chapter shows a loading state until its file arrives', { skip: SKIP }, a
         }
     });
     try {
-        await page.waitForFunction(() => document.querySelectorAll('[data-about-state="ready"]').length === 5);
+        await page.waitForFunction(
+            (others) => document.querySelectorAll('[data-about-state="ready"]').length === others,
+            CHAPTERS.length - 1
+        );
         const waiting = await page.$eval('#about-identity', (a) => ({
             busy: a.getAttribute('aria-busy'),
             text: a.textContent.trim(),
@@ -923,3 +940,73 @@ test('rendering a chapter leaves the shared DOMPurify instance unconfigured', { 
         await context.close();
     }
 });
+
+// ── the "Built on" band ─────────────────────────────────────────────────────
+
+for (const [name, viewport, columns] of [
+    ['desktop', DESKTOP, 4],
+    ['phone', PHONE, 2]
+]) {
+    test(`${name}: eight technologies, ${columns} to a row, each opening its explanation`, { skip: SKIP }, async () => {
+        const { page, context, problems } = await openAbout({ viewport });
+        try {
+            const tops = await page.$$eval('.lp-logos-row > .lp-logo', (nodes) =>
+                nodes.map((node) => Math.round(node.getBoundingClientRect().top))
+            );
+            assert.equal(tops.length, 8);
+            const rows = [...new Set(tops)];
+            assert.equal(rows.length, 8 / columns, `${columns} per row`);
+            assert.equal(
+                await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+                0,
+                'no horizontal overflow'
+            );
+
+            for (const [key, title, url] of [
+                ['webllm', 'WebLLM', 'https://webllm.mlc.ai'],
+                ['isomorphic-git', 'isomorphic-git', 'https://isomorphic-git.org'],
+                ['codemirror', 'CodeMirror', 'https://codemirror.net'],
+                ['viem', 'viem', 'https://viem.sh']
+            ]) {
+                const button = page.locator(`.lp-logo[data-tech="${key}"]`);
+                await button.scrollIntoViewIfNeeded();
+                await button.click();
+                await page.waitForSelector('#lp-tech-dialog[open]');
+                const shown = await page.evaluate(() => ({
+                    modal: document.getElementById('lp-tech-dialog').matches(':modal'),
+                    title: document.getElementById('lp-tech-title').textContent,
+                    role: document.getElementById('lp-tech-role').textContent,
+                    paragraphs: document.querySelectorAll('#lp-tech-body p').length,
+                    icon: document.querySelectorAll('#lp-tech-mark svg').length,
+                    href: document.getElementById('lp-tech-link').getAttribute('href'),
+                    target: document.getElementById('lp-tech-link').getAttribute('target'),
+                    rel: document.getElementById('lp-tech-link').getAttribute('rel')
+                }));
+                assert.equal(shown.modal, true);
+                assert.equal(shown.title, title);
+                assert.ok(shown.role.length > 0);
+                assert.ok(shown.paragraphs >= 1);
+                assert.equal(shown.icon, 1);
+                assert.equal(shown.href, url);
+                assert.equal(shown.target, '_blank');
+                assert.equal(shown.rel, 'noopener noreferrer');
+
+                // Escape closes it, and focus goes back to the button that opened it.
+                await page.keyboard.press('Escape');
+                await page.waitForFunction(() => !document.getElementById('lp-tech-dialog').open);
+                assert.equal(await page.evaluate(() => document.activeElement?.dataset.tech), key);
+            }
+
+            // The close button, and a click on the backdrop, close it too.
+            await page.click('.lp-logo[data-tech="nostr"]');
+            await page.click('#lp-tech-dialog .lp-tech-close');
+            await page.waitForFunction(() => !document.getElementById('lp-tech-dialog').open);
+            await page.click('.lp-logo[data-tech="gofile"]');
+            await page.mouse.click(4, 4);
+            await page.waitForFunction(() => !document.getElementById('lp-tech-dialog').open);
+            assert.deepEqual(problems, []);
+        } finally {
+            await context.close();
+        }
+    });
+}

@@ -1712,8 +1712,9 @@
                         <h2 class="lp-title">The web, hosted by the people reading it</h2>
                         <p class="lp-sub">
                             Sign a static site with a key that never leaves your browser, seed it to the
-                            swarm, and message anyone by their Nostr address — no backend, no signalling
-                            server, no mandatory wallet extension.
+                            swarm, message anyone by their Nostr address, and build with a local AI that
+                            runs on your own GPU — no backend, no signalling server, no inference API, no
+                            mandatory wallet extension.
                         </p>
                         <div class="lp-cta">
                             <button type="button" class="btn btn-primary btn-lg" data-goto-tab="publish">
@@ -1728,101 +1729,150 @@
                             <div class="lp-stat"><b>1</b><span>local key, three addresses</span></div>
                             <div class="lp-stat"><b>E2E</b><span>encrypted direct messages</span></div>
                             <div class="lp-stat"><b>P2P</b><span>browser-to-browser delivery</span></div>
+                            <div class="lp-stat"><b>AI</b><span>local model on your own GPU</span></div>
                         </div>
                     </section>
 
-                    <!-- Built on: the projects the platform stands on -->
+                    <!--
+                        Built on: the projects the platform stands on. Each one opens
+                        a short explanation in a native dialog (src/ui/about/TechDialog.js),
+                        with a link to the project in a new tab; the copy lives in the
+                        <template> elements below.
+                    -->
                     <section class="lp-logos" aria-label="Technologies WEB25.cloud is built on">
                         <p class="lp-logos-label">Built on</p>
 
                         <div class="lp-logos-row">
-                            <a class="lp-logo" href="https://viem.sh" target="_blank" rel="noopener noreferrer">
-                                <svg class="lp-logo-mark" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M12 2 5 12l7 4 7-4-7-10Z" fill="currentColor" opacity=".9" />
-                                    <path d="M12 22 5 13.6l7 4.1 7-4.1L12 22Z" fill="currentColor" opacity=".5" />
-                                </svg>
+                            <button type="button" class="lp-logo" data-tech="viem" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 5 12l7 4 7-4-7-10Z" fill="currentColor" opacity=".9" /><path d="M12 22 5 13.6l7 4.1 7-4.1L12 22Z" fill="currentColor" opacity=".5" /></svg>
                                 <span class="lp-logo-name">viem</span>
                                 <span class="lp-logo-role">EVM signing</span>
-                            </a>
-
-                            <a
-                                    class="lp-logo"
-                                    href="https://www.w3.org/TR/webauthn-3/"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                            >
-                                <svg
-                                        class="lp-logo-mark"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.6"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        aria-hidden="true"
-                                >
-                                    <circle cx="8.5" cy="11" r="3.5" />
-                                    <path d="M12 11h8m-3 0v3m-3-3v2" />
-                                    <path d="M5 15.5v1.2a3.3 3.3 0 0 0 6.6 0v-1.2" />
-                                </svg>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="webauthn" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8.5" cy="11" r="3.5" /><path d="M12 11h8m-3 0v3m-3-3v2" /><path d="M5 15.5v1.2a3.3 3.3 0 0 0 6.6 0v-1.2" /></svg>
                                 <span class="lp-logo-name">WebAuthn</span>
                                 <span class="lp-logo-role">Secure identity</span>
-                            </a>
-
-                            <a class="lp-logo" href="https://webtorrent.io" target="_blank" rel="noopener noreferrer">
-                                <svg
-                                        class="lp-logo-mark"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.6"
-                                        stroke-linecap="round"
-                                        aria-hidden="true"
-                                >
-                                    <circle cx="12" cy="4.6" r="2.4" />
-                                    <circle cx="4.9" cy="18" r="2.4" />
-                                    <circle cx="19.1" cy="18" r="2.4" />
-                                    <path d="M10.7 6.7 6.2 15.7M13.3 6.7l4.5 9M7.3 18h9.4" />
-                                </svg>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="webtorrent" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.6" r="2.4" /><circle cx="4.9" cy="18" r="2.4" /><circle cx="19.1" cy="18" r="2.4" /><path d="M10.7 6.7 6.2 15.7M13.3 6.7l4.5 9M7.3 18h9.4" /></svg>
                                 <span class="lp-logo-name">WebTorrent</span>
                                 <span class="lp-logo-role">P2P delivery</span>
-                            </a>
-
-                            <a class="lp-logo" href="https://nostr.com" target="_blank" rel="noopener noreferrer">
-                                <svg
-                                        class="lp-logo-mark"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.6"
-                                        stroke-linecap="round"
-                                        aria-hidden="true"
-                                >
-                                    <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
-                                    <path d="M7.1 7.6a7 7 0 0 0 0 8.8M16.9 7.6a7 7 0 0 1 0 8.8M4 4.4a11.5 11.5 0 0 0 0 15.2M20 4.4a11.5 11.5 0 0 1 0 15.2" />
-                                </svg>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="nostr" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" /><path d="M7.1 7.6a7 7 0 0 0 0 8.8M16.9 7.6a7 7 0 0 1 0 8.8M4 4.4a11.5 11.5 0 0 0 0 15.2M20 4.4a11.5 11.5 0 0 1 0 15.2" /></svg>
                                 <span class="lp-logo-name">Nostr</span>
                                 <span class="lp-logo-role">Addressing &amp; signalling</span>
-                            </a>
-
-                            <a class="lp-logo" href="https://gofile.io" target="_blank" rel="noopener noreferrer">
-                                <svg
-                                        class="lp-logo-mark"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.6"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        aria-hidden="true"
-                                >
-                                    <path d="M7 18.5h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 5.7 11.2 3.65 3.65 0 0 0 7 18.5Z" />
-                                    <path d="M12 15.6V9.4m0 0-2.2 2.2M12 9.4l2.2 2.2" />
-                                </svg>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="gofile" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 5.7 11.2 3.65 3.65 0 0 0 7 18.5Z" /><path d="M12 15.6V9.4m0 0-2.2 2.2M12 9.4l2.2 2.2" /></svg>
                                 <span class="lp-logo-name">GoFile</span>
                                 <span class="lp-logo-role">Fallback mirror</span>
-                            </a>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="webllm" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9.5 9.5h5v5h-5zM9 2.5V6m6-3.5V6M9 18v3.5m6-3.5v3.5M2.5 9H6m-3.5 6H6M18 9h3.5M18 15h3.5" /></svg>
+                                <span class="lp-logo-name">WebLLM</span>
+                                <span class="lp-logo-role">Local AI</span>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="isomorphic-git" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2" /><circle cx="6" cy="18.5" r="2.2" /><circle cx="18" cy="8.5" r="2.2" /><path d="M6 7.7v8.6M18 10.7c0 4-6 3.2-11 6.1" /></svg>
+                                <span class="lp-logo-name">isomorphic-git</span>
+                                <span class="lp-logo-role">Project history</span>
+                            </button>
+                            <button type="button" class="lp-logo" data-tech="codemirror" aria-haspopup="dialog" aria-controls="lp-tech-dialog">
+                                <svg class="lp-logo-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15" /></svg>
+                                <span class="lp-logo-name">CodeMirror</span>
+                                <span class="lp-logo-role">Code editor</span>
+                            </button>
                         </div>
+
+                        <template id="lp-tech-viem" data-url="https://viem.sh" data-link-label="viem.sh">
+                            <p>A TypeScript interface for Ethereum. WEB25 uses its account tools to turn the local secp256k1 key into your <code>0x…</code> address and to sign with it — no wallet extension and no RPC node.</p>
+                            <ul class="lp-tech-points">
+                                <li>Signs the <code>.torrentchain</code> manifest of every deploy</li>
+                                <li>Recovers the publisher from a signature before a site renders</li>
+                                <li>Loaded from esm.sh on first use, pinned to one version</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-webauthn" data-url="https://www.w3.org/TR/webauthn-3/" data-link-label="the W3C specification">
+                            <p>The browser standard behind passkeys. Your wallet key is wrapped with a secret only your passkey can produce — Face ID, Touch ID, Windows Hello or a security key — so nothing stored on the device unlocks it alone.</p>
+                            <ul class="lp-tech-points">
+                                <li>The <strong>PRF</strong> extension derives the wrapping key</li>
+                                <li>Several passkeys can unlock the same wallet</li>
+                                <li>No password, no server-side account</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-webtorrent" data-url="https://webtorrent.io" data-link-label="webtorrent.io">
+                            <p>BitTorrent for the browser, over WebRTC. A deployed site is a torrent seeded straight from your tab, and every visitor who opens it can help seed it on.</p>
+                            <ul class="lp-tech-points">
+                                <li>Signed site bundles travel as torrents</li>
+                                <li>Pieces are verified against their hashes as they arrive</li>
+                                <li>Public trackers only introduce peers; the bytes go browser to browser</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-nostr" data-url="https://nostr.com" data-link-label="nostr.com">
+                            <p>An open protocol of signed events passed through relays. WEB25 derives your Nostr address from the same key as your wallet, and uses relays to reach people by <code>npub</code> and to carry encrypted chat signalling.</p>
+                            <ul class="lp-tech-points">
+                                <li>Invitations are sealed in NIP-44 / NIP-59 gift wraps</li>
+                                <li>Relays see only encrypted envelopes</li>
+                                <li>An encrypted relay fallback when WebRTC cannot connect</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-gofile" data-url="https://gofile.io" data-link-label="gofile.io">
+                            <p>A file host used as an optional, temporary HTTP mirror. When the swarm is quiet, a site can still load from its GoFile copy — and its bytes are checked against the torrent before anything renders.</p>
+                            <ul class="lp-tech-points">
+                                <li>Tried after the local cache and WebTorrent, never first</li>
+                                <li>Guest mirrors are best-effort and expire</li>
+                                <li>The guest token is stored encrypted to your identity</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-webllm" data-url="https://webllm.mlc.ai" data-link-label="webllm.mlc.ai">
+                            <p>An in-browser inference engine from the MLC project. It runs a language model on your own GPU through WebGPU, so the AI chat answers without any inference server or API key — your questions never leave the device.</p>
+                            <ul class="lp-tech-points">
+                                <li>Llama 3.2 1B on desktops and laptops, Qwen3 0.6B on phones</li>
+                                <li>Runs in a dedicated worker; the model is cached in this browser</li>
+                                <li>The library is checked against a pinned hash before it runs</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-isomorphic-git" data-url="https://isomorphic-git.org" data-link-label="isomorphic-git.org">
+                            <p>Git, written in JavaScript, running in the browser. WEB25 keeps your deployments, the sites you reseed and every code project from the AI chat as real git repositories in the browser’s private file system (OPFS).</p>
+                            <ul class="lp-tech-points">
+                                <li>Every save is a commit, with history you can return to</li>
+                                <li>Project commits are authored by your Nostr address</li>
+                                <li>Files are written first, so a slow CDN costs history, never data</li>
+                            </ul>
+                        </template>
+                        <template id="lp-tech-codemirror" data-url="https://codemirror.net" data-link-label="codemirror.net">
+                            <p>A code editor for the web. It powers the canvas beside the AI chat: open a file from the project, edit it with highlighting for HTML, CSS and JavaScript, preview it in a sandbox, and save it back as a commit.</p>
+                            <ul class="lp-tech-points">
+                                <li>CodeMirror 6 with HTML, CSS and JavaScript support</li>
+                                <li>Ctrl/⌘+S saves the file to the project</li>
+                                <li>Without the CDN, a plain editor with the same Save</li>
+                            </ul>
+                        </template>
+
+                        <dialog id="lp-tech-dialog" class="dm-sheet lp-tech-dialog" aria-labelledby="lp-tech-title">
+                            <div class="lp-tech-card">
+                                <div class="lp-tech-head">
+                                    <span id="lp-tech-mark" class="lp-tech-mark" aria-hidden="true"></span>
+                                    <div class="lp-tech-heading">
+                                        <h3 id="lp-tech-title">Technology</h3>
+                                        <p id="lp-tech-role" class="lp-tech-role"></p>
+                                    </div>
+                                    <form method="dialog">
+                                        <button type="submit" class="lp-tech-close" aria-label="Close">×</button>
+                                    </form>
+                                </div>
+                                <div id="lp-tech-body" class="lp-tech-body"></div>
+                                <a
+                                    id="lp-tech-link"
+                                    class="btn btn-primary lp-tech-link"
+                                    href="#"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    >Visit the project ↗</a
+                                >
+                            </div>
+                        </dialog>
                     </section>
 
                     <!-- How it works -->
@@ -1866,8 +1916,8 @@
                             <span class="section-kicker">Under the hood</span>
                             <h3>What the platform actually does</h3>
                             <p class="lp-section-sub">
-                                Three pieces carry the whole thing: who you are, how a site ships, and
-                                how two browsers talk.
+                                Four pieces carry the whole thing: who you are, how a site ships, how two
+                                browsers talk, and the AI that helps you build — all of it in the tab.
                             </p>
                         </div>
 
@@ -1913,6 +1963,20 @@
                                     <li>Unknown senders wait for your Accept</li>
                                 </ul>
                             </article>
+
+                            <article class="lp-pillar lp-reveal">
+                                <span class="lp-pillar-icon" aria-hidden="true">🤖</span>
+                                <h4>An AI that never phones home</h4>
+                                <p>
+                                    WebLLM runs a language model on your GPU. It writes code into a git
+                                    project you edit with CodeMirror and deploy from the same tab.
+                                </p>
+                                <ul class="lp-pillar-list">
+                                    <li>Llama 3.2 1B on desktop, Qwen3 0.6B on phones</li>
+                                    <li>Projects are git repositories in OPFS</li>
+                                    <li>No inference server, no API key</li>
+                                </ul>
+                            </article>
                         </div>
 
                         <!-- Parallax band: the fixed backdrop drifts against the page -->
@@ -1932,7 +1996,7 @@
                         <div class="lp-showcase">
                             <aside class="lp-showcase-rail">
                                 <span class="section-kicker">Deep dive</span>
-                                <h4>Six things worth knowing</h4>
+                                <h4>Eight things worth knowing</h4>
                                 <p>
                                     The detail behind each piece — what is stored, what is signed, what
                                     is sent, and what is deliberately not.
@@ -1945,6 +2009,8 @@
                                         <li><a href="#about-consent">Consent</a></li>
                                         <li><a href="#about-nostr">Nostr relay</a></li>
                                         <li><a href="#about-security">Security profile</a></li>
+                                        <li><a href="#about-ai">Local AI</a></li>
+                                        <li><a href="#about-workspace">Code workspace</a></li>
                                     </ol>
                                 </nav>
                             </aside>
@@ -1973,6 +2039,14 @@
                                 <article class="about-card lp-reveal" id="about-security" data-about-src="content/about/security.md" aria-busy="true">
                                     <p class="about-card-status">Loading chapter…</p>
                                 </article>
+
+                                <article class="about-card lp-reveal" id="about-ai" data-about-src="content/about/ai.md" aria-busy="true">
+                                    <p class="about-card-status">Loading chapter…</p>
+                                </article>
+
+                                <article class="about-card lp-reveal" id="about-workspace" data-about-src="content/about/workspace.md" aria-busy="true">
+                                    <p class="about-card-status">Loading chapter…</p>
+                                </article>
                             </div>
                         </div>
                     </section>
@@ -1995,6 +2069,8 @@
                                     <div class="req">✅ Address a chat by <code>npub</code>, with encrypted Nostr signalling</div>
                                     <div class="req">✅ Encrypted Nostr relay fallback when WebRTC cannot connect</div>
                                     <div class="req">✅ Browser-first workflow with no mandatory centralized backend</div>
+                                    <div class="req">✅ Local AI chat on your own GPU with WebLLM — no inference server</div>
+                                    <div class="req">✅ Code projects as git repositories in the browser, edited with CodeMirror</div>
                                 </div>
                             </section>
 

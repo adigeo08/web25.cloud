@@ -15,7 +15,7 @@
  *                             here only by being reseeded, like anything else.
  *   /web25/payloads/<hash>/   the payload kept so a cached site can be reseeded.
  *   /web25/chats/<wallet>/<conversation>/
- *                             a git repository per Llama conversation, holding
+ *                             a git repository per AI chat conversation, holding
  *                             the code files that conversation wrote.
  *
  * isomorphic-git is imported from a CDN on first use, never at start-up. Files
