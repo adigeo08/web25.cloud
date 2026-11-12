@@ -1,3 +1,5 @@
+import { ProjectService } from '../../channels/ProjectService.js';
+import { mountProjectRooms } from '../../ui/ProjectRooms.js';
 // @ts-check
 
 import { PEERWEB_CONFIG } from '../../config/peerweb.config.js';
@@ -197,6 +199,16 @@ export function setupChannels({ signer: providedSigner = null, pool = null } = {
         onError: (error) => this.log(`Nostr Direct Messenger: ${error.message}`)
     });
     this.channelsService.setNostrFallback(this.nostrDmSession.createFallback());
+    this.projectService = new ProjectService({ signer,
+        send: async (peer, kind, content) => {
+            await this.nostrDmSession.start();
+            return this.nostrDmSession.sendGiftWrapped(peer, kind, content);
+        } });
+    this.nostrDmSession.onProjectMessage = (content, sender) => this.projectService.receive(content, sender);
+    mountProjectRooms(this.projectService, this.nostrDmSession, error => {
+        this.log(`Project rooms: ${error.message}`);
+        this.toast?.warning?.(error.message, 'Project rooms');
+    });
 
     // Presence and intent are a separate layer on purpose: seeing somebody
     // online never starts a handshake, and no SDP exists until both sides ask.
@@ -2289,7 +2301,19 @@ export async function signStagedPayload() {
 
     updateDeployProgress({ label: 'Generating .torrentchain signature manifest', percent: 55, state: 'running' });
 
+    const projectChoice = document.getElementById('deploy-project')?.value || '';
+    const project = projectChoice ? await this.projectService.prepare(
+        projectChoice === 'new' ? null : projectChoice, identity.address,
+        this.generateTorrentName(this.pendingDeployFiles)) : null;
+    const projectStatus = document.getElementById('deploy-project-status');
+    if (projectStatus) projectStatus.textContent = project ? `${project.roomId} · staged version ${project.version}` : '';
+    if (projectChoice === 'new') {
+        const select = document.getElementById('deploy-project');
+        select.add(new Option(project.roomId, project.id));
+        select.value = project.id;
+    }
     const chainArtifact = await createTorrentChainArtifact({
+        project,
         inMemoryFiles,
         publisher: identity.address,
         chainId: identity.chainId || 1,
@@ -2307,6 +2331,7 @@ export async function signStagedPayload() {
     );
 
     this.lastPublishCandidate = {
+        projectManifest: project ? chainArtifact.manifest : null,
         hash: prepared.infoHash,
         siteName: prepared.name,
         torrentFile: prepared.torrentFile,
@@ -2578,7 +2603,22 @@ export async function deploySignedArtifact() {
     const deployment = runSignedDeployment.call(this);
     this._deployInFlight = deployment;
     try {
-        return await deployment;
+        const result = await deployment;
+        const manifest = this.lastPublishCandidate?.projectManifest;
+        if (manifest) {
+            try {
+                const delivery = await this.projectService.published(manifest, this.lastPublishCandidate.hash,
+                    this.lastDeployResult?.mirror ? this.lastDeployResult.url : null);
+                const status = document.getElementById('deploy-project-status');
+                if (status) status.textContent = `${manifest.payload.project.roomId} · v${manifest.payload.project.version} · ${delivery.join(', ') || 'No active subscribers'}. Relay acceptance does not prove recipient delivery.`;
+                if (delivery.includes('failed')) this.toast?.warning?.('Deployment succeeded. Retry failed subscriber notifications in project conversations.', 'Notification failure');
+                this.log(`Project notification relay state: ${JSON.stringify(delivery)}. Relay acceptance does not prove recipient delivery.`);
+            } catch (error) {
+                this.log(`Deployment succeeded; project notifications need attention: ${error.message}`);
+                this.toast?.warning?.(error.message, 'Deployment succeeded; notifications failed');
+            }
+        }
+        return result;
     } finally {
         if (this._deployInFlight === deployment) this._deployInFlight = null;
         this.refreshDeployUiState?.();
@@ -2654,6 +2694,10 @@ async function runSignedDeployment() {
  * nothing instead of inheriting whatever the last one left attached.
  */
 export function resetDeployPipeline() {
+    const projectChoice = document.getElementById('deploy-project');
+    if (projectChoice) projectChoice.value = '';
+    const projectStatus = document.getElementById('deploy-project-status');
+    if (projectStatus) projectStatus.textContent = '';
     this.pendingDeployFiles = null;
     this.lastPublishCandidate = null;
     this.lastSignature = null;
@@ -2882,7 +2926,7 @@ export function setupAuthAwareUi(state) {
     const registerBtn = document.getElementById('register-wallet-btn');
     // An unconfirmed backup is recovered or reset, never simply unlocked.
     if (unlockBtn)
-        unlockBtn.classList.toggle('hidden', !state.localWalletExists || Boolean(state.seedBackupInterrupted));
+        {unlockBtn.classList.toggle('hidden', !state.localWalletExists || Boolean(state.seedBackupInterrupted));}
     if (registerBtn) registerBtn.classList.toggle('hidden', state.localWalletExists);
 
     // The DM panel shows the Nostr address only. All of it is public material
@@ -2910,6 +2954,7 @@ export function setupAuthAwareUi(state) {
             });
     } else if (!nostrReachable && this.nostrDmSession?.started) {
         this.nostrDmSession.stop();
+        this.projectService?.onLocked?.();
         // Removing the Nostr identity also stops announcing presence.
         this.presenceService?.stop();
         void this.channelsService?.leaveChannel();

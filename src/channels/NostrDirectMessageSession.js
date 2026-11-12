@@ -28,6 +28,7 @@ import {
     subscribeNostrInbox,
     verifyNostrDMInvitation
 } from './NostrDirectMessageBootstrap.js';
+import { PROJECT_KIND } from './ProjectRoom.js';
 import { InboxLedger } from './InboxLedger.js';
 
 export class NostrDirectMessageSession {
@@ -253,7 +254,7 @@ export class NostrDirectMessageSession {
     async _handleGiftWrap(giftWrap) {
         // The same gift wrap again — another relay, a reconnect, a reload — is
         // dropped before any decryption.
-        if (giftWrap?.id && !this.ledger.claim(`wrap:${giftWrap.id}`)) return;
+        if (giftWrap?.id && this.ledger.has(`wrap:${giftWrap.id}`)) return;
 
         let opened;
         try {
@@ -269,6 +270,14 @@ export class NostrDirectMessageSession {
         }
 
         const { rumor, senderNostrPublicKey } = opened;
+        // Explicit project route: never grants contact, chat or WebRTC permission.
+        if (rumor.kind === PROJECT_KIND) {
+            try { await this.onProjectMessage?.(rumor.content, senderNostrPublicKey); }
+            catch (error) { this._fail(error); }
+            return;
+        }
+
+        if (giftWrap?.id && !this.ledger.claim(`wrap:${giftWrap.id}`)) return;
 
         // A request or an invitation is acted on once, ever: re-wrapped or
         // re-published, the same rumor is still the same question. The hash is

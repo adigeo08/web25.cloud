@@ -55,3 +55,5 @@ coverage/
 # Optional: Build artifacts
 *.tgz
 WARP.md
+# Local task scratch and browser tooling
+/work/
