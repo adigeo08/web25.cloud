@@ -1,5 +1,6 @@
 // @ts-check
 
+import { verifyProject } from '../channels/ProjectRoom.js';
 import { signPublishPayload, verifyPublishSignature } from '../auth/SigningService.js';
 
 function toHex(bytes) {
@@ -72,8 +73,11 @@ export async function createTorrentChainArtifact({
     identityType,
     createdAt,
     bundle = null,
-    filesSemantics = 'torrent-entries'
+    filesSemantics = 'torrent-entries',
+    project = null,
+    signPayload = signPublishPayload
 }) {
+    if (project && !verifyProject(project, publisher)) throw new Error('Invalid project ownership');
     const draft = await buildTorrentChainDraft(inMemoryFiles);
     const payload = {
         schema: 'web25-torrentchain-v1',
@@ -84,9 +88,10 @@ export async function createTorrentChainArtifact({
         totalBytes: draft.totalBytes,
         merkleRoot: draft.merkleRoot,
         filesSemantics,
+        ...(project ? { project } : {}),
         ...(bundle ? { bundle } : {})
     };
-    const signed = await signPublishPayload(payload, identityType);
+    const signed = await signPayload(payload, identityType);
 
     const manifest = {
         schema: payload.schema,
@@ -107,16 +112,27 @@ export async function createTorrentChainArtifact({
     };
 }
 
-export async function verifyTorrentChainManifest(manifest) {
+export async function verifyTorrentChainManifest(manifest, verifySignature = verifyPublishSignature) {
     if (!manifest?.payload || !manifest?.signature || !manifest?.payload?.publisher) {
         return { verified: false, reason: 'Missing payload/signature/publisher' };
     }
 
-    const verified = await verifyPublishSignature(
-        manifest.message || JSON.stringify(manifest.payload),
-        manifest.signature,
-        manifest.payload.publisher
-    );
+    if (manifest.message && manifest.message !== JSON.stringify(manifest.payload)) {
+        return { verified: false, reason: 'Signed message does not match payload' };
+    }
+    if (manifest.payload.project && !verifyProject(manifest.payload.project, manifest.payload.publisher)) {
+        return { verified: false, reason: 'Invalid project ownership' };
+    }
+    let verified = false;
+    try {
+        verified = await verifySignature(
+            manifest.message || JSON.stringify(manifest.payload),
+            manifest.signature,
+            manifest.payload.publisher
+        );
+    } catch (_) {
+        return { verified: false, reason: 'Invalid EVM signature' };
+    }
 
     return {
         verified,

@@ -471,6 +471,9 @@
                                         <p>Your local identity signs the payload; the signed torrent is what goes live.</p>
                                     </div>
                                     <div class="deploy-option">
+                                        <label for="deploy-project">Project subscriptions</label>
+                                        <select id="deploy-project"><option value="">No subscriptions</option><option value="new">Create new subscribable project</option></select>
+                                        <p id="deploy-project-status" role="status"></p>
                                         <label class="deploy-option-label" for="deploy-gofile-mirror">
                                             <input
                                                 type="checkbox"
@@ -729,6 +732,7 @@
                                         <p class="dm-contacts-title">Trusted contacts</p>
                                         <span id="dm-contacts-count" class="dm-contacts-count">0</span>
                                     </div>
+                                    <section id="project-conversations" aria-label="Project conversations"></section>
                                     <div id="dm-contacts-list" class="dm-contacts-list"></div>
 
                                     <!--
@@ -2164,6 +2168,7 @@
                 pushed the buttons off the row.
             -->
             <div class="site-viewer-header">
+                <button id="viewer-project-subscribe" type="button" class="btn btn-secondary btn-sm" hidden>Subscribe</button>
                 <button id="back-to-peerweb" type="button" class="btn btn-secondary btn-sm viewer-back">
                     ← Back
                 </button>

@@ -46,6 +46,7 @@ export function clearP2PDeadline() {
 }
 
 export async function loadSite(addressInput, retryLocator = null) {
+    if (typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent('web25-project-view', { detail: null }));
     let address;
     try {
         address =
@@ -569,6 +570,7 @@ export function isTorrentComplete(torrent) {
 }
 
 export async function verifyTorrentChainBeforeDownload(torrent, hash) {
+    if (typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent('web25-project-view', { detail: null }));
     const chainFile = torrent.files.find((file) => {
         const name = (file.name || '').toLowerCase();
         return name === '.torrentchain' || name.endsWith('/.torrentchain');
@@ -604,6 +606,14 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
         const manifestText = new TextDecoder().decode(buffer);
         const manifest = JSON.parse(manifestText);
         const verification = await verifyTorrentChainManifest(manifest);
+        if (verification.verified && manifest.payload.project && this.projectService && this.nostrDmSession?.started) {
+            await this.projectService.verifyViewed(manifest);
+        }
+        if (typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('web25-project-view', {
+                detail: verification.verified && manifest.payload.project ? manifest : null
+            }));
+        }
         const bundleHash = manifest?.payload?.bundle?.sha256 || null;
 
         if (!verification.verified) {
@@ -638,6 +648,7 @@ export async function verifyTorrentChainBeforeDownload(torrent, hash) {
             torrentHash: hash,
             bundleHash
         });
+        signatureState.projectManifest = manifest.payload.project ? manifest : null;
         this.currentSiteSignatureStatus = signatureState;
         this.log(`Verified .torrentchain signature for ${hash}.`);
         return { ok: true, manifest, legacy: false, signatureState };
@@ -1285,6 +1296,7 @@ export function buildSignatureState(nextState = {}) {
         verificationVersion: SIGNATURE_STATE_VERIFICATION_VERSION,
         source: nextState.source || 'legacy',
         torrentHash: nextState.torrentHash || this.currentHash || '',
+        projectManifest: nextState.projectManifest || null,
         bundleHash: nextState.bundleHash
     };
 }
@@ -1307,6 +1319,12 @@ export function applyCachedSignatureState(signatureState, hash) {
 }
 
 export async function displayCachedSite(siteData, hash) {
+    if (typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent('web25-project-view', {detail: null}));
+    const manifest = this.currentSiteSignatureStatus?.projectManifest;
+    if (manifest && (await verifyTorrentChainManifest(manifest)).verified) {
+        if (this.projectService && this.nostrDmSession?.started) await this.projectService.verifyViewed(manifest);
+        if (typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent('web25-project-view', {detail: manifest}));
+    }
     this.displaySite(siteData, hash, true);
 }
 
